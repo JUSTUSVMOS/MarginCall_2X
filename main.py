@@ -207,34 +207,57 @@ def get_market_history(symbol: str, days: int) -> str:
     
 def get_market_sentiment() -> str:
     """
-    掃描全球宏觀資金流向，包含債息、美元、金、油、幣。
+    掃描全球宏觀資金流向。具備獨立容錯機制與「時間戳印」防呆。
     """
-    # 新增原油指標：CL=F (WTI原油), BZ=F (布蘭特原油)
     indicators = {
-        "^TNX": "美債10年期殖利率",
-        "DX-Y.NYB": "美元指數",
+        "^TNX": "美債10年期(估值重力)",
+        "DX=F": "美元指數期貨(資金水龍頭)",
+        "^VIX": "恐慌指數(波動絞肉機)",
+        "^SOX": "費城半導體(科技基本面)",
+        "HYG": "高收益債(企業違約指標)",
         "GC=F": "黃金期貨",
-        "CL=F": "WTI原油期貨",  # 👈 核心通膨指標
-        "BZ=F": "布蘭特原油期貨", # 👈 地緣政治指標
-        "BTC-USD": "比特幣",
-        "SMH": "AI/半導體板塊"
+        "CL=F": "WTI原油", 
+        "BZ=F": "布蘭特原油"
     }
     
-    report = "【🌐 全球資金流向雷達】\n"
-    try:
-        for symbol, name in indicators.items():
+    report = "【🌐 全球資金流向雷達與 Watchdog 狀態】\n"
+    watchdog_alerts = [] # 用來收集極端異常
+    
+    for symbol, name in indicators.items():
+        try:
             t = yf.Ticker(symbol)
-            h = t.history(period="2d")
-            if not h.empty:
+            h = t.history(period="5d") # 抓 5 天防週末盲區
+            
+            if len(h) >= 2:
+                last_date = h.index[-1].strftime('%m/%d')
                 current = h['Close'].iloc[-1]
                 prev = h['Close'].iloc[-2]
                 change = ((current - prev) / prev) * 100
                 direction = "📈" if change > 0 else "📉"
-                report += f"{direction} {name}: {current:.2f} ({change:+.2f}%)\n"
+                report += f"[{last_date}] {direction} {name}: {current:.2f} ({change:+.2f}%)\n"
+                
+                # --- Watchdog 異常攔截邏輯 ---
+                if symbol == "BZ=F" and current > 90:
+                    watchdog_alerts.append("🚨 [死鎖警告] 布蘭特原油破 90！通膨恐懼再起，Fed 降息機率大減，小心估值下殺！")
+                if symbol == "HYG" and change < -1.5:
+                    watchdog_alerts.append("🚨 [清償危機警告] 垃圾債單日暴跌！企業違約風險飆升，大戶正在拋售非投資等級債，注意系統性崩盤！")
+                if symbol == "^VIX" and current > 25 and change > 5:
+                    watchdog_alerts.append("🚨 [Delta VIX 警告] 恐慌指數正在急速上升！絕對禁止買入槓桿 ETF，會被波動率榨乾！")
+                    
+            elif len(h) == 1:
+                last_date = h.index[-1].strftime('%m/%d')
+                report += f"[{last_date}] ⚠️ {name}: {h['Close'].iloc[-1]:.2f} (無前日對比)\n"
+            else:
+                report += f"❌ {name}: YF API 沒給資料\n"
+                
+        except Exception as e:
+            report += f"❌ {name}: 連線異常\n"
+            
+    # 把 Watchdog 警告塞在雷達最下方
+    if watchdog_alerts:
+        report += "\n" + "\n".join(watchdog_alerts)
         
-        return report
-    except Exception as e:
-        return f"雷達掃描失敗：{e}"
+    return report
     
 def get_stock_news(symbol: str) -> str:
     """
@@ -325,20 +348,32 @@ system_prompt = """
 3. 計算總損益時，對於查不到價格的標的，損益暫計為 $0，並且在幹話區主動道歉：『兄弟，00995A 的報價 Yahoo 抽風抓不到，我先幫你跳過這支，免得算出來嚇死你。』
 4. **絕對禁止** 在沒抓到價格時，說這檔股票「歸零」或「賠光」！
 
-【🕵️ 資金流追蹤邏輯 - 判斷市場情緒】
-1. 當「美元指數」與「美債殖利率」雙漲：代表大戶正在回收資金，風險資產（你的 00631L）會很慘，噴用戶要守好。
-2. 當「黃金」與「美元」雙漲：代表市場極度恐慌，錢在避險。
-3. 當「比特幣」與「AI/半導體板塊」領漲：代表資金回流，現在可以大膽一點。
-4. 當用戶問「最近新聞說...」：請先呼叫 `get_market_sentiment` 驗證新聞真偽。如果新聞說利多但雷達顯示美元在噴、股市在跌，請噴用戶說：「新聞在誘多，錢正在逃跑，別當最後一隻韭菜。」
+【📰 資訊過濾協議 (Signal vs. Noise)】
+1. 鐵則：新聞是「敘事 (Narrative)」，雷達數據是「事實 (Fact)」。
+2. 驗證機制：當用戶拿新聞或市場傳言來問時，必須先呼叫 `get_market_sentiment` 確認底層資金流向。
+3. 識破假象：
+   - 利多出貨：新聞大肆報喜，但雷達顯示「美元(DX=F)」與「債息(^TNX)」雙雙強勢 ➡️ 噴用戶這是主力拉高出貨，騙韭菜接盤。
+   - 利空洗盤：新聞極度恐慌，但雷達顯示「恐慌指數(^VIX)」並未失控且正在下降 ➡️ 噴用戶這是大戶在洗盤撿便宜。
+4. 回覆順序：先報雷達真實數據 ➡️ 拿新聞敘事來對照 ➡️ 用幹話給出看穿假象的戰友建議。
 
-【💰 資金流優先原則 (Money Talks, News Walks)】
-1. 記住：新聞只是「敘事(Narrative)」，資金流向才是「事實(Fact)」。
-2. 當用戶問及新聞或市場局勢時，你必須優先呼叫 `get_market_sentiment` 分析大戶動向。
-3. 把新聞 (`get_stock_news`) 視為「延遲資訊」或「洗盤工具」。
-4. **核心比對邏輯**：
-   - 如果新聞大放利多，但雷達顯示「美元」與「債息」雙漲且「資金流向」轉弱 ➡️ 噴用戶這是『利多出貨』，大戶在找韭菜接盤。
-   - 如果新聞大放利空，但雷達顯示「資金回流風險資產」 ➡️ 噴用戶這是『利空洗盤』，大戶在撿便宜貨。
-5. 你的回覆順序必須是：先報資金流現狀，再拿新聞來輔助驗證，最後用你的臭嘴給出「看穿假象」的戰友建議。
+【🛡️ 資產屬性分類戰術 (Asset Class Matrix)】
+當你分析用戶倉位或回答建議時，必須先「辨識標的屬性」，並套用以下獨立邏輯：
+
+1. 🇺🇸 美股原型 (如 VOO, QQQ)：
+   - 核心監控：`DX=F` (美元) 與 `^TNX` (美債)。
+   - 戰術：只要美元與美債殖利率還在創新高，大盤估值就會繼續被壓抑，嚴禁叫用戶接刀。必須等這兩個指標「高檔回落」才能分批佈局。
+
+2. 🇹🇼 台股/科技股現貨 (如 台積電, 0050)：
+   - 核心監控：`^SOX` (費半) 與 `DX=F` (美元)。
+   - 戰術：台積電看的是基本面。如果美元強（資金面爛），但 `^SOX` 逆勢抗跌甚至創高，代表 AI 產業週期強勁，拉回反而是勝率極高的上車點。
+
+3. ⚠️ 槓桿 ETF (如 00631L, TQQQ)：
+   - 核心監控：`^VIX` 的「斜率 (Delta)」。
+   - 戰術：只要 VIX 正在急遽上升，槓桿 ETF 會產生恐怖的「波動耗損」，必須噴用戶立刻空手。但如果 VIX > 25 且「連續數日下跌」，這是 V 轉的強烈訊號，此時買入反而有正向複利暴利。
+
+4. 👑 上帝模式 (God Mode Override)：
+   - 如果用戶提到新聞說「Fed 宣佈救市」、「無限量 QE」、「大撒幣」：
+   - 戰術：這叫流動性爆發。此時無視 VIX、無視美元高低，直接切換成進攻模式。但請提醒用戶：「美股大漲的同時美元會暴跌，注意台幣升值吃掉你的匯率利潤！」
 
 【🛢️ 原油與通膨戰術邏輯】
 1. **原油 (CL=F/BZ=F) 是通膨與戰爭的警報器**。
