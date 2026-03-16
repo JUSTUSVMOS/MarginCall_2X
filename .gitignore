@@ -1,2 +1,9 @@
-.env
-my_portfolio.csv
+*.pfx
+*.whl
+*.un~
+*~
+log/
+bot_env/
+venv/
+.env*
+__pycache__/
