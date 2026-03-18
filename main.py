@@ -5,6 +5,7 @@ import json
 import urllib3
 from dotenv import load_dotenv
 from config import WDT_MESSAGES, system_prompt
+from fubon import get_quote_and_orderbook
 import telebot
 from google import genai
 from google.genai import types
@@ -13,6 +14,7 @@ import random
 import datetime
 import requests
 import time
+from fubon_neo.sdk import FubonSDK  # 👈 新增引入富邦 SDK
 # 關閉警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
@@ -30,6 +32,13 @@ if not BOT_TOKEN or not GEMINI_KEY:
     raise ValueError("兄弟，你的 .env 沒設定好 TOKEN 或 GEMINI API KEY 喔！")
 
 print("啟動破產推進器：V8雙渦輪引擎 (含自動備用切換機制) 載入中...")
+import fubon  # 👈 引入你剛剛寫好的 fubon.py
+
+# 執行富邦初始化 (它會讀取 .env 並登入)
+fubon.init_fubon()
+
+# 為了方便後續調用，可以把狀態抓出來 (選配)
+fubon_ready = fubon.fubon_ready
 bot = telebot.TeleBot(BOT_TOKEN)
 
 PORTFOLIO_FILE = "my_portfolio.csv"
@@ -309,21 +318,39 @@ def get_dynamic_models():
 
 def get_live_price(symbol: str) -> float:
     """
-    【V8 雙渦輪混合路由 - 節能版】
-    美股開盤期間 -> FMP Stable (零延遲)
-    美股收盤/台股 -> Yahoo Finance (省額度)
+    【V9 雙引擎行情切換器】
+    台股 ➡️ 優先走富邦 Fubon SDK (零延遲)
+    美股/富邦故障 ➡️ 走 FMP/Yahoo Finance
     """
+    global fubon_sdk, fubon_ready  # 確保抓得到全域的狀態
     symbol = symbol.upper()
 
-    # 🛡️ MTK ESOP 轉接器：把虛擬代碼導向真實的聯發科報價
+    # 🛡️ MTK ESOP 轉接器
     if symbol == "2454_ESOP":
         symbol = "2454"
 
+    # 判斷是否為台股 (數字開頭且長度 <= 6)
     is_taiwan_stock = any(char.isdigit() for char in symbol) and (len(symbol) <= 6)
 
-    # 🚀 條件 1：不是台股
-    # 🚀 條件 2：有 FMP 金鑰
-    # 🚀 條件 3：現在是美股交易時段 (新增！)
+    # --- 🚀 優先路徑：台股走富邦 SDK ---
+    if is_taiwan_stock and fubon_ready:
+        try:
+            reststock = fubon_sdk.marketdata.rest_client.stock
+            # 使用我們測試成功的 quote API
+            quote_data = reststock.intraday.quote(symbol=symbol)
+            
+            # 解析現價 (依據我們剛才 debug 的格式)
+            is_dict = isinstance(quote_data, dict)
+            price = quote_data.get('closePrice') or quote_data.get('lastPrice') if is_dict else getattr(quote_data, 'closePrice', getattr(quote_data, 'lastPrice', None))
+            
+            if price and price > 0:
+                print(f"🔥 [富邦 V8] 抓取 {symbol} 成功: {price}")
+                return round(float(price), 2)
+        except Exception as e:
+            print(f"⚠️ 富邦通道異常 ({e})，準備切換備援模式...")
+            # 這裡不 return，讓它往下走 Yahoo 備援
+
+    # --- 🚀 條件 2：美股且 FMP 有效 ---
     if not is_taiwan_stock and FMP_KEY and is_us_market_open():
         try:
             url = f"https://financialmodelingprep.com/stable/quote?symbol={symbol}&apikey={FMP_KEY}"
@@ -334,7 +361,7 @@ def get_live_price(symbol: str) -> float:
         except:
             pass 
 
-    # 🛡️ 沒開盤、或者是台股、或者 FMP 故障 -> 走 Yahoo Finance
+    # --- 🛡️ 備援模式：Yahoo Finance (當富邦掛了或是非台股時) ---
     search_list = [symbol]
     if is_taiwan_stock and '.' not in symbol:
         search_list = [f"{symbol}.TW", f"{symbol}.TWO", symbol]
@@ -345,13 +372,13 @@ def get_live_price(symbol: str) -> float:
             info = ticker.info
             price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
             
-            if price is None or price == 0:
+            if not price:
                 hist = ticker.history(period="1d")
                 if not hist.empty:
                     price = hist['Close'].iloc[-1]
             
             if price and price > 0:
-                source = "YF" if not is_taiwan_stock else "台股通道"
+                source = "台股備援 (YF)" if is_taiwan_stock else "美股 YF"
                 print(f"🛡️ [{source}] 抓取 {s} 成功")
                 return round(float(price), 2)
         except:
@@ -566,7 +593,8 @@ def create_agent_chat(model_name, history=None):
             # 👈 加入 get_market_sentiment
         tools=[update_position, get_portfolio_raw_data, get_live_price, 
             get_market_history, calculate_pnl, get_exchange_rate, 
-            get_market_sentiment, get_stock_news, get_fundamental_data],
+            get_market_sentiment, get_stock_news, get_fundamental_data,
+            get_quote_and_orderbook, fubon.get_market_hot_stocks, fubon.get_intraday_trend],
         temperature=0.3, 
         ),
         history=history
@@ -604,12 +632,14 @@ def handle_all_text(message):
     # --- 3. 進入 AI 思考迴圈 (記憶轉移與無縫降級) ---
     for model_idx, model_name in enumerate(current_models):
         try:
-            # 🧠 記憶轉移邏輯：
-            # 如果目前的大腦模型跟名單上的第一順位不同 (比如剛開盤)，
-            # 我們就把舊記憶抓出來，重新開啟一個新模型的 Chat。
-            if not hasattr(chat, 'model') or chat.model != model_name:
-                print(f"🔄 模型切換: {getattr(chat, 'model', 'NONE')} -> {model_name}，正在轉移 Context...")
-                old_history = chat.history if hasattr(chat, 'history') else None
+            # 🛡️ 修正 1：精準抓取新版 SDK 的隱藏模型屬性 _model
+            current_chat_model = getattr(chat, '_model', getattr(chat, 'model', None))
+            
+            if current_chat_model != model_name:
+                print(f"🔄 模型切換: {current_chat_model} -> {model_name}，正在轉移 Context...")
+                
+                # 🛡️ 修正 2：改用 .get_history() 提取記憶陣列
+                old_history = chat.get_history() if hasattr(chat, 'get_history') else getattr(chat, 'history', None)
                 chat = create_agent_chat(model_name, history=old_history)
             
             # 呼叫 Gemini
@@ -618,7 +648,7 @@ def handle_all_text(message):
             # --- 【關鍵修正：防斷片安全網】 ---
             final_text = response.text if (response and response.text) else "兄弟，我剛才算到一半突然靈魂出竅，沒吐出東西來。可能是這標的太妖，連我都無語了。你再問一次試試？"
             
-            # 處理補刀邏輯
+            # --- 🎯 處理補刀邏輯 ---
             if mood == "bad_market" and random.random() < 0.3:
                 insults = [
                     "\n\n(補刀：我看你這損益，還是先把 Telegram 關掉去寫 C 語言吧。)",
@@ -627,7 +657,7 @@ def handle_all_text(message):
                 ]
                 final_text += random.choice(insults)
             
-            # 送出修改訊息
+            # --- 🎯 送出修改訊息 ---
             try:
                 bot.edit_message_text(
                     chat_id=message.chat.id,
@@ -653,8 +683,8 @@ def handle_all_text(message):
                 if model_idx + 1 < len(current_models):
                     next_model_name = current_models[model_idx + 1]
                     
-                    # 🚀 降級也要帶走記憶
-                    old_history = chat.history if hasattr(chat, 'history') else None
+                    # 🛡️ 修正 3：降級時的記憶提取也要同步改成 get_history()
+                    old_history = chat.get_history() if hasattr(chat, 'get_history') else getattr(chat, 'history', None)
                     chat = create_agent_chat(next_model_name, history=old_history)
                     
                     # 判定錯誤類型
@@ -686,7 +716,6 @@ def handle_all_text(message):
                     text=f"兄弟，我思考迴圈卡死了：\n`{str(e)}`"
                 )
                 return
-            
         
 @bot.message_handler(commands=['reset'])
 def reset_memory(message):
@@ -697,5 +726,15 @@ def reset_memory(message):
     bot.reply_to(message, "🧹 推進器記憶體已排空！目前大腦已重新裝填，又是新的一天。")           
 
 if __name__ == "__main__":
-    print(" MarginCall Express 終極防護網模式上線！去 Telegram 測試吧。")
-    bot.infinity_polling()
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    print("🚀 MarginCall Express 終極防護網模式上線！去 Telegram 測試吧。")
+    
+    # 幫輪詢機制加上超時與重試設定，避免被掛電話後崩潰
+    while True:
+        try:
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception as e:
+            print(f"⚠️ 網路瞬斷或 Telegram 伺服器掛電話 ({e})，3秒後自動重連...")
+            time.sleep(3)
