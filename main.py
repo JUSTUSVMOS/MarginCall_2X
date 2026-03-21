@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 from config import WDT_MESSAGES, system_prompt
 from fubon import get_quote_and_orderbook
 import telebot
+from scipy import stats
+import io
+import pandas as pd
+import numpy as np
 from google import genai
 from google.genai import types
 import yfinance as yf
@@ -36,9 +40,7 @@ import fubon  # 👈 引入你剛剛寫好的 fubon.py
 
 # 執行富邦初始化 (它會讀取 .env 並登入)
 fubon.init_fubon()
-
-# 為了方便後續調用，可以把狀態抓出來 (選配)
-fubon_ready = fubon.fubon_ready
+# fubon_ready = fubon.fubon_ready
 bot = telebot.TeleBot(BOT_TOKEN)
 
 PORTFOLIO_FILE = "my_portfolio.csv"
@@ -93,39 +95,48 @@ def update_position(symbol: str, price: float, shares: float, action: str = 'set
                     sym = row[0]
                     cost = float(row[1])
                     qty = float(row[2])
-                    # 優先信任第 4 欄 (twd_cost)，若無則現場補算
                     twd_c = float(row[3]) if len(row) >= 4 else (cost * qty * (get_exchange_rate() if any(c.isalpha() for c in sym) and ".TW" not in sym and "CASH" not in sym else 1.0))
                     records[sym] = {"cost": cost, "shares": qty, "twd_cost": twd_c}
 
-    # 4. 現金池初始化 (防呆：若無 CASH 則設為 0，不亂送錢)
-    if 'CASH' not in records:
-        records['CASH'] = {"cost": 1.0, "shares": 0.0, "twd_cost": 0.0}
+    # 4. 雙幣別現金池初始化與無痛升級
+    # 把舊的 CASH 自動移轉為台幣帳戶，保留你原本的餘額
+    if 'CASH' in records:
+        records['CASH_TWD'] = records.pop('CASH')
+
+    if 'CASH_TWD' not in records:
+        records['CASH_TWD'] = {"cost": 1.0, "shares": 0.0, "twd_cost": 0.0}
+    if 'CASH_USD' not in records:
+        records['CASH_USD'] = {"cost": fx_rate, "shares": 0.0, "twd_cost": 0.0}
+
+    # 決定這次交易要動用哪個現金池、以及扣款的原幣金額
+    settle_currency = 'CASH_TWD' if is_taiwan else 'CASH_USD'
+    settle_amount = actual_twd_total if is_taiwan else (actual_unit_price * shares)
 
     old_pos = records.get(symbol, {"cost": 0.0, "shares": 0.0, "twd_cost": 0.0})
-    cash_pos = records['CASH']
+    cash_pos = records[settle_currency]
     msg = ""
 
     try:
         # 5. 執行交易邏輯
         if action == 'buy':
-            if cash_pos['shares'] < actual_twd_total:
-                return f"❌ 買進失敗：現金不足！(需 NT${actual_twd_total:.0f}，剩 NT${cash_pos['shares']:.0f})"
+            if cash_pos['shares'] < settle_amount:
+                return f"❌ 買進失敗：{settle_currency} 餘額不足！(需 {settle_amount:.2f}，剩 {cash_pos['shares']:.2f})"
             
             new_shares = old_pos['shares'] + shares
             new_twd_cost = old_pos['twd_cost'] + actual_twd_total
-            # 重新加權平均單價 (美股存 USD, 台股存 TWD)
             new_cost = (old_pos['cost'] * old_pos['shares'] + actual_unit_price * shares) / new_shares
             
             records[symbol] = {"cost": new_cost, "shares": new_shares, "twd_cost": new_twd_cost}
-            records['CASH']['shares'] -= actual_twd_total
-            records['CASH']['twd_cost'] -= actual_twd_total
-            msg = f"✅ 買進成功！已鎖定匯率扣款 NT${actual_twd_total:.0f}"
+            
+            # 從對應幣別的現金池扣款
+            records[settle_currency]['shares'] -= settle_amount
+            records[settle_currency]['twd_cost'] -= actual_twd_total
+            msg = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f} (折合 NT${actual_twd_total:.0f})"
 
         elif action == 'sell':
             if old_pos['shares'] < shares:
                 return f"❌ 賣出失敗：持股不足 (只有 {old_pos['shares']} 股)"
             
-            # 按比例扣除歷史台幣成本
             cost_ratio = shares / old_pos['shares']
             realized_twd_cost = old_pos['twd_cost'] * cost_ratio
             realized_pnl = actual_twd_total - realized_twd_cost
@@ -138,16 +149,16 @@ def update_position(symbol: str, price: float, shares: float, action: str = 'set
             else:
                 if symbol in records: del records[symbol]
 
-            records['CASH']['shares'] += actual_twd_total
-            records['CASH']['twd_cost'] += actual_twd_total
-            msg = f"✅ 賣出成功！入帳 NT${actual_twd_total:.0f}，實現損益: {realized_pnl:+.0f}"
+            # 把獲利灌回對應幣別的現金池
+            records[settle_currency]['shares'] += settle_amount
+            records[settle_currency]['twd_cost'] += actual_twd_total
+            msg = f"✅ 賣出成功！{settle_currency} 入帳 {settle_amount:.2f}，實現損益: NT${realized_pnl:+.0f}"
 
         elif action == 'set':
-            # 直接校正模式
             records[symbol] = {"cost": actual_unit_price, "shares": shares, "twd_cost": actual_twd_total}
             msg = f"✅ 校正成功！{symbol} 已更新為 {shares} 股。"
 
-        # 6. 寫回 CSV (確保 4 欄位完整)
+        # 6. 寫回 CSV
         with open(PORTFOLIO_FILE, mode='w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
             writer.writerow(["symbol", "cost", "shares", "twd_cost"])
@@ -316,52 +327,56 @@ def get_dynamic_models():
         models.insert(0, 'gemini-3.1-pro-preview')
     return models
 
-def get_live_price(symbol: str) -> float:
+def get_live_price(symbol: str) -> str:
     """
-    【V9 雙引擎行情切換器】
-    台股 ➡️ 優先走富邦 Fubon SDK (零延遲)
-    美股/富邦故障 ➡️ 走 FMP/Yahoo Finance
+    【V9.1 雙引擎行情切換器 - 來源標註版】
     """
-    global fubon_sdk, fubon_ready  # 確保抓得到全域的狀態
     symbol = symbol.upper()
 
-    # 🛡️ MTK ESOP 轉接器
-    if symbol == "2454_ESOP":
-        symbol = "2454"
+    # 1. 脫掉 AI 加上的 Yahoo 外套
+    clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
 
-    # 判斷是否為台股 (數字開頭且長度 <= 6)
-    is_taiwan_stock = any(char.isdigit() for char in symbol) and (len(symbol) <= 6)
+    # 2. 🛡️ MTK ESOP 轉接器 (這個你剛才不小心刪掉了，建議加回來)
+    if clean_symbol == "2454_ESOP":
+        clean_symbol = "2454"
 
-    # --- 🚀 優先路徑：台股走富邦 SDK ---
-    if is_taiwan_stock and fubon_ready:
+    # 3. 🚨 致命修正：用洗乾淨的 clean_symbol 去量長度！
+    is_taiwan_stock = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
+    
+    price = None
+    source = ""
+
+    # --- 🚀 第一順位：台股走富邦 SDK ---
+    if is_taiwan_stock and fubon.fubon_ready:
         try:
-            reststock = fubon_sdk.marketdata.rest_client.stock
-            # 使用我們測試成功的 quote API
-            quote_data = reststock.intraday.quote(symbol=symbol)
+            reststock = fubon.fubon_sdk.marketdata.rest_client.stock
+            # 🚨 這裡也要確保傳入的是 clean_symbol
+            quote_data = reststock.intraday.quote(symbol=clean_symbol)
             
-            # 解析現價 (依據我們剛才 debug 的格式)
             is_dict = isinstance(quote_data, dict)
             price = quote_data.get('closePrice') or quote_data.get('lastPrice') if is_dict else getattr(quote_data, 'closePrice', getattr(quote_data, 'lastPrice', None))
             
             if price and price > 0:
-                print(f"🔥 [富邦 V8] 抓取 {symbol} 成功: {price}")
-                return round(float(price), 2)
+                source = "Fubon"
+                print(f"🔥 [{source}] 抓取 {clean_symbol} 成功: {price}")
+                return f"{round(float(price), 2)} (來源: {source})"
         except Exception as e:
             print(f"⚠️ 富邦通道異常 ({e})，準備切換備援模式...")
-            # 這裡不 return，讓它往下走 Yahoo 備援
 
-    # --- 🚀 條件 2：美股且 FMP 有效 ---
+    # --- 🚀 第二順位：美股且 FMP 有效 ---
     if not is_taiwan_stock and FMP_KEY and is_us_market_open():
         try:
             url = f"https://financialmodelingprep.com/stable/quote?symbol={symbol}&apikey={FMP_KEY}"
             res = requests.get(url, timeout=5).json()
             if isinstance(res, list) and len(res) > 0:
-                print(f"⚡ [FMP] 抓取 {symbol} 即時報價成功")
-                return round(float(res[0]['price']), 2)
+                price = res[0]['price']
+                source = "FMP"
+                print(f"⚡ [{source}] 抓取 {symbol} 即時報價成功")
+                return f"{round(float(price), 2)} (來源: {source})"
         except:
             pass 
 
-    # --- 🛡️ 備援模式：Yahoo Finance (當富邦掛了或是非台股時) ---
+    # --- 🛡️ 第三順位：Yahoo Finance 備援 ---
     search_list = [symbol]
     if is_taiwan_stock and '.' not in symbol:
         search_list = [f"{symbol}.TW", f"{symbol}.TWO", symbol]
@@ -378,13 +393,77 @@ def get_live_price(symbol: str) -> float:
                     price = hist['Close'].iloc[-1]
             
             if price and price > 0:
-                source = "台股備援 (YF)" if is_taiwan_stock else "美股 YF"
+                source = "YF"
                 print(f"🛡️ [{source}] 抓取 {s} 成功")
-                return round(float(price), 2)
+                return f"{round(float(price), 2)} (來源: {source})"
         except:
             continue
             
-    return None
+    return "無法取得報價"
+
+def get_us_realtime_insight(symbol: str) -> str:
+    """
+    【🇺🇸 美股戰情室 - YF 實戰版】
+    包含：5分K趨勢、L1掛單力道、P/C Ratio 情緒、成交量爆發力。
+    """
+    symbol = symbol.upper()
+    # 排除台股，避免誤判
+    if any(char.isdigit() for char in symbol) and len(symbol) <= 6:
+        return "⚠️ 此工具僅支援美股，台股請呼叫 get_quote_and_orderbook 或 get_intraday_trend。"
+
+    try:
+        ticker = yf.Ticker(symbol)
+        # 1. 抓取盤中 5 分 K (最近 10 根)
+        df = ticker.history(period="1d", interval="5m").tail(10)
+        info = ticker.info
+        
+        if df.empty:
+            return f"❌ {symbol} 目前無盤中數據，可能非交易時段或 YF 抽風。"
+
+        # 2. 買賣價差與力道分析
+        bid = info.get('bid', 0)
+        ask = info.get('ask', 0)
+        bid_size = info.get('bidSize', 1)
+        ask_size = info.get('askSize', 1)
+        ba_ratio = bid_size / ask_size if ask_size > 0 else 1
+        spread = ask - bid
+        spread_pct = (spread / bid * 100) if bid > 0 else 0
+
+        # 3. 選擇權情緒 (Put/Call Ratio)
+        pc_ratio = "N/A"
+        if ticker.options:
+            try:
+                opt = ticker.option_chain(ticker.options[0])
+                calls_vol = opt.calls['volume'].sum()
+                puts_vol = opt.puts['volume'].sum()
+                pc_ratio = round(puts_vol / calls_vol, 2) if calls_vol > 0 else 0
+            except: pass
+
+        # 4. 成交量爆發力
+        avg_vol = info.get('averageVolume', 1)
+        curr_vol = info.get('regularMarketVolume', 0)
+        # 換算成日內比率 (假設開盤已過 X 分鐘)
+        vol_ratio = round(curr_vol / (avg_vol / 6.5), 2) if avg_vol > 0 else 0
+
+        # 5. 5分K 趨勢判定
+        last_3 = df['Close'].tail(3).tolist()
+        trend = "📈 墊高中" if last_3[-1] > last_3[0] else "📉 下滑中"
+
+        # 彙整報告
+        report = f"🚀 === {symbol} 美股即時情報 (YF) ===\n"
+        report += f"● 現價: {df['Close'].iloc[-1]:.2f} (最後更新: {df.index[-1].strftime('%H:%M')})\n"
+        report += f"● 買賣比 (B/A): {ba_ratio:.2f} | 價差: {spread:.2f} ({spread_pct:.3f}%)\n"
+        report += f"● P/C Ratio: {pc_ratio} | 成交量比: {vol_ratio}x\n"
+        report += f"● 短線 5分K 趨勢: {trend}\n\n"
+        report += "【📊 最近 5 根 K 線快照】\n"
+        for _, row in df.tail(5).iterrows():
+            k_dir = "🔴" if row['Close'] > row['Open'] else "🟢"
+            report += f"  [{row.name.strftime('%H:%M')}] {k_dir} 收:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
+        
+        return report
+
+    except Exception as e:
+        return f"❌ 美股情報掃描失敗: {e}"
 
 def get_market_sentiment() -> str:
     """
@@ -447,7 +526,137 @@ def get_market_sentiment() -> str:
         report += "\n" + "\n".join(watchdog_alerts)
         
     return report
+
+# ==========================================
+# 🛑 模組：全局風險雷達 (MarginCall_2X 引擎)
+# ==========================================
+def add_dynamic_metrics(df, column_name, window=120):
+    if column_name not in df.columns: return df
+    rolling_mean = df[column_name].rolling(window=window).mean()
+    rolling_std = df[column_name].rolling(window=window).std()
+    df[f'{column_name}_Z'] = np.where(rolling_std == 0, 0, (df[column_name] - rolling_mean) / rolling_std)
+    df[f'{column_name}_PR'] = df[column_name].rolling(window=window).apply(
+        lambda x: stats.percentileofscore(x, x[-1], kind='weak') / 100.0, raw=True
+    )
+    df[f'{column_name}_10MA'] = df[column_name].rolling(window=10).mean()
+    df[f'{column_name}_20MA'] = df[column_name].rolling(window=20).mean()
+    return df
+
+def fetch_squeezemetrics_data():
+    url = 'https://squeezemetrics.com/monitor/static/DIX.csv'
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    try:
+        req = requests.get(url, headers=headers, timeout=10)
+        sm_df = pd.read_csv(io.StringIO(req.text))
+        sm_df['date'] = pd.to_datetime(sm_df['date'])
+        sm_df.set_index('date', inplace=True)
+        return sm_df[['dix', 'gex']]
+    except Exception as e:
+        return pd.DataFrame()
+
+def fetch_all_market_data():
+    sm_df = fetch_squeezemetrics_data()
+    tickers = {'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW'}
+    df_list = []
+    for name, ticker in tickers.items():
+        hist = yf.Ticker(ticker).history(period='1y')
+        if not hist.empty:
+            s = hist['Close'].rename(name)
+            s.index = s.index.tz_localize(None)
+            df_list.append(s)
+            
+    yf_df = pd.concat(df_list, axis=1, sort=True)
+    market_df = pd.merge(yf_df, sm_df, left_index=True, right_index=True, how='left')
+    market_df.ffill(inplace=True) 
+    
+    for col in ['SPX', 'VIX', 'DXY', 'TNX', 'GOLD', 'SKEW', 'dix', 'gex']:
+        if col in market_df.columns:
+            market_df = add_dynamic_metrics(market_df, col, window=120)
+            
+    market_df.dropna(subset=['SPX', 'SPX_20MA'], inplace=True)
+    return market_df
+
+def get_global_risk_radar() -> str:
+    """
+    【全局系統風險雷達】
+    當用戶詢問「大盤風險」、「系統性風險」、「全局雷達」、「現在大環境好嗎」時呼叫。
+    會回傳 SPX, VIX, DXY, TNX, GOLD, SKEW 以及暗池 DIX/GEX 的綜合風險評分。
+    """
+    try:
+        df = fetch_all_market_data()
+        if df.empty:
+            return "❌ 無法取得市場資料，雷達掃描失敗。"
+            
+        latest_data = df.iloc[-1]
+        date_str = df.index[-1].strftime('%Y/%m/%d')
         
+        base_risk = 0
+        reasons = []
+
+        if latest_data.get('DXY_Z', 0) > 1.5 or latest_data.get('TNX_Z', 0) > 1.5:
+            base_risk += 25
+            reasons.append(f"🔴 [Armed] 資金緊縮 (美元Z值:{latest_data.get('DXY_Z',0):.2f} / 美債Z值:{latest_data.get('TNX_Z',0):.2f})")
+        if latest_data.get('VIX_Z', 0) > 2.0 or latest_data.get('gex', 0) < 0:
+            base_risk += 25
+            reasons.append(f"🔴 [Armed] 波動率失控 / 負 Gamma (造市商提款中)")
+        if latest_data.get('SKEW_PR', 0) > 0.90 or latest_data.get('GOLD_PR', 0) > 0.85:
+            base_risk += 15
+            reasons.append("🔴 [Armed] 尾部風險升溫 (法人瘋買保險與黃金)")
+            
+        if latest_data.get('dix_PR', 0) > 0.85:
+            base_risk = max(0, base_risk - 20)
+            reasons.append("🟢 [Safe] 暗池吸籌，大戶提供下檔支撐")
+
+        is_armed = base_risk >= 40
+        final_score = base_risk
+        
+        is_breaking_10MA = latest_data.get('SPX', 0) < latest_data.get('SPX_10MA', 0)
+        is_breaking_20MA = latest_data.get('SPX', 0) < latest_data.get('SPX_20MA', 0)
+
+        if is_breaking_20MA:
+            if is_armed:
+                final_score += 40 
+                reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線且大戶撤退！")
+            else:
+                final_score += 15
+                reasons.append("🟠 [中期轉弱] 跌破月線，雖籌碼尚可，但應降低部位。")
+        elif is_breaking_10MA: 
+            if is_armed:
+                final_score += 25 
+                reasons.append("🚨 [Trigger] 致命破線：環境惡化且跌破 10MA，確認空頭啟動！")
+            else:
+                final_score += 5
+                reasons.append("🟡 [技術回檔] 跌破 10MA，底層尚可。")
+
+        score = min(100, final_score)
+        
+        if score <= 20: state = "🟢【Level 1: 強勢多頭】"
+        elif score <= 40: state = "🟡【Level 2: 健康輪動】"
+        elif score <= 60: state = "🟠【Level 3: 多空分歧】"
+        elif score <= 80: state = "🔴【Level 4: 高檔警戒】"
+        else: state = "💀【Level 5: 系統性風險】"
+
+        msg = f"📊 *【MarginCall_2X 全局雷達】 {date_str}*\n"
+        msg += f"🔥 *風險分數：{score} / 100* ({state})\n"
+        msg += "📋 *詳細指標與觸發條件：*\n"
+        if reasons:
+            for r in reasons: msg += f" {r}\n"
+        else:
+            msg += " 🟢 各項指標皆處於健康常態區間。\n"
+            
+        # 👇 === 補上這段：把所有的 Raw Data 餵給 AI 大腦 ===
+        msg += "\n[🤖 給大腦的隱藏原始數據 (Raw Data)，請根據用戶問題彈性回答]\n"
+        msg += f"- DXY_Z (美元Z值): {latest_data.get('DXY_Z', 0):.2f}\n"
+        msg += f"- TNX_Z (美債Z值): {latest_data.get('TNX_Z', 0):.2f}\n"
+        msg += f"- VIX_Z (恐慌Z值): {latest_data.get('VIX_Z', 0):.2f}\n"
+        msg += f"- SKEW_PR (黑天鵝PR值): {latest_data.get('SKEW_PR', 0):.2f}\n"
+        msg += f"- DIX_PR (暗池吸籌PR值): {latest_data.get('dix_PR', 0):.2f}\n"
+        msg += f"- GEX (造市商Gamma): {latest_data.get('gex', 0):.0f}\n"
+            
+        return msg
+    except Exception as e:
+        return f"❌ 雷達運算發生異常: {e}"
+
 def get_market_history(symbol: str, days: int) -> str:
     """
     【強大歷史雷達】
@@ -489,12 +698,15 @@ def get_market_history(symbol: str, days: int) -> str:
     
 def get_fundamental_data(symbol: str) -> str:
     """
-    獲取個股的基本面與估值數據 (本益比 P/E、EPS、市值等)。
-    當用戶問「這檔現在算便宜還是貴」、「基本面如何」、「本益比多少」時必須呼叫。
+    【V10 終極基本面 X 光機 + FMP 大戶籌碼雷達】
+    獲取個股的 P/E、EPS、市值等，並直接精準打擊 FMP API 獲取機構持股，
+    徹底解決 Yahoo Finance 拔掉 JSON 欄位的問題。
     """
     try:
         search_symbol = symbol.upper()
-        if search_symbol.isdigit() and len(search_symbol) <= 6:
+        # 判斷是否為台股
+        is_taiwan_stock = search_symbol.isdigit() and len(search_symbol) <= 6
+        if is_taiwan_stock:
             search_symbol += ".TW"
             
         ticker = yf.Ticker(search_symbol)
@@ -515,10 +727,33 @@ def get_fundamental_data(symbol: str) -> str:
         report += f"● 預估本益比 (Forward P/E): {fwd_pe}\n"
         report += f"● 股價淨值比 (P/B): {pb}\n"
         
-        return report
-    except Exception as e:
-        return f"基本面數據讀取失敗: {e}"
+        # ==========================================
+        # 🚀 核心升級：FMP 頂級機構持股掃描器 (僅限美股)
+        # ==========================================
+        if not is_taiwan_stock and FMP_KEY:
+            try:
+                # 直接戳 FMP 的 institutional-holder API
+                inst_url = f"https://financialmodelingprep.com/api/v3/institutional-holder/{symbol}?apikey={FMP_KEY}"
+                inst_res = requests.get(inst_url, timeout=5).json()
+                
+                # 防呆：確保回傳的是有資料的 List
+                if isinstance(inst_res, list) and len(inst_res) > 0:
+                    report += "● 🏦 頂級機構持倉 (FMP 鷹眼掃描):\n"
+                    # 抓出前三大機構 (通常就是 Vanguard, BlackRock, State Street 等大戶)
+                    for i, holder in enumerate(inst_res[:3]):
+                        name = holder.get('holder', '未知神秘大戶')
+                        shares = holder.get('shares', 0)
+                        # 將股數加上千分位逗號，方便閱讀
+                        report += f"   └ {name}: {shares:,} 股\n"
+                else:
+                    report += "● 🏦 頂級機構持倉: 籌碼過度集中或查無顯著機構\n"
+            except Exception as fmp_e:
+                report += f"● 🏦 頂級機構持倉: FMP 通道暫時阻塞\n"
 
+        return report
+        
+    except Exception as e:
+        return f"❌ 基本面數據讀取失敗: {e}"
 def get_stock_news(symbol: str) -> str:
     try:
         search_symbol = symbol.upper()
@@ -590,12 +825,15 @@ def create_agent_chat(model_name, history=None):
         model=model_name,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
-            # 👈 加入 get_market_sentiment
-        tools=[update_position, get_portfolio_raw_data, get_live_price, 
-            get_market_history, calculate_pnl, get_exchange_rate, 
-            get_market_sentiment, get_stock_news, get_fundamental_data,
-            get_quote_and_orderbook, fubon.get_market_hot_stocks, fubon.get_intraday_trend],
-        temperature=0.3, 
+            tools=[
+                update_position, get_portfolio_raw_data, get_live_price, 
+                get_market_history, calculate_pnl, get_exchange_rate, 
+                get_market_sentiment, get_stock_news, get_fundamental_data,
+                get_quote_and_orderbook, fubon.get_market_hot_stocks, fubon.get_intraday_trend,
+                get_us_realtime_insight,
+                get_global_risk_radar  # 👈 加上這行，把雷達武器發給 AI
+            ],
+            temperature=0.3, 
         ),
         history=history
     )
@@ -606,16 +844,22 @@ chat = create_agent_chat(AVAILABLE_MODELS[current_model_idx])
 # ==========================================
 # 🗣️ Telegram 訊息接收、WDT 垃圾話與動態重試系統
 # ==========================================
+@bot.message_handler(commands=['reset'])
+def reset_memory(message):
+    global chat
+    # 重新點火，換一個乾淨的大腦
+    current_model = get_dynamic_models()[0] 
+    chat = create_agent_chat(current_model)
+    bot.reply_to(message, "🧹 推進器記憶體已排空！目前大腦已重新裝填，又是新的一天。")           
 
-# 假設這些變數與函式已在外部定義
-# AVAILABLE_MODELS, WDT_MESSAGES, bot, create_agent_chat, current_model_idx, chat
+dead_engines = set() 
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
-    global chat  # 🚀 必須宣告全域，不然會變成 local 變數
+    global chat 
     user_text = message.text
     
-    # --- 1. 決定心情並發送第一句垃圾話 ---
+    # --- 1. 決定心情並發送第一句垃圾話 (完整保留) ---
     mood = "normal"
     if any(word in user_text for word in ["損益", "倉位", "賠", "慘", "更改", "修改"]):
         mood = "bad_market"
@@ -626,29 +870,37 @@ def handle_all_text(message):
     sent_msg = bot.reply_to(message, f"【推進器點火中...】\n{wdt_text}")
     bot.send_chat_action(message.chat.id, 'typing')
     
-    # --- 2. 取得當下的動態引擎清單 ---
-    current_models = get_dynamic_models()
+    # --- 2. 取得動態引擎清單，並「過濾掉」已經燒毀的黑名單 ---
+    current_models = [m for m in get_dynamic_models() if m not in dead_engines]
+    
+    if not current_models:
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=sent_msg.message_id,
+            text="兄弟，連備用引擎都全數陣亡了，Google 把我們踢出去了，晚點再來吧。"
+        )
+        return
+
+    # 🛡️ 關鍵修正 1：在進入危險區前，先「安全備份」當下的健康記憶！
+    safe_history = chat.get_history() if hasattr(chat, 'get_history') else getattr(chat, 'history', None)
 
     # --- 3. 進入 AI 思考迴圈 (記憶轉移與無縫降級) ---
     for model_idx, model_name in enumerate(current_models):
         try:
-            # 🛡️ 修正 1：精準抓取新版 SDK 的隱藏模型屬性 _model
             current_chat_model = getattr(chat, '_model', getattr(chat, 'model', None))
             
             if current_chat_model != model_name:
                 print(f"🔄 模型切換: {current_chat_model} -> {model_name}，正在轉移 Context...")
-                
-                # 🛡️ 修正 2：改用 .get_history() 提取記憶陣列
-                old_history = chat.get_history() if hasattr(chat, 'get_history') else getattr(chat, 'history', None)
-                chat = create_agent_chat(model_name, history=old_history)
+                # 🛡️ 關鍵修正 2：使用事先備份好的 safe_history 重建大腦
+                chat = create_agent_chat(model_name, history=safe_history)
             
             # 呼叫 Gemini
             response = chat.send_message(user_text)
             
-            # --- 【關鍵修正：防斷片安全網】 ---
+            # --- 【防斷片安全網】 ---
             final_text = response.text if (response and response.text) else "兄弟，我剛才算到一半突然靈魂出竅，沒吐出東西來。可能是這標的太妖，連我都無語了。你再問一次試試？"
             
-            # --- 🎯 處理補刀邏輯 ---
+            # --- 🎯 處理補刀邏輯 (完整保留) ---
             if mood == "bad_market" and random.random() < 0.3:
                 insults = [
                     "\n\n(補刀：我看你這損益，還是先把 Telegram 關掉去寫 C 語言吧。)",
@@ -657,7 +909,7 @@ def handle_all_text(message):
                 ]
                 final_text += random.choice(insults)
             
-            # --- 🎯 送出修改訊息 ---
+            # --- 🎯 送出修改訊息 (完整保留) ---
             try:
                 bot.edit_message_text(
                     chat_id=message.chat.id,
@@ -673,34 +925,33 @@ def handle_all_text(message):
                     text=final_text
                 )
             
-            return  # 成功回覆，直接跳出
+            return  # 成功回覆，安全下莊
 
         except Exception as e:
             error_str = str(e).upper()
             
             # 遇到額度或伺服器問題時降級
             if any(key in error_str for key in ['429', 'RESOURCE_EXHAUSTED', 'QUOTA', '404', 'NOT FOUND', '403', '400', 'INVALID', '503', 'UNAVAILABLE']):
+                
+                # 🛡️ 關鍵修正 3：如果是 429 額度耗盡，直接寫入死神筆記本！
+                if any(k in error_str for k in ['429', 'RESOURCE_EXHAUSTED', 'QUOTA']):
+                    print(f"💀 引擎 {model_name} 燃料耗盡，打入冷宮！")
+                    dead_engines.add(model_name)
+                    reason = "燃料耗盡 (已封鎖)"
+                elif any(k in error_str for k in ['503', 'UNAVAILABLE']):
+                    reason = "伺服器超載 (503)"
+                else:
+                    reason = f"引擎異常 ({error_str[:30]})"
+
                 if model_idx + 1 < len(current_models):
                     next_model_name = current_models[model_idx + 1]
                     
-                    # 🛡️ 修正 3：降級時的記憶提取也要同步改成 get_history()
-                    old_history = chat.get_history() if hasattr(chat, 'get_history') else getattr(chat, 'history', None)
-                    chat = create_agent_chat(next_model_name, history=old_history)
-                    
-                    # 判定錯誤類型
-                    if any(k in error_str for k in ['429', 'RESOURCE_EXHAUSTED', 'QUOTA']):
-                        reason = "燃料耗盡 (429)"
-                    elif any(k in error_str for k in ['503', 'UNAVAILABLE']):
-                        reason = "伺服器超載 (503)"
-                    else:
-                        reason = f"引擎異常 ({error_str[:30]})"
-
                     bot.edit_message_text(
                         chat_id=message.chat.id,
                         message_id=sent_msg.message_id,
-                        text=f"⚠️ {model_name} {reason}！\n正在轉移記憶並切換至：{next_model_name} ..."
+                        text=f"⚠️ {model_name} {reason}！\n正在讀取安全備份，切換至：{next_model_name} ..."
                     )
-                    continue  # 帶著新大腦進入下一輪迴圈
+                    continue  # 帶著安全備份的記憶進入下一輪迴圈
                 else:
                     bot.edit_message_text(
                         chat_id=message.chat.id,
@@ -709,7 +960,7 @@ def handle_all_text(message):
                     )
                     return
             else:
-                # 非 API 錯誤 (可能是 Code 寫錯)，直接噴錯
+                # 非 API 錯誤，直接噴錯
                 bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=sent_msg.message_id,
@@ -717,13 +968,6 @@ def handle_all_text(message):
                 )
                 return
         
-@bot.message_handler(commands=['reset'])
-def reset_memory(message):
-    global chat
-    # 重新點火，換一個乾淨的大腦
-    current_model = get_dynamic_models()[0] 
-    chat = create_agent_chat(current_model)
-    bot.reply_to(message, "🧹 推進器記憶體已排空！目前大腦已重新裝填，又是新的一天。")           
 
 if __name__ == "__main__":
     import urllib3

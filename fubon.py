@@ -15,7 +15,7 @@ def init_fubon():
     my_id = os.getenv("FUBON_ID")
     api_key = os.getenv("FUBON_API_KEY")
     cert_pwd = os.getenv("FUBON_CERT_PWD")
-    cert_path = ""
+    cert_path = "./R124949189.pfx"
 
     try:
         print(f"🔌 正在連線富邦主機 (ID: {my_id})...")
@@ -32,12 +32,18 @@ def init_fubon():
 
 # 👇 給 AI 用的 Tool 函數
 def get_quote_and_orderbook(symbol: str) -> str:
+    """
+    【台股專用】獲取台股個股的即時五檔掛單 (Orderbook) 與買賣力道。
+    當用戶詢問「五檔」、「掛單」、「大戶墊單」、「買賣壓」時，必須呼叫此工具。
+    """
     global fubon_sdk, fubon_ready
 
     if not fubon_ready:
         return f"⚠️ 警告：富邦 V8 引擎未啟動。"
 
-    symbol = symbol.upper()
+    # 🚨 一樣洗掉後綴
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    
     try:
         reststock = fubon_sdk.marketdata.rest_client.stock
         quote_data = reststock.intraday.quote(symbol=symbol)
@@ -129,12 +135,18 @@ def get_market_hot_stocks() -> str:
 
 
 def get_intraday_trend(symbol: str) -> str:
+    """
+    【台股專用】獲取台股個股的 5 分鐘 K 線盤中趨勢與量價資料。
+    當用戶詢問「5分K」、「盤中趨勢」、「短線」、「今天走勢」時，必須呼叫此工具。
+    """
     global fubon_sdk, fubon_ready
 
     if not fubon_ready:
         return f"⚠️ 警告：富邦 V8 引擎未啟動。"
 
-    symbol = symbol.upper()
+    # 🚨 洗掉 AI 自作聰明的 Yahoo 後綴
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    
     try:
         reststock = fubon_sdk.marketdata.rest_client.stock
         
