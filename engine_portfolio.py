@@ -65,26 +65,30 @@ def init_db():
 # 啟動時自動初始化
 init_db()
 
-def update_position(symbol: str, price: float, shares: float, action: str = 'set') -> str:
+def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None) -> str:
+    """
+    更新持倉或現金。
+    action: 'buy' (買入), 'sell' (賣出), 'set' (校正)
+    price: 原幣單價
+    shares: 股數 (action='sell' 時代表賣出股數)
+    total_amount_twd: 選填，如果 AI 直接知道台幣總額可帶入
+    """
     symbol = symbol.upper()
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
     is_cash = 'CASH' in symbol
     fx_rate = get_exchange_rate() if (not is_taiwan and not is_cash) else 1.0
     
-    # 計算台幣總價與原幣單價
-    if not is_taiwan and not is_cash:
-        if price > 2000: # 總額模式
-            actual_twd_total = price
-            actual_unit_price = price / shares / fx_rate if shares > 0 else 0
-        else: # 單價模式
-            actual_unit_price = price
-            actual_twd_total = price * shares * fx_rate
+    # 核心邏輯：計算該次異動的台幣價值
+    if total_amount_twd:
+        actual_twd_total = total_amount_twd
+        actual_unit_price = total_amount_twd / shares / fx_rate if shares > 0 else price
     else:
         actual_unit_price = price
-        actual_twd_total = price * shares
+        actual_twd_total = price * shares * fx_rate
 
     settle_currency = 'CASH_TWD' if is_taiwan else 'CASH_USD'
-    settle_amount = actual_twd_total if is_taiwan else (actual_unit_price * shares)
+    # 美股扣款原幣，台股扣款台幣
+    settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()

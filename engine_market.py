@@ -94,10 +94,11 @@ def get_us_realtime_insight(symbol: str) -> str:
 def get_market_sentiment() -> str:
     indicators = {
         "ES=F": "標普期", "NQ=F": "那指期", "YM=F": "道瓊期",
-        "^TNX": "美債10Y", "DX-Y.NYB": "美元", "GC=F": "黃金", "CL=F": "原油",
+        "WTX=F": "台指期", "TSM": "台積ADR", # 補上台股核心領先指標
+        "^TNX": "美債10Y", "DX-Y.NYB": "美元", "GC=F": "黃金",
         "^VIX": "恐慌", "BTC-USD": "BTC"
     }
-    report = "【🌐 全球資金流向雷達】\n"
+    report = "【🌐 全球資金流向與台美連動】\n"
     for symbol, name in indicators.items():
         try:
             ticker = yf.Ticker(symbol)
@@ -106,7 +107,10 @@ def get_market_sentiment() -> str:
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 change = ((curr - prev) / prev) * 100
-                report += f"{'📈' if change > 0 else '📉'} {name}: {curr:.2f} ({change:+.2f}%)\n"
+                
+                # 針對 TSM 與 台指期 增加戰術標記
+                emoji = '🚀' if change > 1.5 else '📈' if change > 0 else '📉' if change > -1.5 else '💀'
+                report += f"{emoji} {name}: {curr:.2f} ({change:+.2f}%)\n"
         except: pass
     return report
 
@@ -129,9 +133,25 @@ def get_fundamental_data(symbol: str) -> str:
     try:
         s = symbol.upper()
         if s.isdigit(): s += ".TW"
-        info = yf.Ticker(s).info
-        return f"【📊 {symbol} 基本面】\n● EPS: {info.get('trailingEps')}\n● P/E: {info.get('trailingPE')}\n● P/B: {info.get('priceToBook')}"
-    except: return "基本面數據獲取失敗。"
+        ticker = yf.Ticker(s)
+        info = ticker.info
+        
+        # 提取更多關鍵指標
+        eps = info.get('trailingEps', 'N/A')
+        pe = info.get('trailingPE', 'N/A')
+        pb = info.get('priceToBook', 'N/A')
+        short_ratio = info.get('shortRatio', 'N/A')
+        inst_own = info.get('heldPercentInstitutions')
+        inst_own_str = f"{inst_own*100:.1f}%" if inst_own is not None else "N/A"
+        
+        report = f"【📊 {symbol} 深度基本面】\n"
+        report += f"● EPS: {eps} | P/E: {pe} | P/B: {pb}\n"
+        report += f"● Short Ratio (軋空比): {short_ratio}\n"
+        report += f"● 機構持倉比: {inst_own_str}"
+        
+        return report
+    except Exception as e:
+        return f"基本面數據獲取失敗: {e}"
 
 def get_technical_analysis(symbol: str) -> str:
     try:

@@ -9,20 +9,22 @@ from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
 fubon_sdk = None
 fubon_ready = False
 
+from datetime import datetime, timedelta
+
 def get_fubon_technical(symbol: str) -> str:
     if not fubon_ready: return "❌ 富邦 SDK 未啟動"
     try:
         reststock = fubon_sdk.marketdata.rest_client.stock
         today = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
         
         # 1. 抓取 52 週高低與基本報價
         stats = reststock.historical.stats(symbol=symbol)
         h52, l52 = stats.get('week52High', 0), stats.get('week52Low', 0)
         curr = stats.get('closePrice', 0)
         
-        # 2. 抓取 RSI (週期 6)
-        rsi_data = reststock.technical.rsi(symbol=symbol, timeframe='D', period=6, from_=start_date, to=today)
+        # 2. 抓取 RSI (週期改為國際標準 14)
+        rsi_data = reststock.technical.rsi(symbol=symbol, timeframe='D', period=14, from_=start_date, to=today)
         rsi = rsi_data.get('data', [])[-1].get('rsi', 0) if rsi_data.get('data') else 0
         
         # 3. 抓取 MACD
@@ -174,13 +176,20 @@ def get_quote_and_orderbook(symbol: str) -> str:
         reststock = fubon_sdk.marketdata.rest_client.stock
         quote_data = reststock.intraday.quote(symbol=symbol)
         
-        is_dict = isinstance(quote_data, dict)
-        current_price = quote_data.get('closePrice', quote_data.get('lastPrice', 0)) if is_dict else getattr(quote_data, 'closePrice', getattr(quote_data, 'lastPrice', 0))
+        # 增加試撮數據判定 (支援開盤前/收盤前)
+        current_price = quote_data.get('closePrice') or quote_data.get('lastPrice', 0)
+        trial = quote_data.get('lastTrial', {})
+        trial_price = trial.get('price', 0)
         
-        bids = quote_data.get('bids', []) if is_dict else getattr(quote_data, 'bids', [])
-        asks = quote_data.get('asks', []) if is_dict else getattr(quote_data, 'asks', [])
+        status_msg = ""
+        if quote_data.get('isTrial'):
+            status_msg = f" (⚠️ 目前為試撮階段，價格: {trial_price})"
+            current_price = trial_price
+        
+        bids = quote_data.get('bids', [])
+        asks = quote_data.get('asks', [])
 
-        report = f"📊 【{symbol} 即時報價與五檔觀測】\n現價: {current_price}\n\n"
+        report = f"📊 【{symbol} 即時報價與五檔觀測】\n現價: {current_price}{status_msg}\n\n"
         
         report += "🛑 [上方賣壓牆] (Asks):\n"
         if asks:

@@ -58,6 +58,7 @@ def create_agent_chat(model_name, history=None):
                 market.get_technical_analysis, # 新增戰略分析工具
                 fubon.get_market_hot_stocks, fubon.get_intraday_trend,
                 fubon.get_market_trades, fubon.get_price_volumes,
+                fubon.get_quote_and_orderbook, fubon.get_historical_stats, # 補齊台股關鍵工具
                 risk.get_global_risk_radar
             ],
             temperature=0.3, 
