@@ -9,6 +9,48 @@ from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
 fubon_sdk = None
 fubon_ready = False
 
+def get_fubon_technical(symbol: str) -> str:
+    if not fubon_ready: return "❌ 富邦 SDK 未啟動"
+    try:
+        reststock = fubon_sdk.marketdata.rest_client.stock
+        today = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        
+        # 1. 抓取 52 週高低與基本報價
+        stats = reststock.historical.stats(symbol=symbol)
+        h52, l52 = stats.get('week52High', 0), stats.get('week52Low', 0)
+        curr = stats.get('closePrice', 0)
+        
+        # 2. 抓取 RSI (週期 6)
+        rsi_data = reststock.technical.rsi(symbol=symbol, timeframe='D', period=6, from_=start_date, to=today)
+        rsi = rsi_data.get('data', [])[-1].get('rsi', 0) if rsi_data.get('data') else 0
+        
+        # 3. 抓取 MACD
+        macd_data = reststock.technical.macd(symbol=symbol, timeframe='D', fast=12, slow=26, signal=9, from_=start_date, to=today)
+        macd_last = macd_data.get('data', [])[-1] if macd_data.get('data') else {}
+        dif, dea = macd_last.get('macdLine', 0), macd_last.get('signalLine', 0)
+        macd_hist = (dif - dea) * 2
+        
+        # 4. 抓取布林通道
+        bb_data = reststock.technical.bb(symbol=symbol, timeframe='D', period=20, from_=start_date, to=today)
+        bb_last = bb_data.get('data', [])[-1] if bb_data.get('data') else {}
+        upper, lower = bb_last.get('upper', 0), bb_last.get('lower', 0)
+        
+        report = f"🇹🇼 === {symbol} 台股全武裝分析 ===\n"
+        report += f"● 現價: {curr} | 52週高: {h52} | 52週低: {l52}\n"
+        report += f"● RSI(6): {rsi:.2f} ({'🔥超買' if rsi>75 else '❄️超跌' if rsi<25 else '⚖️中性'})\n"
+        report += f"● MACD: DIF:{dif:.2f} | 柱狀體:{macd_hist:.2f} ({'📈多頭增強' if macd_hist>0 else '📉空頭衰退'})\n"
+        report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
+        
+        # 戰術建議
+        if curr >= upper: report += "⚠️ 戰略：股價觸及布林上軌，短線噴發過頭，不建議追高。\n"
+        elif curr <= lower: report += "🎯 戰略：股價觸及布林下軌，且 RSI 偏低，具備反彈潛力！\n"
+        elif rsi < 30: report += "🔥 戰略：RSI 極度超跌，隨時可能暴力反彈。\n"
+        else: report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
+        
+        return report
+    except Exception as e: return f"❌ 台股指標獲取失敗: {e}"
+
 def init_fubon():
     """主程式啟動時呼叫這個來連線"""
     global fubon_sdk, fubon_ready
