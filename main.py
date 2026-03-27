@@ -1,3 +1,10 @@
+import sys
+import io
+
+# 修正 Windows 環境下 print emoji 導致的 UnicodeEncodeError
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 import pytz
 import os
 import csv
@@ -403,8 +410,8 @@ def get_live_price(symbol: str) -> str:
 
 def get_us_realtime_insight(symbol: str) -> str:
     """
-    【🇺🇸 美股戰情室 - YF 實戰版】
-    包含：5分K趨勢、L1掛單力道、P/C Ratio 情緒、成交量爆發力。
+    【🇺🇸 美股戰術戰情室 - V11 籌碼牆版】
+    包含：5分K趨勢(OHLC)、分析師目標、成交量分布(POC)、P/C Ratio、量能爆發。
     """
     symbol = symbol.upper()
     # 排除台股，避免誤判
@@ -413,12 +420,13 @@ def get_us_realtime_insight(symbol: str) -> str:
 
     try:
         ticker = yf.Ticker(symbol)
-        # 1. 抓取盤中 5 分 K (最近 10 根)
-        df = ticker.history(period="1d", interval="5m").tail(10)
-        info = ticker.info
-        
-        if df.empty:
+        # 1. 抓取盤中 5 分 K (全天數據用於分價量分析)
+        full_df = ticker.history(period="1d", interval="5m")
+        if full_df.empty:
             return f"❌ {symbol} 目前無盤中數據，可能非交易時段或 YF 抽風。"
+        
+        df = full_df.tail(10)
+        info = ticker.info
 
         # 2. 買賣價差與力道分析
         bid = info.get('bid', 0)
@@ -442,23 +450,47 @@ def get_us_realtime_insight(symbol: str) -> str:
         # 4. 成交量爆發力
         avg_vol = info.get('averageVolume', 1)
         curr_vol = info.get('regularMarketVolume', 0)
-        # 換算成日內比率 (假設開盤已過 X 分鐘)
         vol_ratio = round(curr_vol / (avg_vol / 6.5), 2) if avg_vol > 0 else 0
 
         # 5. 5分K 趨勢判定
         last_3 = df['Close'].tail(3).tolist()
         trend = "📈 墊高中" if last_3[-1] > last_3[0] else "📉 下滑中"
 
+        # 6. 成交量分布 (Volume Profile / POC) - 新增
+        try:
+            day_min = full_df['Low'].min()
+            day_max = full_df['High'].max()
+            # 將當日高低範圍切成 10 份
+            bins = np.linspace(day_min, day_max, 11)
+            full_df['bin'] = pd.cut(full_df['Close'], bins=bins)
+            # 統計每個價格區間的總成交量
+            vp = full_df.groupby('bin', observed=True)['Volume'].sum()
+            poc_bin = vp.idxmax()
+            poc_price = (poc_bin.left + poc_bin.right) / 2
+            
+            curr_p = df['Close'].iloc[-1]
+            vp_status = "🛡️ 支撐" if curr_p > poc_price else "🧱 壓力"
+            vp_report = f"● 成交量密集區 (POC): {poc_price:.2f} | 目前處於: {vp_status}"
+        except:
+            vp_report = "● 成交量分布: 數據不足，無法計算籌碼牆。"
+
+        # 7. 分析師評等
+        target_price = info.get('targetMeanPrice', 'N/A')
+        recommendation = info.get('recommendationKey', 'N/A')
+        rec_score = info.get('recommendationMean', 'N/A')
+
         # 彙整報告
-        report = f"🚀 === {symbol} 美股即時情報 (YF) ===\n"
+        report = f"🚀 === {symbol} 美股即時戰情 (YF) ===\n"
         report += f"● 現價: {df['Close'].iloc[-1]:.2f} (最後更新: {df.index[-1].strftime('%H:%M')})\n"
         report += f"● 買賣比 (B/A): {ba_ratio:.2f} | 價差: {spread:.2f} ({spread_pct:.3f}%)\n"
         report += f"● P/C Ratio: {pc_ratio} | 成交量比: {vol_ratio}x\n"
+        report += f"● 分析師目標: {target_price} | 評等: {recommendation} ({rec_score})\n"
+        report += f"{vp_report}\n"
         report += f"● 短線 5分K 趨勢: {trend}\n\n"
-        report += "【📊 最近 5 根 K 線快照】\n"
+        report += "【📊 最近 5 根 K 線快照 (OHLCV)】\n"
         for _, row in df.tail(5).iterrows():
             k_dir = "🔴" if row['Close'] > row['Open'] else "🟢"
-            report += f"  [{row.name.strftime('%H:%M')}] {k_dir} 收:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
+            report += f"  [{row.name.strftime('%H:%M')}] {k_dir} O:{row['Open']:.1f} H:{row['High']:.1f} L:{row['Low']:.1f} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
         
         return report
 
@@ -472,12 +504,16 @@ def get_market_sentiment() -> str:
     """
     # 這裡放的是你原本想要的所有 8 個宏觀指標，並對應到 YF 成功代碼
     indicators = {
+        "^DJI": "道瓊工業指數(傳統權值)",
+        "^GSPC": "標普500指數(市場寬度)",
+        "^IXIC": "那斯達克(科技領頭羊)",
+        "^RUT": "羅素2000(中小企業型)",
+        "^SOX": "費城半導體(AI與科技)",
         "^TNX": "美債10年期(估值重力)",
         "DX-Y.NYB": "美元指數(資金水龍頭)",
         "^VIX": "恐慌指數(波動絞肉機)",
-        "^SOX": "費城半導體(科技基本面)",
-        "HYG": "高收益債(企業違約)",
-        "GC=F": "黃金期貨(避險)",
+        "BTC-USD": "比特幣(風險情緒指標)",
+        "GC=F": "黃金期貨(避險資產)",
         "CL=F": "WTI原油(通膨指標)",
         "BZ=F": "布蘭特原油(地緣政治)"
     }
@@ -729,26 +765,38 @@ def get_fundamental_data(symbol: str) -> str:
         
         # ==========================================
         # 🚀 核心升級：FMP 頂級機構持股掃描器 (僅限美股)
+        # ⚠️ 注意：Basic Key 目前會 403，暫時封印。
         # ==========================================
-        if not is_taiwan_stock and FMP_KEY:
+        # if not is_taiwan_stock and FMP_KEY:
+        #     try:
+        #         inst_url = f"https://financialmodelingprep.com/api/v3/institutional-holder/{symbol}?apikey={FMP_KEY}"
+        #         inst_res = requests.get(inst_url, timeout=5).json()
+        #         if isinstance(inst_res, list) and len(inst_res) > 0:
+        #             report += "● 🏦 頂級機構持倉 (FMP 鷹眼掃描):\n"
+        #             for i, holder in enumerate(inst_res[:3]):
+        #                 name = holder.get('holder', '未知神秘大戶')
+        #                 shares = holder.get('shares', 0)
+        #                 report += f"   └ {name}: {shares:,} 股\n"
+        #     except Exception as fmp_e:
+        #         pass 
+
+        # 🚀 [備援與強化] 改用 YF 抓取具體機構清單與空單數據 (僅限美股)
+        if not is_taiwan_stock:
             try:
-                # 直接戳 FMP 的 institutional-holder API
-                inst_url = f"https://financialmodelingprep.com/api/v3/institutional-holder/{symbol}?apikey={FMP_KEY}"
-                inst_res = requests.get(inst_url, timeout=5).json()
+                # 抓取具體機構清單
+                inst_holders = ticker.get_institutional_holders()
+                if inst_holders is not None and not inst_holders.empty:
+                    report += "● 🏦 頂級機構持倉 (YF):\n"
+                    for _, holder in inst_holders.head(3).iterrows():
+                        report += f"   └ {holder['Holder']}: {holder['Shares']:,} 股\n"
                 
-                # 防呆：確保回傳的是有資料的 List
-                if isinstance(inst_res, list) and len(inst_res) > 0:
-                    report += "● 🏦 頂級機構持倉 (FMP 鷹眼掃描):\n"
-                    # 抓出前三大機構 (通常就是 Vanguard, BlackRock, State Street 等大戶)
-                    for i, holder in enumerate(inst_res[:3]):
-                        name = holder.get('holder', '未知神秘大戶')
-                        shares = holder.get('shares', 0)
-                        # 將股數加上千分位逗號，方便閱讀
-                        report += f"   └ {name}: {shares:,} 股\n"
-                else:
-                    report += "● 🏦 頂級機構持倉: 籌碼過度集中或查無顯著機構\n"
-            except Exception as fmp_e:
-                report += f"● 🏦 頂級機構持倉: FMP 通道暫時阻塞\n"
+                # 抓取空單數據
+                short_ratio = info.get('shortRatio', 'N/A')
+                short_pct = info.get('shortPercentOfFloat', 0)
+                if short_ratio != 'N/A':
+                    report += f"● 🐻 空單比例: {short_ratio} (Short Ratio) / {short_pct*100:.2f}% (Float)\n"
+            except:
+                pass
 
         return report
         
@@ -830,8 +878,9 @@ def create_agent_chat(model_name, history=None):
                 get_market_history, calculate_pnl, get_exchange_rate, 
                 get_market_sentiment, get_stock_news, get_fundamental_data,
                 get_quote_and_orderbook, fubon.get_market_hot_stocks, fubon.get_intraday_trend,
+                fubon.get_market_trades, fubon.get_price_volumes, fubon.get_historical_stats,
                 get_us_realtime_insight,
-                get_global_risk_radar  # 👈 加上這行，把雷達武器發給 AI
+                get_global_risk_radar 
             ],
             temperature=0.3, 
         ),
@@ -852,14 +901,14 @@ def reset_memory(message):
     chat = create_agent_chat(current_model)
     bot.reply_to(message, "🧹 推進器記憶體已排空！目前大腦已重新裝填，又是新的一天。")           
 
-dead_engines = set() 
+dead_engines = {} # 格式: {model_name: cooldown_end_timestamp} 
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
     global chat 
     user_text = message.text
     
-    # --- 1. 決定心情並發送第一句垃圾話 (完整保留) ---
+    # --- 1. 決定心情並發送第一句垃圾話 ---
     mood = "normal"
     if any(word in user_text for word in ["損益", "倉位", "賠", "慘", "更改", "修改"]):
         mood = "bad_market"
@@ -870,14 +919,20 @@ def handle_all_text(message):
     sent_msg = bot.reply_to(message, f"【推進器點火中...】\n{wdt_text}")
     bot.send_chat_action(message.chat.id, 'typing')
     
-    # --- 2. 取得動態引擎清單，並「過濾掉」已經燒毀的黑名單 ---
+    # --- 2. 取得動態引擎清單，並「過濾掉」正在冷卻中的引擎 ---
+    now = time.time()
+    for m in list(dead_engines.keys()):
+        if now > dead_engines[m]:
+            print(f"♻️ 引擎 {m} 冷卻結束，重新歸隊！")
+            del dead_engines[m]
+
     current_models = [m for m in get_dynamic_models() if m not in dead_engines]
     
     if not current_models:
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=sent_msg.message_id,
-            text="兄弟，連備用引擎都全數陣亡了，Google 把我們踢出去了，晚點再來吧。"
+            text="🚨 所有引擎目前都在額度冷卻中！請等 60 秒後再試。"
         )
         return
 
@@ -891,25 +946,20 @@ def handle_all_text(message):
             
             if current_chat_model != model_name:
                 print(f"🔄 模型切換: {current_chat_model} -> {model_name}，正在轉移 Context...")
-                # 🛡️ 關鍵修正 2：使用事先備份好的 safe_history 重建大腦
                 chat = create_agent_chat(model_name, history=safe_history)
             
             # 呼叫 Gemini
             response = chat.send_message(user_text)
             
             # --- 【防斷片安全網】 ---
-            final_text = response.text if (response and response.text) else "兄弟，我剛才算到一半突然靈魂出竅，沒吐出東西來。可能是這標的太妖，連我都無語了。你再問一次試試？"
+            final_text = response.text if (response and response.text) else "兄弟，我剛才算到一半突然靈魂出竅，沒吐出東西來。"
             
-            # --- 🎯 處理補刀邏輯 (完整保留) ---
+            # --- 🎯 處理補刀邏輯 ---
             if mood == "bad_market" and random.random() < 0.3:
-                insults = [
-                    "\n\n(補刀：我看你這損益，還是先把 Telegram 關掉去寫 C 語言吧。)",
-                    "\n\n(提醒：新竹公園的風大，記得帶件厚外套。)",
-                    "\n\n(戰友碎念：這操作... 真是讓我大開眼界。)"
-                ]
+                insults = ["\n\n(補刀：我看你這損益，還是先去新竹公園佔位子吧。)"]
                 final_text += random.choice(insults)
             
-            # --- 🎯 送出修改訊息 (完整保留) ---
+            # --- 🎯 送出修改訊息 (加強 Markdown 容錯) ---
             try:
                 bot.edit_message_text(
                     chat_id=message.chat.id,
@@ -925,48 +975,42 @@ def handle_all_text(message):
                     text=final_text
                 )
             
-            return  # 成功回覆，安全下莊
+            return  # 成功回覆
 
         except Exception as e:
-            error_str = str(e).upper()
+            error_msg = str(e)
+            error_str = error_msg.upper()
             
-            # 遇到額度或伺服器問題時降級
-            if any(key in error_str for key in ['429', 'RESOURCE_EXHAUSTED', 'QUOTA', '404', 'NOT FOUND', '403', '400', 'INVALID', '503', 'UNAVAILABLE']):
+            # 判斷是否為「可恢復」的伺服器端錯誤 (429, 503, 500, 504 等)
+            is_quota = any(key in error_str for key in ['429', 'RESOURCE_EXHAUSTED', 'QUOTA'])
+            is_overload = any(key in error_str for key in ['503', 'UNAVAILABLE', '500', '504', 'HIGH DEMAND'])
+            
+            if is_quota or is_overload:
+                wait_time = 180 if is_quota else 40 # 額度耗盡休 3 分鐘，塞車休 40 秒
+                print(f"⏳ 引擎 {model_name} 暫時退場 ({'額度滿' if is_quota else '塞車'})，休眠 {wait_time}s")
+                dead_engines[model_name] = time.time() + wait_time
                 
-                # 🛡️ 關鍵修正 3：如果是 429 額度耗盡，直接寫入死神筆記本！
-                if any(k in error_str for k in ['429', 'RESOURCE_EXHAUSTED', 'QUOTA']):
-                    print(f"💀 引擎 {model_name} 燃料耗盡，打入冷宮！")
-                    dead_engines.add(model_name)
-                    reason = "燃料耗盡 (已封鎖)"
-                elif any(k in error_str for k in ['503', 'UNAVAILABLE']):
-                    reason = "伺服器超載 (503)"
-                else:
-                    reason = f"引擎異常 ({error_str[:30]})"
-
                 if model_idx + 1 < len(current_models):
                     next_model_name = current_models[model_idx + 1]
-                    
-                    bot.edit_message_text(
-                        chat_id=message.chat.id,
-                        message_id=sent_msg.message_id,
-                        text=f"⚠️ {model_name} {reason}！\n正在讀取安全備份，切換至：{next_model_name} ..."
-                    )
-                    continue  # 帶著安全備份的記憶進入下一輪迴圈
+                    print(f"🔄 自動補位：切換至 {next_model_name}...")
+                    time.sleep(2) 
+                    continue 
                 else:
                     bot.edit_message_text(
                         chat_id=message.chat.id,
                         message_id=sent_msg.message_id,
-                        text="兄弟，所有引擎都燒光了！Google 把我們趕出交易室了! 等幾分鐘後再來吧。"
+                        text="🚨 所有引擎都陣亡了（塞車或額度耗盡）！請等 1 分鐘後再試。"
                     )
                     return
             else:
-                # 非 API 錯誤，直接噴錯
+                # 真的程式碼噴錯才走這裡
                 bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=sent_msg.message_id,
-                    text=f"兄弟，我思考迴圈卡死了：\n`{str(e)}`"
+                    text=f"兄弟，我思考迴圈卡死了：\n`{error_msg[:150]}`"
                 )
                 return
+
         
 
 if __name__ == "__main__":

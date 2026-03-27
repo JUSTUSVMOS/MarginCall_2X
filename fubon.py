@@ -5,8 +5,8 @@ import pandas as pd
 from fubon_neo.sdk import FubonSDK
 from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
 
-# 把實體化宣告在這裡！這才是這個檔案的 global
-fubon_sdk = FubonSDK()
+# 把實體化延後，避免 import 時就連線失敗崩潰
+fubon_sdk = None
 fubon_ready = False
 
 def init_fubon():
@@ -19,6 +19,10 @@ def init_fubon():
 
     try:
         print(f"🔌 正在連線富邦主機 (ID: {my_id})...")
+        # 在這裡才真正建立 SDK 物件
+        from fubon_neo.sdk import FubonSDK
+        fubon_sdk = FubonSDK()
+        
         accounts = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
         if accounts.is_success:
             print("✅ 富邦帳戶登入成功！正在建立即時行情連線...")
@@ -28,10 +32,90 @@ def init_fubon():
         else:
             print(f"❌ 富邦登入失敗: {accounts.message}")
     except Exception as e:
-        print(f"❌ 富邦 SDK 初始化異常: {e}")
+        print(f"⚠️ 富邦 SDK 初始化異常 (可能伺服器維護中): {e}")
+        fubon_ready = False
+        fubon_sdk = None # 確保失敗時維持 None
 
 # 👇 給 AI 用的 Tool 函數
+# 👇 【深層戰術工具】抓取成交明細 (Intraday Trades)
+def get_market_trades(symbol: str, limit: int = 20) -> str:
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    try:
+        reststock = fubon_sdk.marketdata.rest_client.stock
+        res = reststock.intraday.trades(symbol=symbol, limit=limit)
+        data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
+        if not data: return f"📊 {symbol} 目前無成交明細。"
+        
+        report = f"📜 【{symbol} 最近 {len(data)} 筆成交明細】\n"
+        for d in data[:limit]:
+            price = d.get('price')
+            size = d.get('size')
+            time_raw = d.get('time', 0)
+            # 轉換時間格式 (微秒轉 HH:MM:SS)
+            from datetime import datetime
+            t_str = datetime.fromtimestamp(time_raw/1000000).strftime('%H:%M:%S')
+            report += f"  [{t_str}] 價: {price} | 量: {size}\n"
+        return report
+    except Exception as e:
+        return f"❌ 明細抓取異常: {e}"
+
+# 👇 【深層戰術工具】抓取分價量表 (Intraday Volumes)
+def get_price_volumes(symbol: str) -> str:
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    try:
+        reststock = fubon_sdk.marketdata.rest_client.stock
+        res = reststock.intraday.volumes(symbol=symbol)
+        data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
+        if not data: return f"📊 {symbol} 無分價量表數據。"
+        
+        # 排序：按價格由高到低
+        data = sorted(data, key=lambda x: x.get('price', 0), reverse=True)
+        report = f"🧱 【{symbol} 分價量表 - 壓力支撐觀測】\n"
+        max_vol = max([d.get('volume', 1) for d in data])
+        
+        for d in data:
+            price = d.get('price')
+            vol = d.get('volume')
+            bar_len = int((vol / max_vol) * 10)
+            bar = "█" * bar_len
+            report += f"  {price:>7.2f} | {bar} {vol}張\n"
+        return report
+    except Exception as e:
+        return f"❌ 分價量表異常: {e}"
+
+# 👇 【深層戰術工具】抓取 52 週高低價與基本資訊 (Historical Stats)
+def get_historical_stats(symbol: str) -> str:
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    try:
+        reststock = fubon_sdk.marketdata.rest_client.stock
+        res = reststock.historical.stats(symbol=symbol)
+        
+        name = res.get('name', '未知')
+        high52 = res.get('week52High', 0)
+        low52 = res.get('week52Low', 0)
+        curr_close = res.get('closePrice', 0)
+        
+        report = f"🏛️ 【{symbol} {name} 52週戰略位階】\n"
+        report += f"  ● 52週最高: {high52}\n"
+        report += f"  ● 52週最低: {low52}\n"
+        report += f"  ● 最後收盤: {curr_close}\n"
+        
+        # 計算目前位階百分比
+        pos = ((curr_close - low52) / (high52 - low52)) * 100 if (high52 - low52) != 0 else 0
+        report += f"  ● 目前位階: {pos:.1f}% (0%為最低, 100%為最高)\n"
+        return report
+    except Exception as e:
+        return f"❌ 52週數據異常: {e}"
+
+# 把舊的 get_quote_and_orderbook 增強，加入更多總量資訊
 def get_quote_and_orderbook(symbol: str) -> str:
+
     """
     【台股專用】獲取台股個股的即時五檔掛單 (Orderbook) 與買賣力道。
     當用戶詢問「五檔」、「掛單」、「大戶墊單」、「買賣壓」時，必須呼叫此工具。

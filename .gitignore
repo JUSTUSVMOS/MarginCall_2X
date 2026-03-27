@@ -7,3 +7,6 @@ bot_env/
 venv/
 .env*
 __pycache__/
+test_env/
+__pycache__/
+*.pyc
