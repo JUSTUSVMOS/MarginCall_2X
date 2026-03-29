@@ -53,12 +53,14 @@ def create_agent_chat(model_name, history=None):
                 portfolio.update_position, portfolio.get_portfolio_raw_data, 
                 portfolio.calculate_pnl, portfolio.get_exchange_rate,
                 market.get_live_price, market.get_us_realtime_insight,
+                market.resolve_symbol_identity, # 【新增】標的身分識別
                 market.get_market_sentiment, market.get_stock_news,
                 market.get_fundamental_data, market.get_market_history,
                 market.get_technical_analysis, # 新增戰略分析工具
                 fubon.get_market_hot_stocks, fubon.get_intraday_trend,
                 fubon.get_market_trades, fubon.get_price_volumes,
-                fubon.get_quote_and_orderbook, fubon.get_historical_stats, # 補齊台股關鍵工具
+                fubon.get_quote_and_orderbook, fubon.get_historical_stats, 
+                fubon.get_txo_sentiment, # 【新增】TXO 戰報工具
                 risk.get_global_risk_radar
             ],
             temperature=0.3, 
@@ -81,6 +83,17 @@ def handle_all_text(message):
     global chat
     user_text = message.text
     
+    # --- 動態時間注入系統提示 ---
+    import pytz
+    from datetime import datetime
+    tw_tz = pytz.timezone('Asia/Taipei')
+    us_tz = pytz.timezone('US/Eastern')
+    now_tw = datetime.now(tw_tz).strftime('%Y-%m-%d %H:%M:%S')
+    now_us = datetime.now(us_tz).strftime('%Y-%m-%d %H:%M:%S')
+    
+    time_context = f"\n【🕒 當前時間環境】\n- 台北時間: {now_tw}\n- 美東時間: {now_us}\n"
+    dynamic_prompt = system_prompt + time_context
+    
     # 垃圾話表情
     mood = "bad_market" if any(w in user_text for w in ["損益", "賠", "慘"]) else "normal"
     sent_msg = bot.reply_to(message, f"【推進器點火】\n{random.choice(WDT_MESSAGES[mood])}")
@@ -94,9 +107,29 @@ def handle_all_text(message):
 
     for model_name in current_models:
         try:
-            # 檢查是否需要換模型
-            if getattr(chat, 'model', None) != model_name:
-                chat = create_agent_chat(model_name, history=safe_history)
+            # 💡 每次對話都注入新的時間 Context 並重建 Chat
+            chat = client.chats.create(
+                model=model_name,
+                config=types.GenerateContentConfig(
+                    system_instruction=dynamic_prompt,
+                    tools=[
+                        portfolio.update_position, portfolio.get_portfolio_raw_data, 
+                        portfolio.calculate_pnl, portfolio.get_exchange_rate,
+                        market.get_live_price, market.get_us_realtime_insight,
+                        market.resolve_symbol_identity, 
+                        market.get_market_sentiment, market.get_stock_news,
+                        market.get_fundamental_data, market.get_market_history,
+                        market.get_technical_analysis, 
+                        fubon.get_market_hot_stocks, fubon.get_intraday_trend,
+                        fubon.get_market_trades, fubon.get_price_volumes,
+                        fubon.get_quote_and_orderbook, fubon.get_historical_stats, 
+                        fubon.get_txo_sentiment, # 【新增】TXO 戰報工具
+                        risk.get_global_risk_radar
+                    ],
+                    temperature=0.3, 
+                ),
+                history=safe_history
+            )
             
             response = chat.send_message(user_text)
             final_text = response.text if response.text else "大腦空白，請重試。"

@@ -25,10 +25,36 @@ def is_us_market_open() -> bool:
     if now.hour >= 21 or now.hour < 5: return True
     return False
 
+def resolve_symbol_identity(symbol: str) -> str:
+    """
+    【核心修復】專門解決機器人不認識新標的(如 009816)的問題。
+    在任何分析前，先呼叫此工具確認標的名與真實性。
+    """
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol) <= 6)
+    
+    if is_taiwan and fubon.fubon_ready:
+        try:
+            # 利用富邦歷史統計功能來抓取官方名稱
+            stats = fubon.get_historical_stats(symbol)
+            if "未知" not in stats and "異常" not in stats:
+                return stats
+        except: pass
+        
+    try:
+        s = f"{symbol}.TW" if is_taiwan and not symbol.endswith('.TW') else symbol
+        ticker = yf.Ticker(s)
+        info = ticker.info
+        name = info.get('longName') or info.get('shortName') or "未知標的"
+        return f"🔍 識別結果: {symbol} ({name}) | 類型: {info.get('quoteType', '未知')}"
+    except:
+        return f"❌ 無法識別標的: {symbol}，請確認代號是否正確。"
+
 def get_live_price(symbol: str) -> str:
     symbol = symbol.upper()
     clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
     if clean_symbol == "2454_ESOP": clean_symbol = "2454"
+    # 支援新形態 ETF (009816 等 6 碼)
     is_taiwan_stock = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
     
     price = None
@@ -38,7 +64,10 @@ def get_live_price(symbol: str) -> str:
             quote_data = reststock.intraday.quote(symbol=clean_symbol)
             is_dict = isinstance(quote_data, dict)
             price = quote_data.get('closePrice') or quote_data.get('lastPrice') if is_dict else getattr(quote_data, 'closePrice', getattr(quote_data, 'lastPrice', None))
-            if price and price > 0: return f"{round(float(price), 2)} (來源: Fubon)"
+            if price and price > 0: 
+                # 順便抓一下名字，讓回報更有感
+                name = getattr(quote_data, 'name', '台股')
+                return f"{name} {clean_symbol} 現價: {round(float(price), 2)} (來源: Fubon)"
         except: pass
 
     if not is_taiwan_stock and FMP_KEY and is_us_market_open():
@@ -73,6 +102,17 @@ def get_us_realtime_insight(symbol: str) -> str:
         bid, ask = info.get('bid', 0), info.get('ask', 0)
         ba_ratio = (info.get('bidSize', 1) / info.get('askSize', 1)) if info.get('askSize', 0) > 0 else 1
         
+        # 🎭 Put/Call Ratio 計算 (整合自 test_yf.py)
+        pc_report = "N/A"
+        try:
+            if ticker.options:
+                opt = ticker.option_chain(ticker.options[0])
+                calls_vol = opt.calls['volume'].sum()
+                puts_vol = opt.puts['volume'].sum()
+                pc_ratio = puts_vol / calls_vol if calls_vol > 0 else 0
+                pc_report = f"{pc_ratio:.2f}"
+        except: pass
+
         # 成交量密集區 (POC)
         day_min, day_max = full_df['Low'].min(), full_df['High'].max()
         bins = np.linspace(day_min, day_max, 11)
@@ -82,9 +122,28 @@ def get_us_realtime_insight(symbol: str) -> str:
         poc_price = (poc_bin.left + poc_bin.right) / 2
         vp_status = "🛡️ 支撐" if df['Close'].iloc[-1] > poc_price else "🧱 壓力"
 
+        # 📊 成交量爆發力 (Volume Ratio) - 修正時間加權 Bug
+        vol_ratio_report = "N/A"
+        try:
+            avg_vol = info.get('averageVolume')
+            curr_vol = info.get('regularMarketVolume')
+            if avg_vol and curr_vol and avg_vol > 0:
+                # 計算美股開盤至今經過的比例 (美東 09:30 ~ 16:00, 共 6.5 小時)
+                import pytz
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.datetime.now(est)
+                open_time = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
+                
+                # 計算已開盤分鐘數 (最多 390 分鐘)
+                elapsed_mins = max(1, min(390, (now_est - open_time).total_seconds() / 60))
+                expected_vol_at_now = (avg_vol / 390) * elapsed_mins
+                vol_ratio = curr_vol / expected_vol_at_now
+                vol_ratio_report = f"{vol_ratio:.2f}x"
+        except: pass
+
         report = f"🚀 === {symbol} 美股即時戰情 ===\n"
-        report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f}\n"
-        report += f"● POC 密集區: {poc_price:.2f} ({vp_status})\n"
+        report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f} | P/C Ratio: {pc_report}\n"
+        report += f"● 成交量能比: {vol_ratio_report} | POC 密集區: {poc_price:.2f} ({vp_status})\n"
         report += "【📊 最近 5 根 K 線】\n"
         for _, row in df.tail(5).iterrows():
             report += f"  [{row.name.strftime('%H:%M')}] {'🔴' if row['Close']>row['Open'] else '🟢'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"

@@ -20,3 +20,4 @@ log/
 debug_*.py
 test*.py
 fubon_textbook
+readme.md

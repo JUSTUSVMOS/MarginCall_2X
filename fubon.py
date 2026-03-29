@@ -157,6 +157,51 @@ def get_historical_stats(symbol: str) -> str:
     except Exception as e:
         return f"❌ 52週數據異常: {e}"
 
+# 👇 【TXO 期權戰術工具】抓取台指期權 (TXO) 戰報
+def get_txo_sentiment() -> str:
+    """
+    【台股核心】抓取台指期權 (TXO) 的 P/C Ratio 與大戶未平倉量。
+    這是判斷台股大盤「多空趨勢」最硬核的指標。
+    """
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return "⚠️ 富邦引擎未啟動，無法抓取 TXO 數據。"
+    
+    try:
+        # 使用 futopt client
+        restfut = fubon_sdk.marketdata.rest_client.futopt
+        
+        # 1. 抓取期交所熱門合約快照
+        res = restfut.snapshot.actives(market='TFE', trade='volume') 
+        data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
+        
+        if not data: return "📊 TXO 目前無交易數據。"
+        
+        calls_vol = 0
+        puts_vol = 0
+        report = "🔮 【TXO 台指期權戰報 - 市場情緒觀測】\n"
+        
+        # 遍歷熱門合約計算 P/C Ratio
+        for item in data:
+            sym = (item.get('symbol', '') if isinstance(item, dict) else getattr(item, 'symbol', '')).upper()
+            vol = item.get('volume', 0) if isinstance(item, dict) else getattr(item, 'volume', 0)
+            
+            # 判斷是否為台指選 (TXO)
+            if 'TXO' in sym:
+                # 富邦 SDK 合約代號通常包含 C 或 P
+                if 'C' in sym: calls_vol += vol
+                elif 'P' in sym: puts_vol += vol
+
+        pc_ratio = (puts_vol / calls_vol) if calls_vol > 0 else 0
+        pc_label = "🔴 極度看空" if pc_ratio > 1.2 else "🟡 避險轉強" if pc_ratio > 1.0 else "🟢 多頭佔優" if pc_ratio < 0.8 else "⚖️ 中性偏多"
+        
+        report += f"  ● 今日熱門合約 P/C Ratio: {pc_ratio:.2f} ({pc_label})\n"
+        report += f"  ● Call 總量: {calls_vol} | Put 總量: {puts_vol}\n"
+        report += "\n💡 戰略提示：若 P/C Ratio 持續拉升，代表台股大盤壓力沉重，留意台積電是否同步走軟。"
+        
+        return report
+    except Exception as e:
+        return f"❌ TXO 數據抓取失敗: {e} (請確認帳號具備期貨權限)"
+
 # 把舊的 get_quote_and_orderbook 增強，加入更多總量資訊
 def get_quote_and_orderbook(symbol: str) -> str:
 
