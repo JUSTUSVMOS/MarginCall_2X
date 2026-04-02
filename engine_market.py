@@ -9,21 +9,25 @@ import fubon  # 引用現有的 fubon.py
 
 FMP_KEY = os.getenv("FMP_API_KEY")
 
+import pytz
+
 def is_tw_market_open() -> bool:
-    now = datetime.datetime.now()
+    tw_tz = pytz.timezone('Asia/Taipei')
+    now = datetime.datetime.now(tw_tz)
+    # 台股交易時間: 周一至周五 09:00 - 13:30
     if now.weekday() >= 5: return False
-    if 9 <= now.hour < 13: return True
-    if now.hour == 13 and now.minute <= 30: return True
-    return False
+    start = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=13, minute=30, second=0, microsecond=0)
+    return start <= now <= end
 
 def is_us_market_open() -> bool:
-    now = datetime.datetime.now()
-    weekday = now.weekday()
-    if weekday == 5 and now.hour >= 5: return False
-    if weekday == 6: return False
-    if weekday == 0 and now.hour < 21: return False
-    if now.hour >= 21 or now.hour < 5: return True
-    return False
+    us_tz = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(us_tz)
+    # 美股交易時間: 周一至周五 09:30 - 16:00 (美東時間)
+    if now.weekday() >= 5: return False
+    start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    end = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return start <= now <= end
 
 def resolve_symbol_identity(symbol: str) -> str:
     """

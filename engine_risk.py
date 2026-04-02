@@ -5,23 +5,77 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import threading
 from scipy import stats
 from datetime import datetime, timedelta
 
 DB_FILE = "portfolio.db"
+db_lock = threading.Lock() # 【V4 加固】資料庫互斥鎖
 
 def init_market_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS market_history (
-            date TEXT PRIMARY KEY,
-            SPX REAL, VIX REAL, DXY REAL, TNX REAL, GOLD REAL, SKEW REAL,
-            dix REAL, gex REAL
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        # 【V5 終極加固】WAL 模式啟動指令
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS market_history (
+                date TEXT PRIMARY KEY,
+                SPX REAL, VIX REAL, DXY REAL, TNX REAL, GOLD REAL, SKEW REAL,
+                dix REAL, gex REAL
+            )
+        """)
+        # 新增 V 轉狀態追蹤表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS v_turn_state (
+                id INTEGER PRIMARY KEY,
+                is_confirmed INTEGER,
+                day1_date TEXT,
+                day1_price REAL,
+                ftd_date TEXT,
+                last_check_date TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+def get_v_turn_state():
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        try:
+            df = pd.read_sql("SELECT * FROM v_turn_state WHERE id = 1", conn)
+            return df.iloc[0] if not df.empty else None
+        except: return None
+        finally: conn.close()
+
+def save_v_turn_state(is_confirmed, day1_date, day1_price, ftd_date):
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO v_turn_state (id, is_confirmed, day1_date, day1_price, ftd_date, last_check_date)
+                VALUES (1, ?, ?, ?, ?, ?)
+            """, (is_confirmed, day1_date, day1_price, ftd_date, datetime.now().strftime('%Y-%m-%d')))
+            conn.commit()
+        finally: conn.close()
+
+def calculate_buying_pressure(df, window=5):
+    """
+    【V5 強化】計算 K 線的淨買盤壓力 (CVD 邏輯替代 $TICK)
+    """
+    if df is None or df.empty or len(df) < window:
+        return 0.0
+    epsilon = 1e-8 
+    # 計算買盤強度權重 (留長下影線權重高，留長上影線權重低)
+    weight = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + epsilon)
+    buy_vol = df['Volume'] * weight
+    sell_vol = df['Volume'] - buy_vol
+    net_vol = buy_vol - sell_vol
+    recent_net_vol = net_vol.tail(window).sum()
+    recent_total_vol = df['Volume'].tail(window).sum()
+    if recent_total_vol == 0: return 0.0
+    return recent_net_vol / recent_total_vol
 
 def update_market_db():
     init_market_db()
@@ -221,3 +275,113 @@ def get_global_risk_radar() -> str:
         _risk_cache["timestamp"] = current_time
         return msg
     except Exception as e: return f"❌ 雷達異常: {e}"
+
+def get_v_turn_confirmation() -> str:
+    """
+    【終極 V 轉確認模組 V5 - 事務安全與 CVD 強化版】
+    """
+    # 【V5 核心】Transaction 安全鎖，包圍整個 Read-Modify-Write 流程
+    with db_lock:
+        try:
+            init_market_db()
+            # 1. 【極速優化】使用 yf.download 批量下載歷史數據，減少連線開銷
+            symbols = ["SPLG", "RSP", "HYG", "LQD", "CL=F"]
+            hist_data = yf.download(symbols, period="30d", group_by='ticker', progress=False)
+            
+            # 分配數據
+            splg = hist_data['SPLG'].dropna()
+            rsp = hist_data['RSP'].dropna()
+            hyg = hist_data['HYG'].dropna()
+            lqd = hist_data['LQD'].dropna()
+            oil = hist_data['CL=F'].dropna()
+            
+            # 2. 抓取盤中即時指標 (15m/5m)
+            vix_df = yf.Ticker("^VIX").history(period="2d", interval="15m")
+            vix3m_df = yf.Ticker("^VIX3M").history(period="2d", interval="15m")
+            vvix_df = yf.Ticker("^VVIX").history(period="2d", interval="15m")
+            spy_5m = yf.Ticker("SPY").history(period="1d", interval="5m")
+
+            if splg.empty or rsp.empty:
+                return "❌ yfinance 數據下載失敗，請檢查網路連線。"
+
+            # --- 模組一：狀態恢復與 FTD 判定 (Transaction 保護中) ---
+            conn = sqlite3.connect(DB_FILE)
+            # 在同一連線內處理事務
+            cursor = conn.cursor()
+            state_df = pd.read_sql("SELECT * FROM v_turn_state WHERE id = 1", conn)
+            state = state_df.iloc[0] if not state_df.empty else None
+            
+            window = splg.tail(25)
+            current_low_idx = window['Close'].idxmin()
+            current_low_price = float(window.loc[current_low_idx, 'Close'])
+            current_low_date = current_low_idx.strftime('%Y-%m-%d')
+            
+            # 判斷重置或繼承
+            if state is None or current_low_price < float(state['day1_price']):
+                is_confirmed, day1_date, day1_price, ftd_date = 0, current_low_date, current_low_price, ""
+            else:
+                is_confirmed, day1_date, day1_price, ftd_date = int(state['is_confirmed']), state['day1_date'], float(state['day1_price']), state['ftd_date']
+
+            rally_period = splg.loc[day1_date:]
+            day_count = len(rally_period)
+            today_ftd = False
+            if 4 <= day_count <= 20 and is_confirmed == 0:
+                today_price, prev_price = rally_period['Close'].iloc[-1], rally_period['Close'].iloc[-2]
+                today_vol, prev_vol = rally_period['Volume'].iloc[-1], rally_period['Volume'].iloc[-2]
+                if (today_price - prev_price)/prev_price >= 0.015 and today_vol > prev_vol:
+                    today_ftd, is_confirmed, ftd_date = True, 1, datetime.now().strftime('%Y-%m-%d')
+            
+            # 立即更新狀態 (尚未關閉連線)
+            cursor.execute("""
+                INSERT OR REPLACE INTO v_turn_state (id, is_confirmed, day1_date, day1_price, ftd_date, last_check_date)
+                VALUES (1, ?, ?, ?, ?, ?)
+            """, (is_confirmed, day1_date, day1_price, ftd_date, datetime.now().strftime('%Y-%m-%d')))
+            conn.commit()
+            conn.close()
+
+            # --- 模組二：護法判定 (CVD 升級) ---
+            rsp_ret = (rsp['Close'].iloc[-1] - rsp['Close'].iloc[-2]) / rsp['Close'].iloc[-2]
+            splg_ret = (splg['Close'].iloc[-1] - splg['Close'].iloc[-2]) / splg['Close'].iloc[-2]
+            breadth_safe = (rsp_ret >= splg_ret * 0.8)
+            
+            vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
+            vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else yf.Ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
+            vix_term = vix_p / vix3m_p
+            vix_term_safe = (vix_term < 1.0)
+            
+            # 【V5 CVD 淨買盤壓力判定】
+            bp_ratio = calculate_buying_pressure(spy_5m, window=5)
+            tick_safe = (bp_ratio > 0.15) 
+            tick_emoji = '🔥' if bp_ratio > 0.3 else '🟢' if tick_safe else '⚪'
+            tick_msg = f"{bp_ratio:+.1%}"
+
+            vvix_val = vvix_df['Close'].iloc[-1] if not vvix_df.empty else yf.Ticker("^VVIX").history(period="5d")['Close'].iloc[-1]
+            vvix_safe = (vvix_val < 110)
+            credit_ratio = (hyg['Close'] / lqd['Close']).iloc[-1]
+            credit_ma = (hyg['Close'] / lqd['Close']).rolling(20).mean().iloc[-1]
+            credit_safe = (credit_ratio > credit_ma)
+            ma20 = splg['Close'].rolling(20).mean().iloc[-1]
+            ma20_safe = (splg['Close'].iloc[-1] > ma20)
+
+            all_macro_safe = (vix_term_safe and vvix_safe and credit_safe and breadth_safe)
+            
+            # --- 報告輸出 ---
+            status_txt = "🛡️ 偵測底盤中" if is_confirmed == 0 else "🚀 強勢反彈中"
+            report = f"📊 *【MarginCall_2X V 轉戰報 V5】*\n當前狀態：{status_txt}\n"
+            report += f"- Day 1 低點：{day1_price:.2f} ({day1_date})\n"
+            report += f"- 目前進度：Day {day_count}\n"
+            if is_confirmed: report += f"- ✅ FTD 點火日：{ftd_date}\n"
+            
+            report += f"\n🌡️ *核心護法狀態 (CVD 強化)：*\n"
+            report += f"- VIX 期限結構: {vix_term:.2f} {'🟢' if vix_term_safe else '🔴'}\n"
+            report += f"- VVIX 恐慌速率: {vvix_val:.1f} {'🟢' if vvix_safe else '🔴'}\n"
+            report += f"- 信用市場(HYG/LQD): {'🟢' if credit_safe else '🔴'}\n"
+            report += f"- 買盤推力(CVD): {tick_msg} {tick_emoji}\n"
+            report += f"- MA20 技術位階: {'🟢' if ma20_safe else '🔴'}\n"
+            
+            if is_confirmed and all_macro_safe and ma20_safe:
+                report += "\n🏁 *【最終判定：發射訊號！】*\n👉 機構確認進場，CVD 買盤力道強勁。建議分批建倉。"
+            else:
+                report += "\n🏁 *【最終判定：維持現狀】*\n👉 市場尚未出現轉強信號或條件未齊。"
+            return report
+        except Exception as e: return f"❌ V 轉監測失敗: {e}"

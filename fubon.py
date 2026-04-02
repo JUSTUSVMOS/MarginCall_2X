@@ -78,7 +78,69 @@ def init_fubon():
     except Exception as e:
         print(f"⚠️ 富邦 SDK 初始化異常 (可能伺服器維護中): {e}")
         fubon_ready = False
-        fubon_sdk = None # 確保失敗時維持 None
+        fubon_sdk = None
+def get_fubon_inventories():
+    """【深度掃描】獲取富邦實體帳戶庫存與成本字典 {symbol: {'shares': qty, 'cost': price}}"""
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return {}
+    try:
+        my_id = os.getenv("FUBON_ID")
+        api_key = os.getenv("FUBON_API_KEY")
+        cert_pwd = os.getenv("FUBON_CERT_PWD")
+        cert_path = "./R124949189.pfx"
+
+        login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
+        if not login_res.is_success or not login_res.data:
+            return {}
+
+        acc = login_res.data[0]
+        inventory_map = {}
+
+        # 1. 從 inventories 抓取基礎庫存
+        inv_res = fubon_sdk.accounting.inventories(acc)
+        if inv_res.is_success:
+            for item in inv_res.data:
+                if item.today_qty > 0:
+                    inventory_map[item.stock_no] = {'shares': item.today_qty, 'cost': 0.0}
+
+        # 2. 從未實現損益補完數據 (包含 FMP 抓不到的成本資訊)
+        unreal_res = fubon_sdk.accounting.unrealized_gains_and_loses(acc)
+        if unreal_res.is_success:
+            for item in unreal_res.data:
+                s = item.stock_no
+                qty = getattr(item, 'today_qty', 0)
+                # 嘗試多種可能的成本欄位名稱
+                cost = getattr(item, 'buy_price', getattr(item, 'price_avg', 0.0))
+
+                if s in inventory_map:
+                    inventory_map[s]['cost'] = cost
+                elif qty > 0:
+                    inventory_map[s] = {'shares': qty, 'cost': cost}
+
+        return inventory_map
+    except:
+        return {}
+
+
+def get_fubon_bank_remain():
+    """獲取富邦銀行可用餘額 (TWD)"""
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return None
+    try:
+        my_id = os.getenv("FUBON_ID")
+        api_key = os.getenv("FUBON_API_KEY")
+        cert_pwd = os.getenv("FUBON_CERT_PWD")
+        cert_path = "./R124949189.pfx"
+        login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
+        if login_res.is_success and login_res.data:
+            acc = login_res.data[0]
+            res = fubon_sdk.accounting.bank_remain(acc)
+            if res.is_success:
+                # 確保回傳整數
+                return int(res.data.available_balance)
+        return None
+    except:
+        return None
 
 # 👇 給 AI 用的 Tool 函數
 # 👇 【深層戰術工具】抓取成交明細 (Intraday Trades)

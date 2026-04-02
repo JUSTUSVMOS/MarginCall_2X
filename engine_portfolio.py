@@ -198,53 +198,137 @@ def get_symbol_name(symbol: str) -> str:
     _AUTO_NAME_CACHE[symbol] = name
     return name
 
+import fubon
+
 def get_portfolio_raw_data() -> str:
+    """獲取倉位原始數據，並與富邦實體帳戶自動同步 (庫存 + 成本 + 銀行餘額)"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    
+    # 1. 取得富邦實體數據 (包含股數與買進成本)
+    fubon_inv = fubon.get_fubon_inventories()
+    fubon_cash = fubon.get_fubon_bank_remain()
+    
     try:
+        # 2. 取得資料庫目前的倉位
         cursor.execute("SELECT symbol, cost, shares, twd_cost, locked FROM portfolio")
-        rows = cursor.fetchall()
+        db_rows = cursor.fetchall()
+        db_dict = {r[0]: list(r) for r in db_rows}
+
+        # 3. 智能合併與清洗
+        # A. 遍歷富邦抓到的標的，更新或新增
+        for symbol, data in fubon_inv.items():
+            fb_shares = data['shares']
+            fb_cost = data['cost']
+            
+            if symbol in db_dict:
+                # 已有紀錄，更新股數。只有當 db 成本為 0 時才更新成本。
+                update_needed = False
+                if db_dict[symbol][2] != fb_shares:
+                    db_dict[symbol][2] = fb_shares
+                    update_needed = True
+                if db_dict[symbol][1] == 0.0 and fb_cost > 0:
+                    db_dict[symbol][1] = fb_cost
+                    update_needed = True
+                
+                if update_needed:
+                    cursor.execute("UPDATE portfolio SET shares = ?, cost = ? WHERE symbol = ?", (fb_shares, db_dict[symbol][1], symbol))
+            else:
+                # 資料庫沒記錄，自動新增
+                cursor.execute("INSERT INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)", (symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0))
+                db_dict[symbol] = [symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0]
+
+        # B. 【清洗邏輯】如果資料庫中的台股標的不在富邦清單內，且未被鎖定，則刪除
+        fb_symbols = set(fubon_inv.keys())
+        to_delete = []
+        for sym in db_dict.keys():
+            # 判斷是否為台股 (非 CASH, 非海外股)
+            is_taiwan = (any(char.isdigit() for char in sym) and len(sym) <= 6)
+            is_locked = db_dict[sym][4] == 1
+            
+            if is_taiwan and sym not in fb_symbols and not is_locked:
+                to_delete.append(sym)
+        
+        for sym in to_delete:
+            cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (sym,))
+            del db_dict[sym]
+            print(f"🧹 已自動清理幽靈庫存: {sym}")
+
+        # C. 自動同步台幣現金
+        if fubon_cash is not None:
+            cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = ? WHERE symbol = 'CASH_TWD'", (float(fubon_cash), float(fubon_cash)))
+            if 'CASH_TWD' in db_dict:
+                db_dict['CASH_TWD'][2] = float(fubon_cash)
+                db_dict['CASH_TWD'][3] = float(fubon_cash)
+        
+        conn.commit()
+
+        # 4. 組裝回傳資料
         records = []
-        for r in rows:
-            sym = r[0]
+        for sym, data in db_dict.items():
+            # 【V5.4 強化】精準市場分類邏輯
+            if sym.startswith('CASH'):
+                market_type = "CASH"
+            elif sym.endswith('.L') or sym.endswith('.IL'):
+                market_type = "UK"
+            elif (sym.replace('.TW','').replace('.TWO','').replace('_TRUST','').replace('_ESOP','').isdigit()) or \
+                 (any(c.isdigit() for c in sym[:4]) and len(sym.split('.')[0]) <= 6):
+                # 規則：純數字、或前四碼含數字且長度<=6 (涵蓋 00981A, 2330.TW 等)
+                market_type = "TW"
+            else:
+                market_type = "US"
+
             records.append({
                 "symbol": sym,
                 "name": get_symbol_name(sym),
-                "cost": r[1],
-                "shares": r[2],
-                "twd_cost": r[3],
-                "locked": bool(r[4])
+                "cost": data[1],
+                "shares": data[2],
+                "twd_cost": data[3],
+                "locked": bool(data[4]),
+                "market": market_type
             })
         return json.dumps(records)
-    except:
+    except Exception as e:
+        print(f"❌ 帳務同步異常: {e}")
         return "[]"
     finally:
         conn.close()
 
 def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
-    raw_fx = get_exchange_rate() if (is_us_stock or symbol == 'CASH_USD') else 1.0
-    settle_fx = raw_fx * 0.998 if (is_us_stock or symbol == 'CASH_USD') else 1.0
+    """
+    【V5.3 徹底修正】計算標的損益。
+    確保公式: 現值 = 現價 * 股數 * 匯率 (扣匯損)
+    """
+    # 識別市場
+    is_uk_stock = symbol.endswith('.L') or symbol.endswith('.IL')
+    is_foreign = is_us_stock or is_uk_stock or symbol == 'CASH_USD'
+    
+    # 取得匯率
+    raw_fx = get_exchange_rate() if is_foreign else 1.0
+    # 海外資產換回台幣需扣除約 0.2% 換匯手續費與價差
+    settle_fx = raw_fx * 0.998 if is_foreign else 1.0
 
+    # 特殊處理：現金池
     if symbol == 'CASH_TWD':
         return {"market_value_twd": round(shares, 2), "pnl_value_twd": 0, "pnl_percent": 0}
-    
-    current_market_value_twd = (shares * settle_fx) if 'CASH' in symbol else (current_price * shares * settle_fx)
-    pnl_value_twd = current_market_value_twd - historical_twd_cost
-    pnl_percent = (pnl_value_twd / historical_twd_cost * 100) if historical_twd_cost > 0 else 0
-    
-    # --- 定期定額/信託模式 (DCA Mode) ---
-    if '_TRUST' in symbol or '_ESOP' in symbol:
-        return {
-            "market_value_twd": round(current_market_value_twd, 2),
-            "pnl_value_twd": round(pnl_value_twd, 2),
-            "pnl_percent": round(pnl_percent, 2),
-            "is_trust": True,
-            "strategy": "DCA",
-            "note": "員工定期定額 (自提 9000 追蹤)"
-        }
+    if symbol == 'CASH_USD':
+        cur_val = shares * settle_fx
+        pnl = cur_val - historical_twd_cost
+        return {"market_value_twd": round(cur_val, 2), "pnl_value_twd": round(pnl, 2), "pnl_percent": 0}
 
+    # 【核心計算】
+    current_market_value_twd = current_price * shares * settle_fx
+    pnl_value_twd = current_market_value_twd - historical_twd_cost
+    
+    # 百分比防呆：若成本為 0，避免除以零或噴出天文數字
+    if historical_twd_cost > 0:
+        pnl_percent = (pnl_value_twd / historical_twd_cost) * 100
+    else:
+        pnl_percent = 0.0
+    
     return {
         "market_value_twd": round(current_market_value_twd, 2),
         "pnl_value_twd": round(pnl_value_twd, 2),
-        "pnl_percent": round(pnl_percent, 2)
+        "pnl_percent": round(pnl_percent, 2),
+        "market": "UK" if is_uk_stock else "US" if is_us_stock else "TW"
     }
