@@ -6,8 +6,129 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import fubon  # 引用現有的 fubon.py
+import sqlite3
+from google import genai
+from google.genai import types
+
+import logging
+
+# 引入共用鎖與連線
+from engine_risk import db_lock, get_db_connection
+
+# 設定基礎日誌
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 FMP_KEY = os.getenv("FMP_API_KEY")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+
+# 初始化 Gemini 客戶端 (用於 Stage 2)
+genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+
+def get_asset_profile(symbol: str) -> dict:
+    """
+    【核心】資產分類器：Stage 1 (規則) + Stage 2 (LLM Fallback)
+    """
+    symbol = symbol.upper()
+    
+    # 1. 檢查 SQLite 快取
+    with db_lock:
+        conn = get_db_connection()
+        try:
+            df = pd.read_sql("SELECT * FROM asset_profile_cache WHERE symbol = ?", conn, params=(symbol,))
+            if not df.empty:
+                logger.info(f"Cache Hit: {symbol}")
+                return df.iloc[0].to_dict()
+        except Exception as e:
+            logger.error(f"Cache check failed: {e}")
+        finally: conn.close()
+
+    logger.info(f"Cache Miss: {symbol}, starting classifier...")
+    
+    # Hard-coded Overrides
+    overrides = {
+        'BRK-B': 'Value_Holding',
+        'IAUM': 'Macro_Hedge',
+        'MLPS.L': 'Macro_Hedge'
+    }
+    
+    asset_type = "Unknown"
+    sector = "Unknown"
+    industry = "Unknown"
+    risk_score = 1.0 # 預設
+
+    # Stage 1: Rule-based (YF Info)
+    if symbol in overrides:
+        asset_type = overrides[symbol]
+        try:
+            info = yf.Ticker(symbol).info
+            sector = info.get('sector', 'Unknown')
+            industry = info.get('industry', 'Unknown')
+        except: pass
+    else:
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            sector = info.get('sector', 'Unknown')
+            industry = info.get('industry', 'Unknown')
+            
+            if sector in ['Technology', 'Communication Services']:
+                asset_type = 'Tech_Momentum'
+            elif sector in ['Energy', 'Utilities'] or 'Oil' in industry or 'Gas' in industry:
+                asset_type = 'Macro_Hedge'
+            elif sector == 'Financial Services':
+                market_cap = info.get('marketCap', 0)
+                if market_cap > 100_000_000_000: # 100B
+                    asset_type = 'Value_Holding'
+            elif any(kw in (sector + industry) for kw in ['Gold', 'Metal', 'Commodity']):
+                asset_type = 'Macro_Hedge'
+        except Exception as e:
+            logger.warning(f"Stage 1 fetching failed for {symbol}: {e}")
+
+    # Stage 2: LLM Fallback
+    if asset_type == "Unknown" and genai_client:
+        logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
+        try:
+            prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。僅回傳分類名稱。"
+            response = genai_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
+            llm_type = response.text.strip()
+            if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
+                asset_type = llm_type
+        except Exception as e:
+            logger.error(f"Stage 2 LLM classification failed: {e}")
+
+    # 3. 持久化到 SQLite
+    with db_lock:
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO asset_profile_cache (symbol, asset_type, sector, industry, risk_score, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (symbol, asset_type, sector, industry, risk_score, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            conn.commit()
+            logger.info(f"Cached {symbol} as {asset_type}")
+        except Exception as e:
+            logger.error(f"Failed to cache {symbol}: {e}")
+        finally: conn.close()
+
+    return {
+        "symbol": symbol,
+        "asset_type": asset_type,
+        "sector": sector,
+        "industry": industry,
+        "risk_score": risk_score
+    }
 
 import pytz
 
@@ -43,7 +164,8 @@ def resolve_symbol_identity(symbol: str) -> str:
             stats = fubon.get_historical_stats(symbol)
             if "未知" not in stats and "異常" not in stats:
                 return stats
-        except: pass
+        except Exception as e:
+            logger.debug(f"Fubon historical stats error for {symbol}: {e}")
         
     try:
         s = f"{symbol}.TW" if is_taiwan and not symbol.endswith('.TW') else symbol
@@ -51,7 +173,8 @@ def resolve_symbol_identity(symbol: str) -> str:
         info = ticker.info
         name = info.get('longName') or info.get('shortName') or "未知標的"
         return f"🔍 識別結果: {symbol} ({name}) | 類型: {info.get('quoteType', '未知')}"
-    except:
+    except Exception as e:
+        logger.error(f"Failed to resolve symbol identity for {symbol}: {e}")
         return f"❌ 無法識別標的: {symbol}，請確認代號是否正確。"
 
 def get_live_price(symbol: str) -> str:
@@ -72,7 +195,8 @@ def get_live_price(symbol: str) -> str:
                 # 順便抓一下名字，讓回報更有感
                 name = getattr(quote_data, 'name', '台股')
                 return f"{name} {clean_symbol} 現價: {round(float(price), 2)} (來源: Fubon)"
-        except: pass
+        except Exception as e:
+            logger.warning(f"Fubon real-time price fetch failed for {clean_symbol}: {e}")
 
     if not is_taiwan_stock and FMP_KEY and is_us_market_open():
         try:
@@ -80,7 +204,8 @@ def get_live_price(symbol: str) -> str:
             res = requests.get(url, timeout=5).json()
             if isinstance(res, list) and len(res) > 0:
                 return f"{round(float(res[0]['price']), 2)} (來源: FMP)"
-        except: pass
+        except Exception as e:
+            logger.warning(f"FMP real-time price fetch failed for {symbol}: {e}")
 
     search_list = [symbol, f"{symbol}.TW", f"{symbol}.TWO"] if is_taiwan_stock else [symbol]
     for s in search_list:
@@ -92,7 +217,9 @@ def get_live_price(symbol: str) -> str:
                 hist = ticker.history(period="1d")
                 if not hist.empty: price = hist['Close'].iloc[-1]
             if price and price > 0: return f"{round(float(price), 2)} (來源: YF)"
-        except: continue
+        except Exception as e:
+            logger.debug(f"YFinance fetch failed for {s}: {e}")
+            continue
     return "無法取得報價"
 
 def get_us_realtime_insight(symbol: str) -> str:
@@ -115,7 +242,8 @@ def get_us_realtime_insight(symbol: str) -> str:
                 puts_vol = opt.puts['volume'].sum()
                 pc_ratio = puts_vol / calls_vol if calls_vol > 0 else 0
                 pc_report = f"{pc_ratio:.2f}"
-        except: pass
+        except Exception as e:
+            logger.warning(f"Put/Call ratio calculation failed for {symbol}: {e}")
 
         # 成交量密集區 (POC)
         day_min, day_max = full_df['Low'].min(), full_df['High'].max()
@@ -174,7 +302,8 @@ def get_market_sentiment() -> str:
                 # 針對 TSM 與 台指期 增加戰術標記
                 emoji = '🚀' if change > 1.5 else '📈' if change > 0 else '📉' if change > -1.5 else '💀'
                 report += f"{emoji} {name}: {curr:.2f} ({change:+.2f}%)\n"
-        except: pass
+        except Exception as e:
+            logger.debug(f"Market sentiment fetch failed for {symbol}: {e}")
     return report
 
 def get_stock_news(symbol: str) -> str:
@@ -282,4 +411,6 @@ def get_market_history(symbol: str, days: int) -> str:
         for date, row in hist.iterrows():
             report += f"[{date.strftime('%m/%d')}] 收:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
         return report
-    except: return "歷史數據獲取失敗。"
+    except Exception as e:
+        logger.error(f"Market history fetch failed for {symbol}: {e}")
+        return "歷史數據獲取失敗。"

@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 # 初始化 Bot 用於緊急警報
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-MY_USER_ID = int(os.getenv("TELEGRAM_USER_ID"))
+
+def get_my_user_id():
+    val = os.getenv("TELEGRAM_USER_ID")
+    return int(val) if val else 0
+
 bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
 genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
@@ -62,7 +66,7 @@ def fetch_strat_data(symbol: str) -> dict:
             # 【重要】硬體中斷：CVD < -0.9 立即警報
             if cvd < -0.9 and bot:
                 alert_msg = f"🚨 【硬體中斷】偵測到 {symbol} 恐慌性拋售！\n當前 CVD: {cvd:.4f}\n請立即檢查盤勢！"
-                bot.send_message(MY_USER_ID, alert_msg)
+                bot.send_message(get_my_user_id(), alert_msg)
                 logger.warning(f"CVD Alert triggered for {symbol}: {cvd}")
 
             # 抓取技術面 (RSI, MACD 等)

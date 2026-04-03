@@ -3,12 +3,18 @@ import sys
 import random
 import time
 import telebot
+from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import pytz
+
+# --- .env 檔案的絕對路徑，確保 systemd 正確載入 ---
+script_dir = Path(__file__).resolve().parent
+dotenv_path = script_dir / '.env'
+load_dotenv(dotenv_path=dotenv_path)
 
 # 修正 Windows Unicode 問題
 if hasattr(sys.stdout, 'reconfigure'):
@@ -21,8 +27,6 @@ import engine_portfolio as portfolio
 import engine_market as market
 import engine_risk as risk
 import engine_router as router
-
-load_dotenv()
 
 # --- 初始化區 ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
