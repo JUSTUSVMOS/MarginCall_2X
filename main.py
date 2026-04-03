@@ -20,16 +20,19 @@ from config import WDT_MESSAGES, system_prompt
 import engine_portfolio as portfolio
 import engine_market as market
 import engine_risk as risk
+import engine_router as router
 
 load_dotenv()
 
 # --- 初始化區 ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-MY_USER_ID = 8688853243  # 【防禦力場】授權使用者 ID
+MY_USER_ID = os.getenv("TELEGRAM_USER_ID")  # 【防禦力場】授權使用者 ID
 
-if not BOT_TOKEN or not GEMINI_KEY:
-    raise ValueError("❌ .env 缺少必要 API KEY")
+if not BOT_TOKEN or not GEMINI_KEY or not MY_USER_ID:
+    raise ValueError("❌ .env 缺少必要 API KEY 或 TELEGRAM_USER_ID")
+
+MY_USER_ID = int(MY_USER_ID)
 
 fubon.init_fubon()
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -111,7 +114,10 @@ def handle_all_text(message):
     us_status = "🟢 開盤中" if market.is_us_market_open() else "🔴 已收盤/休市"
     
     time_context = f"\n【🕒 當前時間環境】\n- 台北時間: {now_tw} ({tw_status})\n- 美東時間: {now_us} ({us_status})\n"
-    dynamic_prompt = system_prompt + time_context
+    
+    # --- 策略路由：主動抓取標的數據 ---
+    strat_context = router.get_strat_context(user_text)
+    dynamic_prompt = system_prompt + time_context + strat_context
     
     # 垃圾話表情
     mood = "bad_market" if any(w in user_text for w in ["損益", "賠", "慘"]) else "normal"
@@ -175,7 +181,7 @@ if __name__ == "__main__":
             # 但我們可以在這裡加一個「美股開盤檢查」
             if not market.is_us_market_open() and now_us.hour < 16:
                 # 如果不是在收盤前夕，也不是開盤中，則跳過
-                pass
+                return
 
             report = risk.get_v_turn_confirmation()
             
