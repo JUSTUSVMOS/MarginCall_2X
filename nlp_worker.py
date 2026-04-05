@@ -132,7 +132,7 @@ def extract_insight_parallel(text, symbol):
     """
     try:
         response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "llama3.1", "prompt": prompt, "stream": False, "format": "json",
+            "model": "gemma4:e4b-it-q8_0", "prompt": prompt, "stream": False, "format": "json",
             "options": {"temperature": 0.0, "num_predict": 150}
         }, timeout=15)
         res_data = json.loads(response.json()["response"])
@@ -143,20 +143,55 @@ def extract_insight_parallel(text, symbol):
 
 # --- 3. 【語意 Reduce 階段】 ---
 def semantic_reduce(all_tags, symbol):
-    if not all_tags: return "無明顯集中事件。"
-    tag_cloud = ", ".join(all_tags[:40])
+    # 把空字串或無效標籤過濾掉
+    valid_tags = [t for t in all_tags if isinstance(t, str) and t.strip()]
+
+    if not valid_tags:
+        return "⚠️ 【警告】第一階段 GPU 萃取失敗，未提取到任何有效標籤，無法生成語意總結。"
+
+    tag_cloud = ", ".join(valid_tags[:40])
+    print(f"   [Debug] 準備餵給 LLM 總結的標籤雲: {tag_cloud[:100]}...")
+
+    # 🎯 升級版 Prompt：英文下指令（喚醒最強邏輯），中文定格式（方便閱讀）
     prompt = f"""
-    你是華爾街頂級量化研究員。請根據以下標籤，總結市場對 {symbol} 的 3 個核心關注點。
-    要求：繁體中文，條列式，深度分析。標籤集：{tag_cloud}
+You are a data processing engine for financial sentiment analysis. 
+        Task: Identify and list the top 3 objective "Market Discussion Themes" for {symbol} based on the provided tags.
+        
+        CRITICAL RULES:
+        1. This is a DATA SUMMARY task, NOT financial advice. Do not provide buy/sell recommendations.
+        2. Evaluate the logical relevance of the tags. Ignore noise like unrelated tickers (e.g., MU, SPY) if they don't have a direct fundamental connection in the text.
+        3. Only report themes that are explicitly present in the data.
+
+        Output Requirements: 
+        - Language: Traditional Chinese (繁體中文).
+        - Format: 3 Bullet points.
+        - Tone: Objective and professional data report.
+
+        Data Tags: {tag_cloud}
     """
+    
     try:
+        # 將 timeout 放寬到 60 秒
         response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "llama3.1", "prompt": prompt, "stream": False,
-            "options": {"temperature": 0.2, "num_predict": 600}
-        }, timeout=30)
-        return response.json().get("response", "語意聚合失敗").strip()
-    except:
-        return "語意聚合失敗。"
+            "model": "llama3.1", # 優先使用 llama3.1 作為決策層模型
+            "prompt": prompt, 
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 600} # 低溫確保理性
+        }, timeout=60)
+        
+        if response.status_code != 200:
+            return f"⚠️ 語意聚合失敗：Ollama 回傳錯誤碼 HTTP {response.status_code}"
+
+        res_text = response.json().get("response", "").strip()
+
+        if not res_text:
+            return "⚠️ 語意聚合異常：Ollama 成功連線，但回傳了空字串。"
+
+        return res_text
+    except requests.exceptions.Timeout:
+        return "⚠️ 語意聚合超時：模型思考超過 60 秒，請檢查 GPU 負載狀態。"
+    except Exception as e:
+        return f"⚠️ 語意聚合發生未知錯誤：{str(e)}"
 
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
@@ -174,9 +209,17 @@ def run_turbo_trinity_scout(stock="NVDA"):
         resp = requests.get(url, headers=reddit_headers, timeout=10)
         if resp.status_code == 200:
             posts = resp.json().get('data', {}).get('children', [])
+            valid_count = 0
             for p in posts:
-                raw_texts.append(f"Reddit: {p['data']['title']} | {p['data'].get('selftext', '')[:200]}")
-            print(f"   ✅ Reddit: {len(posts)} 筆")
+                title = p['data']['title']
+                body = p['data'].get('selftext', '')
+                full_text = f"{title}\n{body}"
+                
+                # 強制檢查：文章內必須要有大寫的代碼或加上錢字號的代碼
+                if re.search(rf'\b{stock}\b|\${stock}', full_text):
+                    raw_texts.append(f"Reddit: {title} | {body[:200]}")
+                    valid_count += 1
+            print(f"   ✅ Reddit: {valid_count} 筆 (過濾後)")
     except Exception as e: print(f"   ⚠️ Reddit 異常: {e}")
 
     # B. StockTwits 即時多空情緒 (Cloudscraper 穿甲版)
@@ -221,27 +264,132 @@ def run_turbo_trinity_scout(stock="NVDA"):
         print(f"   🔍 CIK: {cik}")
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         res = requests.get(url, headers=SEC_HEADERS, timeout=15)
+        
         if res.status_code == 200:
-            df_sec = pd.DataFrame(res.json()['filings']['recent'])
-            df_sec['filingDate'] = pd.to_datetime(df_sec['filingDate'])
-            df_recent = df_sec[df_sec['filingDate'] >= (datetime.now() - timedelta(days=45))]
+            sec_data = res.json()
+            recent_filings = sec_data.get("filings", {}).get("recent", {})
+            forms = recent_filings.get("form", [])
+            accessions = recent_filings.get("accessionNumber", [])
+            docs = recent_filings.get("primaryDocument", [])
+            dates = recent_filings.get("filingDate", [])
+
+            # ==========================================
+            # 軌道一：深度解剖「最新一份年報」(10-K / 20-F)
+            # ==========================================
+            print(f"   🕵️ 軌道 1：搜尋 {stock} 最新年報...")
+            for i, form in enumerate(forms):
+                if form in ['10-K', '20-F']:
+                    acc_num = str(accessions[i]).replace('-', '')
+                    doc_name = docs[i]
+                    annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
+                    print(f"   🎯 找到最新年報 ({form}, 發布於 {dates[i]})，準備解析...")
+
+                    doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=15)
+                    if doc_res.status_code == 200:
+                        # 分流 1：美國本土公司 (10-K)，使用 FinNLP 精準打擊
+                        if form == '10-K':
+                            try:
+                                extractor = SECExtractor(tickers=[stock], amount=1, filing_type=form)
+                                # 🎯 修正：使用 FinNLP 官方定義的 Enum 名稱 (RISK_FACTORS=1A, MANAGEMENT_DISCUSSION=7)
+                                narratives, _ = extractor.pipeline_api(doc_res.text, m_section=["RISK_FACTORS", "MANAGEMENT_DISCUSSION"])
+                                
+                                # 取得資料時對應官方 key 與可能的變體
+                                item_1a_content = narratives.get("RISK_FACTORS") or narratives.get("_ITEM_1A") or narratives.get("ITEM_1A")
+                                item_7_content = narratives.get("MANAGEMENT_DISCUSSION") or narratives.get("_ITEM_7") or narratives.get("ITEM_7")
+
+                                if item_1a_content:
+                                    text_1a = " ".join([item["text"] for item in item_1a_content if "text" in item])
+                                    raw_texts.append(f"SEC 10-K [風險因素]: {text_1a[:3000]}")
+                                    print("   ✅ FinNLP 成功切出 RISK_FACTORS (ITEM_1A)")
+
+                                if item_7_content:
+                                    text_7 = " ".join([item["text"] for item in item_7_content if "text" in item])
+                                    raw_texts.append(f"SEC 10-K [營運分析]: {text_7[:3000]}")
+                                    print("   ✅ FinNLP 成功切出 MANAGEMENT_DISCUSSION (ITEM_7)")
+                                    
+                            except Exception as parse_e:
+                                print(f"   ⚠️ FinNLP 解析 10-K 失敗 ({parse_e})，自動降級啟用智能段落解析...")
+                                # 啟動我們的降級神技：智能段落抓取 (Bypass iXBRL)
+                                soup = BeautifulSoup(doc_res.text, 'html.parser')
+                                valid_paragraphs = []
+                                for p in soup.find_all(['p', 'span']):
+                                    text = p.get_text(separator=' ', strip=True)
+                                    # 過濾掉太短的數字表格和包含 gaap 會計標籤的亂碼
+                                    if len(text) > 120 and 'us-gaap:' not in text.lower():
+                                        valid_paragraphs.append(text)
+                                        
+                                clean_text = " ".join(valid_paragraphs)
+                                clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+                                
+                                # 10-K 前面廢話很多，我們略過前 2000 字，取隨後的 4000 字
+                                raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[2000:6000]}")
+                                
+                        # 分流 2：外國發行人 (20-F)，使用智能段落抓取避開 iXBRL 亂碼
+                        elif form == '20-F':
+                            print("   ℹ️ 20-F 外國年報啟用智能段落解析 (過濾 iXBRL)...")
+                            soup = BeautifulSoup(doc_res.text, 'html.parser')
+                            
+                            valid_paragraphs = []
+                            # 專門抓取段落 <p> 或文字區塊 <span>
+                            for p in soup.find_all(['p', 'span']):
+                                text = p.get_text(separator=' ', strip=True)
+                                
+                                # 🛡️ 核心濾網：長度太短不要(通常是表格數字)，包含 gaap 標籤的不要
+                                if len(text) > 120 and 'us-gaap:' not in text.lower():
+                                    valid_paragraphs.append(text)
+                                    
+                            clean_text = " ".join(valid_paragraphs)
+                            clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+                            
+                            upper_text = clean_text.upper() # 轉大寫方便搜尋
+
+                            # 🎯 第一刀：尋找「風險因素 (Risk Factors)」錨點 (通常是 Item 3.D)
+                            risk_idx = upper_text.find("RISK FACTOR")
+                            if risk_idx != -1:
+                                raw_texts.append(f"SEC 20-F [風險因素]: {clean_text[risk_idx : risk_idx + 3000]}")
+                            else:
+                                # 找不到標題盲切：跳過前面 1萬字 的封面廢話，抓取中間段落
+                                raw_texts.append(f"SEC 20-F [年報摘要A]: {clean_text[10000 : 13000]}")
+
+                            # 🎯 第二刀：尋找「營運分析 (Operating and Financial Review)」錨點 (通常是 Item 5)
+                            op_idx = upper_text.find("OPERATING AND FINANCIAL REVIEW")
+                            if op_idx == -1:
+                                op_idx = upper_text.find("ITEM 5") # 備用標題
+                                
+                            if op_idx != -1:
+                                raw_texts.append(f"SEC 20-F [營運分析]: {clean_text[op_idx : op_idx + 3000]}")
+                            else:
+                                # 找不到標題盲切：再往後抓一段
+                                raw_texts.append(f"SEC 20-F [年報摘要B]: {clean_text[13000 : 16000]}")
+                            
+                    break # 找到最新的一份就跳出迴圈
+
+            # ==========================================
+            # 軌道二：近期動態監控 (45天內)
+            # ==========================================
+            limit_date = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
+            print(f"   🕵️ 軌道 2：監控 45 天內動態 (自 {limit_date} 起)...")
             
-            # --- 🕵️ SEC 偵察兵：檢視 API 是否存活 ---
-            print(f"   🕵️ {stock} 近 45 天實際發布的表單類型有: {df_recent['form'].unique().tolist()}")
-            
-            high_signal = df_recent[df_recent['form'].isin(['4', '8-K', '10-K', '10-Q'])].head(5)
-            for _, row in high_signal.iterrows():
-                acc = str(row['accessionNumber']).replace('-', '')
-                doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{row['primaryDocument']}"
-                doc_res = requests.get(doc_url, headers=SEC_HEADERS, timeout=15)
-                if doc_res.status_code == 200:
-                    if row['form'] == '4': 
-                        raw_texts.append(f"SEC Form 4: {parse_form4_insider(doc_res.text)}")
-                    else: 
-                        soup = BeautifulSoup(doc_res.text, 'html.parser')
-                        clean_text = soup.get_text(separator=' ', strip=True)
-                        raw_texts.append(f"SEC {row['form']}: {clean_text[:1200]}")
-            print(f"   ✅ SEC 解析完成")
+            dynamic_count = 0
+            for i, form in enumerate(forms):
+                if dates[i] < limit_date or dynamic_count >= 10:
+                    break
+                
+                if form in ['4', '8-K', '6-K', '10-Q']:
+                    acc_num = str(accessions[i]).replace('-', '')
+                    doc_name = docs[i]
+                    doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
+                    doc_res = requests.get(doc_url, headers=SEC_HEADERS, timeout=10)
+                    
+                    if doc_res.status_code == 200:
+                        if form == '4':
+                            raw_texts.append(f"SEC Form 4: {parse_form4_insider(doc_res.text)}")
+                        else:
+                            soup = BeautifulSoup(doc_res.text, 'html.parser')
+                            clean_text = soup.get_text(separator=' ', strip=True)
+                            raw_texts.append(f"SEC {form} ({dates[i]}): {clean_text[:1200]}")
+                        dynamic_count += 1
+            print(f"   ✅ SEC 雙軌解析完成")
         else:
             print(f"   ⚠️ SEC 請求被拒絕 (HTTP {res.status_code})")
     except Exception as e: 
