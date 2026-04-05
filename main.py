@@ -2,7 +2,11 @@ import os
 import sys
 import random
 import time
+import json
+import logging
 import telebot
+import subprocess
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -10,6 +14,17 @@ from google.genai import types
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import pytz
+
+# 設定日誌
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # --- .env 檔案的絕對路徑，確保 systemd 正確載入 ---
 script_dir = Path(__file__).resolve().parent
@@ -86,145 +101,194 @@ def create_agent_chat(model_name, history=None):
         history=history
     )
 
-# 初始化大腦
-chat = create_agent_chat(get_dynamic_models()[0])
 dead_engines = {}
+
+# --- 1. 本地非阻塞喚醒機制 (非同步回調版) ---
+def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
+    """
+    非同步處理：啟動 GPU 運算，完成後主動推送報告。
+    """
+    def _run():
+        try:
+            logger.info(f"🚀 [情報局] 正在啟動深度收割: {symbol}")
+            python_exe = sys.executable
+            worker_path = os.path.join(script_dir, "nlp_worker.py")
+            cmd = [python_exe, worker_path, symbol]
+            
+            # 讓背景進程耐心跑完，不設超時
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"✅ [情報局] {symbol} 收割完成")
+                if chat_id and message_id:
+                    bot.edit_message_text(f"✅ {symbol} 情報收割完畢，正在進行最終決策...", chat_id=chat_id, message_id=message_id)
+                    
+                    # 重新抓取熱騰騰的新資料
+                    strat_data = router.fetch_strat_data(symbol)
+                    nlp_alpha = strat_data.get("nlp_insights", {})
+                    
+                    # 生成分析並推送
+                    generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id)
+            else:
+                logger.error(f"❌ [情報局] {symbol} 失敗: {stderr[:200]}")
+                if chat_id:
+                    bot.send_message(chat_id, f"❌ {symbol} 情報收割失敗，請檢查日誌。\n{stderr[:100]}")
+        except Exception as e:
+            logger.error(f"🚨 [情報局] 異常: {str(e)}")
+            if chat_id: bot.send_message(chat_id, f"🚨 系統異常: {str(e)}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
+def generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id=None):
+    """
+    調用 Gemini 模型生成最終戰報。
+    """
+    alpha_official = nlp_alpha.get("alpha_official", 0)
+    analysis_prompt = f"""
+你是交易戰友「破產推進器」。請針對以下數據進行深度推論。
+
+【📊 {symbol} 雙重視角數據集】
+1. 技術面/即時盤勢:
+{json.dumps(strat_data.get('metrics', {}), indent=2, ensure_ascii=False)}
+
+2. NLP 情緒因子 (Alpha Factors):
+- 綜合 Alpha: {nlp_alpha.get('nlp_alpha', 0):+.2f}
+- 官方/SEC 訊號: {alpha_official:+.2f}
+- 散戶情緒: {nlp_alpha.get('alpha_retail', 0):+.2f}
+- 語意報告: {nlp_alpha.get('semantic_summary', '無資料')}
+
+【🧠 推論任務】
+- 你必須綜合技術面指標與 NLP Alpha 因子給出最終交易建議。
+- **🚨 強烈警告規則**: 若官方訊號 (alpha_official) 小於 -0.5，代表內部人拋售或重大利空公告，請在回覆開頭發出「強烈警告」。
+- 請給出具體的「戰略方向」（例如：多頭佈局、觀望、或空頭避險）。
+"""
+    now = time.time()
+    current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
+    final_text = "分析失敗。"
+
+    for model_name in current_models:
+        try:
+            response = client.models.generate_content(
+                model=model_name, contents=analysis_prompt,
+                config=types.GenerateContentConfig(system_instruction=system_prompt)
+            )
+            if response.text:
+                final_text = response.text
+                break
+        except: continue
+
+    if message_id:
+        try:
+            bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode='Markdown')
+        except:
+            bot.send_message(chat_id, final_text, parse_mode='Markdown')
+    else:
+        bot.send_message(chat_id, final_text, parse_mode='Markdown')
+
+# --- 2. 背景定時巡邏 ---
+def daily_nlp_scout():
+    watch_list = ["NVDA", "TSLA", "AAPL", "MSFT", "ARM"]
+    for stock in watch_list:
+        trigger_nlp_and_callback(stock)
+        time.sleep(20)
+
+scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Taipei'))
+scheduler.add_job(daily_nlp_scout, 'interval', hours=4)
+scheduler.start()
+
+# --- 3. Telegram 雙重視角決策 ---
+@bot.message_handler(commands=['analyze', 'nlp'])
+def handle_deep_analysis(message):
+    if message.from_user.id != MY_USER_ID: return
+    
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        bot.reply_to(message, "💡 用法: `/analyze <股票代號>`", parse_mode='Markdown')
+        return
+    
+    symbol = parts[1].upper()
+    sent_msg = bot.reply_to(message, f"🔍 正在調閱 {symbol} 雙重視角戰報...\n(GPU 正在運算中，預計 1~2 分鐘，完成後主動通知您)")
+    bot.send_chat_action(message.chat.id, 'typing')
+
+    strat_data = router.fetch_strat_data(symbol)
+    nlp_alpha = strat_data.get("nlp_insights", {})
+
+    # 若過期或缺失，進入非同步回調模式
+    if "error" in nlp_alpha:
+        trigger_nlp_and_callback(symbol, message.chat.id, sent_msg.message_id)
+        return
+
+    # 若資料庫已有新鮮資料，秒回報告
+    generate_final_report(symbol, strat_data, nlp_alpha, message.chat.id, sent_msg.message_id)
 
 @bot.message_handler(commands=['reset'])
 def reset_memory(message):
-    if message.from_user.id != MY_USER_ID:
-        return
+    if message.from_user.id != MY_USER_ID: return
     global chat
     chat = create_agent_chat(get_dynamic_models()[0])
-    bot.reply_to(message, "🧹 推進器記憶體已排空！大腦已重新裝填。")
+    bot.reply_to(message, "🧹 推進器記憶體已排空！")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
-    if message.from_user.id != MY_USER_ID:
-        print(f"🚨 偵測到非法操作！來源 ID: {message.from_user.id}")
-        return
-    global chat
+    if message.from_user.id != MY_USER_ID: return
     user_text = message.text
     
-    # --- 動態時間與市場狀態注入 ---
-    import pytz
-    from datetime import datetime
     tw_tz = pytz.timezone('Asia/Taipei')
     us_tz = pytz.timezone('US/Eastern')
     now_tw = datetime.now(tw_tz).strftime('%Y-%m-%d %H:%M:%S')
     now_us = datetime.now(us_tz).strftime('%Y-%m-%d %H:%M:%S')
     
-    tw_status = "🟢 開盤中" if market.is_tw_market_open() else "🔴 已收盤/休市"
-    us_status = "🟢 開盤中" if market.is_us_market_open() else "🔴 已收盤/休市"
+    tw_status = "🟢 開盤中" if market.is_tw_market_open() else "🔴 已收盤"
+    us_status = "🟢 開盤中" if market.is_us_market_open() else "🔴 已收盤"
     
-    time_context = f"\n【🕒 當前時間環境】\n- 台北時間: {now_tw} ({tw_status})\n- 美東時間: {now_us} ({us_status})\n"
-    
-    # --- 策略路由：主動抓取標的數據 ---
+    time_context = f"\n【🕒 當前時間環境】\n- 台北: {now_tw} ({tw_status})\n- 美東: {now_us} ({us_status})\n"
     strat_context = router.get_strat_context(user_text)
     dynamic_prompt = system_prompt + time_context + strat_context
     
-    # 垃圾話表情
     mood = "bad_market" if any(w in user_text for w in ["損益", "賠", "慘"]) else "normal"
     sent_msg = bot.reply_to(message, f"【推進器點火】\n{random.choice(WDT_MESSAGES[mood])}")
     bot.send_chat_action(message.chat.id, 'typing')
 
-    # 引擎冷卻管理
     now = time.time()
     current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
 
-    safe_history = chat.get_history() if hasattr(chat, 'get_history') else getattr(chat, 'history', None)
-
     for model_name in current_models:
         try:
-            # 💡 每次對話都注入新的時間 Context 並重建 Chat
             chat = client.chats.create(
                 model=model_name,
                 config=types.GenerateContentConfig(
                     system_instruction=dynamic_prompt,
-                    tools=AGENT_TOOLS, # 這裡也改用統一配置
+                    tools=AGENT_TOOLS,
                     temperature=0.3, 
-                ),
-                history=safe_history
+                )
             )
-            
             response = chat.send_message(user_text)
-            final_text = response.text if response.text else "大腦空白，請重試。"
-            
-            try:
-                bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=final_text, parse_mode='Markdown')
-            except:
-                bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=final_text)
+            final_text = response.text if response.text else "大腦空白。"
+            bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=final_text, parse_mode='Markdown')
             return
-
         except Exception as e:
-            err = str(e).upper()
-            if any(k in err for k in ['429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE']):
+            if any(k in str(e).upper() for k in ['429', 'RESOURCE_EXHAUSTED']):
                 dead_engines[model_name] = time.time() + 180
-                print(f"⏳ {model_name} 進入 CD...")
                 continue
             else:
-                bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=f"⚠️ 核心出錯: {str(e)[:100]}")
+                bot.send_message(message.chat.id, f"⚠️ 錯誤: {str(e)[:100]}")
                 return
 
 if __name__ == "__main__":
-    print("🚀 MarginCall Express 模組化引擎已啟動！")
-    
-    # --- 啟動背景監控排程 (V 轉狙擊手) ---
+    print("🚀 MarginCall Express 已啟動！")
     scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Taipei'))
     
     def auto_v_turn_monitor():
-        """自動監控 V 轉狀態並推播"""
         try:
-            # 【V4 加固】動態時區偵測：判斷夏令/冬令
-            us_tz = pytz.timezone('US/Eastern')
-            now_us = datetime.now(us_tz)
-            is_dst = now_us.dst().total_seconds() != 0
-            
-            # 夏令收盤 04:00 (台北), 冬令收盤 05:00 (台北)
-            # 這裡我們不寫死時間，而是根據排程觸發。
-            # 但我們可以在這裡加一個「美股開盤檢查」
-            if not market.is_us_market_open() and now_us.hour < 16:
-                # 如果不是在收盤前夕，也不是開盤中，則跳過
-                return
-
+            if not market.is_us_market_open() and datetime.now(pytz.timezone('US/Eastern')).hour < 16: return
             report = risk.get_v_turn_confirmation()
-            
-            # 判斷是否需要推播：FTD 觸發、破底、護法警戒、或收盤總結
-            if "✅ 觸發" in report or "偵測底盤中" in report or "🚨 警戒" in report or "🏁" in report:
+            if any(k in report for k in ["✅ 觸發", "偵測", "🚨", "🏁"]):
                 bot.send_message(MY_USER_ID, report, parse_mode='Markdown')
-        except Exception as e:
-            print(f"📡 監控引擎異常: {e}")
+        except: pass
 
-    # 1. 盤中壓力測試 (每 2 小時一次)
     scheduler.add_job(auto_v_turn_monitor, 'interval', hours=2)
-    
-    # 2. 關鍵狙擊時刻 (動態偵測夏冬令)
-    # 夏令時: 03:45 執行; 冬令時: 04:45 執行
-    def scheduled_sniper():
-        us_tz = pytz.timezone('US/Eastern')
-        is_dst = datetime.now(us_tz).dst().total_seconds() != 0
-        now_tw = datetime.now(pytz.timezone('Asia/Taipei'))
-        
-        # 夏令 03:45, 冬令 04:45
-        target_hour = 3 if is_dst else 4
-        if now_tw.hour == target_hour and now_tw.minute == 45:
-            auto_v_turn_monitor()
-
-    scheduler.add_job(scheduled_sniper, 'cron', minute=45, hour='3,4', day_of_week='tue-sat')
-    
-    # 3. 最終結算 (夏令 04:10, 冬令 05:10)
-    def scheduled_settlement():
-        us_tz = pytz.timezone('US/Eastern')
-        is_dst = datetime.now(us_tz).dst().total_seconds() != 0
-        now_tw = datetime.now(pytz.timezone('Asia/Taipei'))
-        target_hour = 4 if is_dst else 5
-        if now_tw.hour == target_hour and now_tw.minute == 10:
-            auto_v_turn_monitor()
-
-    scheduler.add_job(scheduled_settlement, 'cron', minute=10, hour='4,5', day_of_week='tue-sat')
-    
     scheduler.start()
-    print("🦅 V 轉狙擊手 V4 已就位 (動態時區支援中)")
 
     while True:
         try:

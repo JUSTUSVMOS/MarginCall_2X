@@ -6,8 +6,12 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import threading
+import logging
 from scipy import stats
 from datetime import datetime, timedelta
+
+# 設定日誌
+logger = logging.getLogger(__name__)
 
 DB_FILE = "portfolio.db"
 db_lock = threading.Lock() # 【V4 加固】資料庫互斥鎖
@@ -36,8 +40,25 @@ def init_market_db():
                 last_check_date TEXT
             )
         """)
+        # 【重構】資產類型快取表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS asset_profile_cache (
+                symbol TEXT PRIMARY KEY,
+                asset_type TEXT,
+                sector TEXT,
+                industry TEXT,
+                risk_score REAL,
+                last_updated DATETIME
+            )
+        """)
         conn.commit()
         conn.close()
+
+def get_db_connection():
+    """取得開啟 WAL 模式的資料庫連線"""
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
 
 def get_v_turn_state():
     with db_lock:
@@ -45,7 +66,9 @@ def get_v_turn_state():
         try:
             df = pd.read_sql("SELECT * FROM v_turn_state WHERE id = 1", conn)
             return df.iloc[0] if not df.empty else None
-        except: return None
+        except Exception as e:
+            logger.error(f"Failed to get v_turn_state: {e}")
+            return None
         finally: conn.close()
 
 def save_v_turn_state(is_confirmed, day1_date, day1_price, ftd_date):
@@ -58,6 +81,8 @@ def save_v_turn_state(is_confirmed, day1_date, day1_price, ftd_date):
                 VALUES (1, ?, ?, ?, ?, ?)
             """, (is_confirmed, day1_date, day1_price, ftd_date, datetime.now().strftime('%Y-%m-%d')))
             conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to save v_turn_state: {e}")
         finally: conn.close()
 
 def calculate_buying_pressure(df, window=5):
@@ -80,49 +105,61 @@ def calculate_buying_pressure(df, window=5):
 def update_market_db():
     init_market_db()
     conn = sqlite3.connect(DB_FILE)
-    last_date_df = pd.read_sql("SELECT MAX(date) as last_date FROM market_history", conn)
-    last_date_str = last_date_df['last_date'].iloc[0]
-    period = "1y" if not last_date_str else "7d"
-    
-    tickers = {'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW'}
-    yf_dfs = []
-    for name, ticker in tickers.items():
-        hist = yf.Ticker(ticker).history(period=period)
-        if not hist.empty:
-            s = hist['Close'].rename(name)
-            s.index = s.index.tz_localize(None).strftime('%Y-%m-%d')
-            yf_dfs.append(s)
-    
-    if not yf_dfs: return
-    new_yf_df = pd.concat(yf_dfs, axis=1, sort=True)
-
-    url = 'https://squeezemetrics.com/monitor/static/DIX.csv'
-    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        req = requests.get(url, headers=headers, timeout=5)
-        sm_df = pd.read_csv(io.StringIO(req.text))
-        sm_df['date'] = pd.to_datetime(sm_df['date']).dt.strftime('%Y-%m-%d')
-        sm_df.set_index('date', inplace=True)
-        sm_data = sm_df[['dix', 'gex']]
-    except:
-        sm_data = pd.DataFrame(columns=['dix', 'gex'])
+        last_date_df = pd.read_sql("SELECT MAX(date) as last_date FROM market_history", conn)
+        last_date_str = last_date_df['last_date'].iloc[0]
+        period = "1y" if not last_date_str else "7d"
+        
+        tickers = {'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW'}
+        yf_dfs = []
+        for name, ticker in tickers.items():
+            try:
+                hist = yf.Ticker(ticker).history(period=period)
+                if not hist.empty:
+                    s = hist['Close'].rename(name)
+                    s.index = s.index.tz_localize(None).strftime('%Y-%m-%d')
+                    yf_dfs.append(s)
+            except Exception as e:
+                logger.warning(f"Failed to fetch market ticker {ticker}: {e}")
+        
+        if not yf_dfs: return
+        new_yf_df = pd.concat(yf_dfs, axis=1, sort=True)
 
-    final_new_df = pd.merge(new_yf_df, sm_data, left_index=True, right_index=True, how='left').ffill()
-    
-    conn_cursor = conn.cursor()
-    for date, row in final_new_df.iterrows():
-        conn_cursor.execute("""
-            INSERT OR REPLACE INTO market_history (date, SPX, VIX, DXY, TNX, GOLD, SKEW, dix, gex)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (date, row['SPX'], row['VIX'], row['DXY'], row['TNX'], row['GOLD'], row['SKEW'], row['dix'], row['gex']))
-    conn.commit()
-    conn.close()
+        url = 'https://squeezemetrics.com/monitor/static/DIX.csv'
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        try:
+            req = requests.get(url, headers=headers, timeout=5)
+            sm_df = pd.read_csv(io.StringIO(req.text))
+            sm_df['date'] = pd.to_datetime(sm_df['date']).dt.strftime('%Y-%m-%d')
+            sm_df.set_index('date', inplace=True)
+            sm_data = sm_df[['dix', 'gex']]
+        except Exception as e:
+            logger.warning(f"Failed to fetch DIX data: {e}")
+            sm_data = pd.DataFrame(columns=['dix', 'gex'])
+
+        final_new_df = pd.merge(new_yf_df, sm_data, left_index=True, right_index=True, how='left').ffill()
+        
+        conn_cursor = conn.cursor()
+        for date, row in final_new_df.iterrows():
+            conn_cursor.execute("""
+                INSERT OR REPLACE INTO market_history (date, SPX, VIX, DXY, TNX, GOLD, SKEW, dix, gex)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (date, row['SPX'], row['VIX'], row['DXY'], row['TNX'], row['GOLD'], row['SKEW'], row['dix'], row['gex']))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Market DB update failed: {e}")
+    finally:
+        conn.close()
 
 def calculate_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0: return 0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    gamma = stats.norm.pdf(d1) / (S * sigma * np.sqrt(T))
-    return gamma
+    try:
+        d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        gamma = stats.norm.pdf(d1) / (S * sigma * np.sqrt(T))
+        return gamma
+    except Exception as e:
+        logger.debug(f"Gamma calculation error: {e}")
+        return 0
 
 def get_realtime_spy_gex():
     """計算 SPY GEX (單位: Billions)"""
@@ -146,7 +183,9 @@ def get_realtime_spy_gex():
                 g = calculate_gamma(spot, row['strike'], T, 0.04, row['impliedVolatility'])
                 total_gex -= row['openInterest'] * 100 * g * (spot**2) * 0.01
         return total_gex / 10**9 
-    except: return None
+    except Exception as e:
+        logger.error(f"Real-time GEX calculation failed: {e}")
+        return None
 
 def get_market_sentiment_score():
     """整合新聞情緒分析 (取代冗長新聞清單)"""
@@ -165,7 +204,8 @@ def get_market_sentiment_score():
         normalized_score = max(-1.0, min(1.0, score / 10.0))
         summary = "偏多" if normalized_score > 0.2 else "偏空" if normalized_score < -0.2 else "中性"
         return normalized_score, summary
-    except:
+    except Exception as e:
+        logger.error(f"Market sentiment score failed: {e}")
         return 0.0, "分析失敗"
 
 def add_dynamic_metrics(df, column_name, window=120):
@@ -193,7 +233,9 @@ def fetch_all_market_data():
             if col in df.columns:
                 df = add_dynamic_metrics(df, col, window=120)
         return df.dropna(subset=['SPX', 'SPX_20MA'])
-    except: return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Fetch all market data failed: {e}")
+        return pd.DataFrame()
 
 _risk_cache = {"report": "", "timestamp": 0, "expiry": 1200}
 
@@ -274,7 +316,9 @@ def get_global_risk_radar() -> str:
         _risk_cache["report"] = msg
         _risk_cache["timestamp"] = current_time
         return msg
-    except Exception as e: return f"❌ 雷達異常: {e}"
+    except Exception as e:
+        logger.error(f"Risk radar analysis failed: {e}")
+        return f"❌ 雷達異常: {e}"
 
 def get_v_turn_confirmation() -> str:
     """
@@ -384,4 +428,6 @@ def get_v_turn_confirmation() -> str:
             else:
                 report += "\n🏁 *【最終判定：維持現狀】*\n👉 市場尚未出現轉強信號或條件未齊。"
             return report
-        except Exception as e: return f"❌ V 轉監測失敗: {e}"
+        except Exception as e:
+            logger.error(f"V-turn confirmation failed: {e}")
+            return f"❌ V 轉監測失敗: {e}"

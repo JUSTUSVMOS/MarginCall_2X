@@ -92,20 +92,27 @@ def get_asset_profile(symbol: str) -> dict:
         except Exception as e:
             logger.warning(f"Stage 1 fetching failed for {symbol}: {e}")
 
-    # Stage 2: LLM Fallback
+    # Stage 2: LLM Fallback (支援多模型降級)
     if asset_type == "Unknown" and genai_client:
         logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
-        try:
-            prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。僅回傳分類名稱。"
-            response = genai_client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt
-            )
-            llm_type = response.text.strip()
-            if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
-                asset_type = llm_type
-        except Exception as e:
-            logger.error(f"Stage 2 LLM classification failed: {e}")
+        # 這裡借用 main.py 的邏輯，但為了不循環引用，我們簡單列出
+        fallback_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+        prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。僅回傳分類名稱。"
+        
+        for model_name in fallback_models:
+            try:
+                response = genai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                if response.text:
+                    llm_type = response.text.strip()
+                    if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
+                        asset_type = llm_type
+                        break
+            except Exception as e:
+                logger.warning(f"Stage 2 LLM classification failed with {model_name}: {e}")
+                continue
 
     # 3. 持久化到 SQLite
     with db_lock:
