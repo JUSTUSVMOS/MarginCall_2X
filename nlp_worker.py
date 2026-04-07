@@ -9,6 +9,7 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import yfinance as yf
 import cloudscraper  # ⚠️ 新增：用於打穿 Cloudflare 防護
 
 # --- 0. Ubuntu 路徑配置與全局 SEC 偽裝 ---
@@ -38,13 +39,10 @@ SEC_HEADERS = {
 DB_FILE = os.path.join(PROJECT_ROOT, "portfolio.db")
 
 def get_cik(symbol):
-    """
-    從 SEC 官方標籤對應表動態獲取 CIK (補足 10 位)。
-    """
-    symbol = symbol.upper()
+    symbol = symbol.upper().replace(".", "-") # 把 BRK.B 轉成 BRK-B
     try:
         url = "https://www.sec.gov/files/company_tickers.json"
-        res = requests.get(url, headers={"User-Agent": "MarginCall Bot (research@margincall.ai)"}, timeout=10)
+        res = requests.get(url, headers=SEC_HEADERS, timeout=10)
         if res.status_code == 200:
             data = res.json()
             for key, val in data.items():
@@ -53,9 +51,8 @@ def get_cik(symbol):
     except Exception as e:
         print(f"⚠️ CIK 查詢異常: {e}")
     
-    # 回退方案
-    CIK_MAP = {"ARM": "0001045810", "TSLA": "0001318605", "AAPL": "0000320193", "AVGO": "0001730168"}
-    return CIK_MAP.get(symbol, "0001045810")
+    # 🚨🚨🚨 刪掉原本的 CIK_MAP！找不到就回傳 None，寧願沒資料也不要拿 NVDA 來瞎掰！
+    return None
 
 def parse_form4_insider(content):
     if not content: return "無內容"
@@ -123,78 +120,152 @@ def save_to_db(symbol, nlp_alpha, a_ret, a_mac, a_off, total, summary, i_type):
 
 # --- 2. 【並行 Map 階段】 ---
 def extract_insight_parallel(text, symbol):
+    # 🎯 拔除偷懶藉口，強制模型提取商業事實
     prompt = f"""
-    任務：從金融文本提取標籤與情緒強度。
-    標的：{symbol}
-    規則：必須回傳 JSON。sentiment 只能是: 'strong_bullish', 'mild_bullish', 'neutral', 'mild_bearish', 'strong_bearish'。
-    文本："{text[:1200]}"
-    回傳格式：{{"sentiment": "strong_bullish", "tags": ["關鍵字"]}}
-    """
-    try:
-        response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "gemma4:e4b-it-q8_0", "prompt": prompt, "stream": False, "format": "json",
-            "options": {"temperature": 0.0, "num_predict": 150}
-        }, timeout=15)
-        res_data = json.loads(response.json()["response"])
-        res_data['sentiment'] = str(res_data.get('sentiment', 'neutral')).lower().strip()
-        return res_data
-    except:
-        return {"sentiment": "neutral", "tags": []}
-
-# --- 3. 【語意 Reduce 階段】 ---
-def semantic_reduce(all_tags, symbol):
-    # 把空字串或無效標籤過濾掉
-    valid_tags = [t for t in all_tags if isinstance(t, str) and t.strip()]
-
-    if not valid_tags:
-        return "⚠️ 【警告】第一階段 GPU 萃取失敗，未提取到任何有效標籤，無法生成語意總結。"
-
-    tag_cloud = ", ".join(valid_tags[:40])
-    print(f"   [Debug] 準備餵給 LLM 總結的標籤雲: {tag_cloud[:100]}...")
-
-    # 🎯 升級版 Prompt：英文下指令（喚醒最強邏輯），中文定格式（方便閱讀）
-    prompt = f"""
-You are a data processing engine for financial sentiment analysis. 
-        Task: Identify and list the top 3 objective "Market Discussion Themes" for {symbol} based on the provided tags.
+        Task: Extract market insights and sentiment from the financial text for {symbol}.
+        Rules: 
+        1. Return valid JSON. 
+        2. Sentiment MUST be: 'strong_bullish', 'mild_bullish', 'neutral', 'mild_bearish', 'strong_bearish'.
+        3. Insights: Max 3 short sentences. 
+        4. 🚨 BOILERPLATE FILTER: You MUST IGNORE standard SEC cover page text (e.g., "Indicate by check mark", "correction of an error to previously issued financial statements", "forward-looking statements"). These are NOT insights. If the text only contains this boilerplate, return an empty array [].
+        5. 🚨 STRICT GROUNDING: ONLY extract facts explicitly written in the text. DO NOT invent prices or events.
         
-        CRITICAL RULES:
-        1. This is a DATA SUMMARY task, NOT financial advice. Do not provide buy/sell recommendations.
-        2. Evaluate the logical relevance of the tags. Ignore noise like unrelated tickers (e.g., MU, SPY) if they don't have a direct fundamental connection in the text.
-        3. Only report themes that are explicitly present in the data.
-
-        Output Requirements: 
-        - Language: Traditional Chinese (繁體中文).
-        - Format: 3 Bullet points.
-        - Tone: Objective and professional data report.
-
-        Data Tags: {tag_cloud}
-    """
+        Text: "{text[:2500]}"
+        Format: {{"sentiment": "neutral", "insights": ["Insight 1", "Insight 2"]}}
+        """
     
     try:
-        # 將 timeout 放寬到 60 秒
         response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "llama3.1", # 優先使用 llama3.1 作為決策層模型
+            "model": "gemma4:e4b-it-q8_0", 
             "prompt": prompt, 
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 600} # 低溫確保理性
+            "stream": False, 
+            "format": "json",
+            "options": {"temperature": 0.0, "num_predict": 250}
         }, timeout=60)
         
-        if response.status_code != 200:
-            return f"⚠️ 語意聚合失敗：Ollama 回傳錯誤碼 HTTP {response.status_code}"
-
-        res_text = response.json().get("response", "").strip()
-
-        if not res_text:
-            return "⚠️ 語意聚合異常：Ollama 成功連線，但回傳了空字串。"
-
-        return res_text
-    except requests.exceptions.Timeout:
-        return "⚠️ 語意聚合超時：模型思考超過 60 秒，請檢查 GPU 負載狀態。"
+        raw_res = response.json().get("response", "")
+        
+        # 🛡️ 終極淨化：剝除 LLM 常犯的 Markdown JSON 外衣
+        clean_res = re.sub(r'^```json\s*|\s*```$', '', raw_res.strip(), flags=re.IGNORECASE|re.MULTILINE)
+        
+        res_data = json.loads(clean_res)
+        res_data['sentiment'] = str(res_data.get('sentiment', 'neutral')).lower().strip()
+        
+        # 確保向下相容性，把 insights 轉進 tags
+        res_data['tags'] = res_data.get('insights', res_data.get('tags', []))
+        return res_data
+        
+    except json.JSONDecodeError as je:
+        # 讓錯誤浮出水面，不再默默吞掉
+        print(f"   [Debug] JSON 解析失敗: 原始回傳 -> {raw_res[:100]}...")
+        return {"sentiment": "neutral", "tags": []}
     except Exception as e:
-        return f"⚠️ 語意聚合發生未知錯誤：{str(e)}"
+        print(f"   [Debug] Gemma 萃取異常: {e}")
+        return {"sentiment": "neutral", "tags": []}
+    
+import textwrap # 如果最上面沒有 import，記得加上去
+
+# --- 3. 【語意 Reduce 階段】 ---
+def semantic_reduce(categorized_tags, symbol, company_name, sector):
+    
+    # 確保標籤是乾淨的字串，避免傳入 None 或怪異型別
+    sec_insights = list(set([t for t in categorized_tags["SEC"] if isinstance(t, str) and t.strip()]))[:8]
+    macro_insights = list(set([t for t in categorized_tags["Macro"] if isinstance(t, str) and t.strip()]))[:8]
+    retail_insights = list(set([t for t in categorized_tags["Retail"] if isinstance(t, str) and t.strip()]))[:8]
+    
+    sec_tags = "\n".join([f"- {t[:80]}" for t in sec_insights])
+    macro_tags = "\n".join([f"- {t[:80]}" for t in macro_insights])
+    retail_tags = "\n".join([f"- {t[:80]}" for t in retail_insights])
+
+    # 🚨 全英文 Prompt：降低模型語意轉換的負擔
+    prompt = f"""
+        You are a Senior Wall Street Analyst at a Top-Tier Hedge Fund.
+        Summarize the top 3 core investment focuses for {symbol} ({company_name}, Sector: {sector}).
+        
+        DATA SOURCES:
+        ---
+        [OFFICIAL SEC FILINGS]:
+        {sec_tags if sec_tags else "None available."}
+        
+        [MACRO/NEWS MEDIA]:
+        {macro_tags if macro_tags else "None available."}
+        
+        [RETAIL SOCIAL MEDIA]:
+        {retail_tags if retail_tags else "None available."}
+        ---
+        
+        CRITICAL INSTRUCTIONS:
+        1. FAT-TAIL RISK OVERRIDE: If (and ONLY if) ANY insight mentions "DOJ", "Indictment", "Fraud", "Subpoena", "Investigation", or "Delist", make this the #1 bullet point and state the severe legal danger.
+        2. STRICT TEMPLATE: Unless overridden by Rule 1, you MUST strictly use the exact format provided in the OUTPUT FORMAT section below. Do NOT add any extra introductory sentences (e.g., "Here is the summary...").
+        3. COMPETITOR FILTER: Ignore news strictly about competitors.
+        4. ZERO HALLUCINATION (CRUCIAL): You are a strict synthesizer. You MUST ONLY use the facts provided in the DATA SOURCES above. Do NOT include any historical price ranges (e.g., "$50-$55"), geopolitical events (e.g., "China bans"), or competitor actions UNLESS they are explicitly written in the provided tags.
+        5.IGNORE BOILERPLATE: If the [SEC] tags only contain generic phrases like "correction of an error", "forward-looking statements", or "check mark", you MUST treat it as NO DATA and output "該維度目前無重大資訊。"
+        6. NO HALLUCINATION: If a category lacks concrete data, write "該維度目前無重大資訊".
+        7. NO DISCLAIMERS (STRICT): Stop generating text immediately after the 3rd bullet point.
+
+        OUTPUT FORMAT:
+                {{
+                    "sec_summary": "[Insert official SEC summary here]",
+                    "macro_summary": "[Insert macro/news summary here]",
+                    "retail_summary": "[Insert retail sentiment summary here]"
+                }}
+        """
+    
+    try:
+        response = requests.post("http://localhost:11434/api/generate", json={
+            "model": "gemma4:e4b-it-q8_0", 
+            "prompt": prompt, 
+            "stream": False,
+            "format": "json", 
+            "options": {
+                "temperature": 0.0, # 降到 0.0 追求最大穩定性
+                "num_predict": 300
+            }
+        }, timeout=90)
+
+        if response.status_code != 200:
+            return f"⚠️ Ollama HTTP Error: {response.status_code} - {response.text[:100]}"
+            
+        raw_res = response.json().get("response", "")
+        clean_res = re.sub(r'^```json\s*|\s*```$', '', raw_res.strip(), flags=re.IGNORECASE|re.MULTILINE)
+        
+        # 嘗試解析 JSON
+        data = json.loads(clean_res)
+        
+        sec_text = data.get("sec_summary", "No significant information available.")
+        macro_text = data.get("macro_summary", "No significant information available.")
+        retail_text = data.get("retail_summary", "No significant information available.")
+
+        final_report = textwrap.dedent(f"""
+                • **官方基本面**：{sec_text}
+                • **總經與新聞**：{macro_text}
+                • **散戶情緒**：{retail_text}
+                """).strip()
+
+        return final_report
+                
+    except json.JSONDecodeError:
+        print(f"   [Debug] JSON 崩潰，原始回傳: {raw_res[:150]}")
+        return textwrap.dedent(f"""
+        • **官方基本面**：{sec_tags[:80] if sec_tags else "無"}
+        • **總經與新聞**：{macro_tags[:80] if macro_tags else "無"}
+        • **散戶情緒**：{retail_tags[:80] if retail_tags else "無"}
+        """).strip()
+    except Exception as e:
+        return f"⚠️ Semantic Reduce Error: {str(e)}"
 
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
+    # --- 0. 動態獲取公司背景 ---
+    try:
+        ticker_info = yf.Ticker(stock).info
+        company_name = ticker_info.get('longName', stock)
+        sector = ticker_info.get('sector', 'Unknown Sector')
+        industry = ticker_info.get('industry', 'Unknown Industry')
+        print(f"🧬 偵測到標的：{company_name} | 產業：{sector} / {industry}")
+    except:
+        company_name, sector, industry = stock, "Financial", "Technology" # 失敗時的備援
+
     init_nlp_db()
     print(f"🔥 [Ubuntu] 啟動 {stock} 四維一體深度掃描 (全網聚合 + StockTwits 版)...")
     raw_texts = []
@@ -289,26 +360,39 @@ def run_turbo_trinity_scout(stock="NVDA"):
                         # 分流 1：美國本土公司 (10-K)，使用 FinNLP 精準打擊
                         if form == '10-K':
                             try:
-                                extractor = SECExtractor(tickers=[stock], amount=1, filing_type=form)
-                                # 🎯 修正：使用 FinNLP 官方定義的 Enum 名稱 (RISK_FACTORS=1A, MANAGEMENT_DISCUSSION=7)
-                                narratives, _ = extractor.pipeline_api(doc_res.text, m_section=["RISK_FACTORS", "MANAGEMENT_DISCUSSION"])
-                                
-                                # 取得資料時對應官方 key 與可能的變體
-                                item_1a_content = narratives.get("RISK_FACTORS") or narratives.get("_ITEM_1A") or narratives.get("ITEM_1A")
-                                item_7_content = narratives.get("MANAGEMENT_DISCUSSION") or narratives.get("_ITEM_7") or narratives.get("ITEM_7")
+                                from finnlp.data_sources.sec_filings.prepline_sec_filings.sec_document import SECDocument
+                                # 🎯 匯入 FinNLP 官方的 Enum 字典
+                                from finnlp.data_sources.sec_filings.prepline_sec_filings.sections import section_string_to_enum
 
+                                sec_doc = SECDocument.from_string(doc_res.text)
+                                sec_doc.filing_type = "10-K"
+
+                                # 💡 修正：傳入正確的 Enum 物件，而不是數字
+                                item_1a_content = sec_doc.get_section_narrative(section_string_to_enum["RISK_FACTORS"])
+                                item_7_content = sec_doc.get_section_narrative(section_string_to_enum["MANAGEMENT_DISCUSSION"])
+
+                                sec_extracted_texts = []
                                 if item_1a_content:
-                                    text_1a = " ".join([item["text"] for item in item_1a_content if "text" in item])
-                                    raw_texts.append(f"SEC 10-K [風險因素]: {text_1a[:3000]}")
-                                    print("   ✅ FinNLP 成功切出 RISK_FACTORS (ITEM_1A)")
+                                    text_1a = " ".join([item["text"] for item in item_1a_content if isinstance(item, dict) and "text" in item]) if isinstance(item_1a_content, list) else str(item_1a_content)
+                                    if len(text_1a) > 200:
+                                        safe_start = 2500 if len(text_1a) > 5000 else 0
+                                        sec_extracted_texts.append(f"SEC 10-K [風險因素]: {text_1a[safe_start : safe_start+2500]}")
+                                        print(f"   ✅ FinNLP 成功抓取 RISK_FACTORS (長度: {len(text_1a)})")
 
                                 if item_7_content:
-                                    text_7 = " ".join([item["text"] for item in item_7_content if "text" in item])
-                                    raw_texts.append(f"SEC 10-K [營運分析]: {text_7[:3000]}")
-                                    print("   ✅ FinNLP 成功切出 MANAGEMENT_DISCUSSION (ITEM_7)")
-                                    
+                                    text_7 = " ".join([item["text"] for item in item_7_content if isinstance(item, dict) and "text" in item]) if isinstance(item_7_content, list) else str(item_7_content)
+                                    if len(text_7) > 200:
+                                        safe_start = 2500 if len(text_7) > 5000 else 0
+                                        sec_extracted_texts.append(f"SEC 10-K [營運分析]: {text_7[safe_start : safe_start+2500]}")
+                                        print(f"   ✅ FinNLP 成功抓取 MD&A (長度: {len(text_7)})")
+
+                                if not sec_extracted_texts:
+                                    raise ValueError("FinNLP 提取內容過短或為空")
+                                
+                                raw_texts.extend(sec_extracted_texts)
+
                             except Exception as parse_e:
-                                print(f"   ⚠️ FinNLP 解析 10-K 失敗 ({parse_e})，自動降級啟用智能段落解析...")
+                                print(f"   ⚠️ FinNLP 解析 10-K 失敗或內容為空 ({parse_e})，自動降級啟用智能段落解析...")
                                 # 啟動我們的降級神技：智能段落抓取 (Bypass iXBRL)
                                 soup = BeautifulSoup(doc_res.text, 'html.parser')
                                 valid_paragraphs = []
@@ -382,12 +466,19 @@ def run_turbo_trinity_scout(stock="NVDA"):
                     doc_res = requests.get(doc_url, headers=SEC_HEADERS, timeout=10)
                     
                     if doc_res.status_code == 200:
+                        # 情況 A：如果是內部人交易 (Form 4)
                         if form == '4':
-                            raw_texts.append(f"SEC Form 4: {parse_form4_insider(doc_res.text)}")
+                            insider_result = parse_form4_insider(doc_res.text)
+                            # 🛡️ 內部濾網：如果沒有真正的買賣金額，直接丟棄這份文件！
+                            if "未發現實質交易" not in insider_result and "無顯著方向" not in insider_result and "解析異常" not in insider_result:
+                                raw_texts.append(f"SEC Form 4: {insider_result}")
+                        
+                        # 情況 B：如果是其他重大公告 (8-K, 6-K, 10-Q)
                         else:
                             soup = BeautifulSoup(doc_res.text, 'html.parser')
                             clean_text = soup.get_text(separator=' ', strip=True)
                             raw_texts.append(f"SEC {form} ({dates[i]}): {clean_text[:1200]}")
+                        
                         dynamic_count += 1
             print(f"   ✅ SEC 雙軌解析完成")
         else:
@@ -409,22 +500,36 @@ def run_turbo_trinity_scout(stock="NVDA"):
     print("\n--- 🧠 啟動 GPU 語意分析 ---")
 
     # 並行分析
-    all_tags = []
+    categorized_tags = {"SEC": [], "Macro": [], "Retail": []}
     platform_scores = {"Reddit": 0.0, "StockTwits": 0.0, "Macro": 0.0, "SEC": 0.0}
     platform_counts = {"Reddit": 0, "StockTwits": 0, "Macro": 0, "SEC": 0}
-    SENT_MAP = {"strong_bullish": 1.0, "mild_bullish": 0.0, "neutral": 0.0, "mild_bearish": 0.0, "strong_bearish": -1.0}
+    SENT_MAP = {"strong_bullish": 1.0, "mild_bullish": 0.5, "neutral": 0.0, "mild_bearish": 0.0, "strong_bearish": -1.0}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         futures = {executor.submit(extract_insight_parallel, t, stock): t for t in raw_texts}
         for f in concurrent.futures.as_completed(futures):
             src = futures[f]
             res = f.result()
             score = SENT_MAP.get(res['sentiment'], 0.0)
-            if src.startswith("Reddit"): platform_scores["Reddit"] += score; platform_counts["Reddit"] += 1
-            elif src.startswith("StockTwits"): platform_scores["StockTwits"] += score; platform_counts["StockTwits"] += 1
-            elif src.startswith("Macro"): platform_scores["Macro"] += score; platform_counts["Macro"] += 1
-            elif src.startswith("SEC"): platform_scores["SEC"] += score; platform_counts["SEC"] += 1
-            all_tags.extend(res.get('tags', []))
+            tags = res.get('tags', [])
+            
+            # 👇 依照來源，把標籤放入不同的籃子
+            if src.startswith("Reddit") or src.startswith("StockTwits"): 
+                if src.startswith("Reddit"):
+                    platform_scores["Reddit"] += score
+                    platform_counts["Reddit"] += 1
+                else:
+                    platform_scores["StockTwits"] += score
+                    platform_counts["StockTwits"] += 1
+                categorized_tags["Retail"].extend(tags)
+            elif src.startswith("Macro"): 
+                platform_scores["Macro"] += score
+                platform_counts["Macro"] += 1
+                categorized_tags["Macro"].extend(tags)
+            elif src.startswith("SEC"): 
+                platform_scores["SEC"] += score
+                platform_counts["SEC"] += 1
+                categorized_tags["SEC"].extend(tags)
 
     # 計算各平台的平均情緒強度
     a_red = (platform_scores["Reddit"] / platform_counts["Reddit"]) if platform_counts["Reddit"] > 0 else 0.0
@@ -438,7 +543,17 @@ def run_turbo_trinity_scout(stock="NVDA"):
     # 嚴格的專家權重公式：散戶 20% (已融合兩種來源), 媒體 30%, 官方 50%
     nlp_alpha = (a_retail * 0.2) + (a_mac * 0.3) + (a_sec * 0.5)
 
-    report = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f}\n" + semantic_reduce(all_tags, stock)
+    # 🚨 核彈級利空熔斷機制 (Tail-Risk Override)
+    # 把所有新聞跟 SEC 的原始字串轉小寫，檢查是否有毀滅性字眼
+    macro_sec_text = " ".join([t.lower() for t in raw_texts if t.startswith("Macro") or t.startswith("SEC")])
+    nuclear_keywords = ['doj', 'indictment', 'subpoena', 'delist', 'fraud', 'accounting irregularity', 'investigation']
+    
+    triggered_nukes = [k for k in nuclear_keywords if k in macro_sec_text]
+    if triggered_nukes:
+        print(f"   ☢️ 警告！偵測到核彈級利空字眼: {triggered_nukes}，觸發 Alpha 熔斷機制！")
+        nlp_alpha = -0.95 # 強制給予極度悲觀的量化分數
+
+    report = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f}\n" + semantic_reduce(categorized_tags, stock, company_name, sector)
     save_to_db(stock, nlp_alpha, a_retail, a_mac, a_sec, total, report, "TRINITY")
     print(f"\n{report}")
 
