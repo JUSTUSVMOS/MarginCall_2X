@@ -350,9 +350,9 @@ def run_turbo_trinity_scout(stock="NVDA"):
             print(f"   🕵️ 軌道 1：搜尋 {stock} 最新年報...")
             for i, form in enumerate(forms):
                 if form in ['10-K', '20-F']:
-                    acc_num = str(accessions[i]).replace('-', '')
-                    doc_name = docs[i]
-                    annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
+                    acc_num_raw = str(accessions[i])
+                    acc_num = acc_num_raw.replace('-', '')
+                    annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{acc_num_raw}.txt"
                     print(f"   🎯 找到最新年報 ({form}, 發布於 {dates[i]})，準備解析...")
 
                     doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=15)
@@ -365,7 +365,6 @@ def run_turbo_trinity_scout(stock="NVDA"):
                                 from finnlp.data_sources.sec_filings.prepline_sec_filings.sections import section_string_to_enum
 
                                 sec_doc = SECDocument.from_string(doc_res.text)
-                                sec_doc.filing_type = "10-K"
 
                                 # 💡 修正：傳入正確的 Enum 物件，而不是數字
                                 item_1a_content = sec_doc.get_section_narrative(section_string_to_enum["RISK_FACTORS"])
@@ -404,9 +403,27 @@ def run_turbo_trinity_scout(stock="NVDA"):
                                         
                                 clean_text = " ".join(valid_paragraphs)
                                 clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+                                upper_text = clean_text.upper()
                                 
-                                # 10-K 前面廢話很多，我們略過前 2000 字，取隨後的 4000 字
-                                raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[2000:6000]}")
+                                risk_idx = upper_text.find("RISK FACTOR")
+                                if risk_idx != -1:
+                                    raw_texts.append(f"SEC 10-K [風險因素]: {clean_text[risk_idx : risk_idx + 3000]}")
+                                    print(f"   ✅ 錨點命中 Risk Factors (位置: {risk_idx})")
+
+                                mda_idx = upper_text.find("MANAGEMENT'S DISCUSSION AND ANALYSIS")
+                                if mda_idx == -1:
+                                    mda_idx = upper_text.find("MANAGEMENT\u2019S DISCUSSION") # 有些用 fancy 撇號
+                                if mda_idx != -1:
+                                    second_hit = upper_text.find("MANAGEMENT", mda_idx + 200)
+                                    if second_hit != -1 and (second_hit - mda_idx) < 50000:
+                                        mda_idx = second_hit
+                                    raw_texts.append(f"SEC 10-K [營運分析]: {clean_text[mda_idx : mda_idx + 3000]}")
+                                    print(f"   ✅ 錨點命中 MD&A (位置: {mda_idx})")
+
+                                # 都找不到才用盲切，但跳過前 15000 字（封面+目錄+法律聲明）
+                                if risk_idx == -1 and mda_idx == -1:
+                                    raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
+                                    print(f"   ⚠️ 錨點全部未命中，盲切 [15000:19000]")
                                 
                         # 分流 2：外國發行人 (20-F)，使用智能段落抓取避開 iXBRL 亂碼
                         elif form == '20-F':
@@ -477,7 +494,46 @@ def run_turbo_trinity_scout(stock="NVDA"):
                         else:
                             soup = BeautifulSoup(doc_res.text, 'html.parser')
                             clean_text = soup.get_text(separator=' ', strip=True)
-                            raw_texts.append(f"SEC {form} ({dates[i]}): {clean_text[:1200]}")
+                            clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+                            upper_text = clean_text.upper()
+
+                            extracted = ""
+
+                            if form == '8-K':
+                                # 8-K 的真正內容在 "Item X.XX" 之後
+                                # 常見：Item 2.02 (財報), Item 1.01 (重大合約), Item 5.02 (人事), Item 8.01 (其他)
+                                item_match = re.search(r'ITEM\s+\d+\.\d+', upper_text)
+                                if item_match:
+                                    start = item_match.start()
+                                    extracted = clean_text[start : start + 1500]
+                                    
+                            elif form == '10-Q':
+                                # 10-Q 的 MD&A 通常在 Item 2
+                                mda_idx = upper_text.find("MANAGEMENT'S DISCUSSION")
+                                if mda_idx == -1:
+                                    mda_idx = upper_text.find("MANAGEMENT\u2019S DISCUSSION")
+                                if mda_idx != -1:
+                                    extracted = clean_text[mda_idx : mda_idx + 2000]
+
+                            elif form == '6-K':
+                                # 6-K (外國公司) 找正文開頭：通常在 "SIGNATURE" 之前的最後大段文字
+                                sig_idx = upper_text.find("SIGNATURE")
+                                if sig_idx > 2000:
+                                    # 從中間段開始抓，避開封面
+                                    mid = sig_idx // 2
+                                    extracted = clean_text[mid : mid + 1500]
+
+                            # Fallback：如果關鍵字都沒命中，跳過前 800 字（封面）再抓
+                            if not extracted:
+                                extracted = clean_text[800:2000]
+
+                            # 最終過濾：如果內容超過 60% 是法律套話，直接丟棄
+                            boilerplate_signals = ['check mark', 'indicate by', 'forward-looking', 
+                                                   'securities registered', 'commission file']
+                            boilerplate_count = sum(1 for sig in boilerplate_signals if sig in extracted.lower())
+                            
+                            if boilerplate_count < 3:
+                                raw_texts.append(f"SEC {form} ({dates[i]}): {extracted}")
                         
                         dynamic_count += 1
             print(f"   ✅ SEC 雙軌解析完成")
