@@ -254,6 +254,32 @@ def semantic_reduce(categorized_tags, symbol, company_name, sector):
     except Exception as e:
         return f"⚠️ Semantic Reduce Error: {str(e)}"
 
+def extract_section(text, start_keyword, stop_keywords, max_len=5000):
+    """從 start_keyword 開始，到 stop_keywords 任一出現就停"""
+    upper = text.upper()
+    
+    # 找起點（跳過目錄，取第二次出現）
+    first = upper.find(start_keyword)
+    if first == -1:
+        return ""
+    start = upper.find(start_keyword, first + 500)
+    if start == -1:
+        start = first
+        
+    # 找終點：掃描所有可能的「下一章標題」，取最近的
+    end = start + max_len  # 預設上限
+    for kw in stop_keywords:
+        hit = upper.find(kw, start + 200)
+        if hit != -1 and hit < end:
+            end = hit
+            
+    section = text[start:end].strip()
+    
+    # 太長的話取頭尾（給 LLM 看重點就好）
+    if len(section) > 5000:
+        return section[:2500] + " [...] " + section[-2000:]
+    return section
+
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
     # --- 0. 動態獲取公司背景 ---
@@ -405,23 +431,24 @@ def run_turbo_trinity_scout(stock="NVDA"):
                                 clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
                                 upper_text = clean_text.upper()
                                 
-                                risk_idx = upper_text.find("RISK FACTOR")
-                                if risk_idx != -1:
-                                    raw_texts.append(f"SEC 10-K [風險因素]: {clean_text[risk_idx : risk_idx + 3000]}")
-                                    print(f"   ✅ 錨點命中 Risk Factors (位置: {risk_idx})")
+                                risk_text = extract_section(clean_text, 
+                                    "RISK FACTOR", 
+                                    ["UNRESOLVED STAFF", "ITEM 1B", "ITEM 2", "PROPERTIES"]
+                                )
+                                if risk_text:
+                                    raw_texts.append(f"SEC 10-K [風險因素]: {risk_text}")
+                                    print(f"   ✅ 錨點命中 Risk Factors")
 
-                                mda_idx = upper_text.find("MANAGEMENT'S DISCUSSION AND ANALYSIS")
-                                if mda_idx == -1:
-                                    mda_idx = upper_text.find("MANAGEMENT\u2019S DISCUSSION") # 有些用 fancy 撇號
-                                if mda_idx != -1:
-                                    second_hit = upper_text.find("MANAGEMENT", mda_idx + 200)
-                                    if second_hit != -1 and (second_hit - mda_idx) < 50000:
-                                        mda_idx = second_hit
-                                    raw_texts.append(f"SEC 10-K [營運分析]: {clean_text[mda_idx : mda_idx + 3000]}")
-                                    print(f"   ✅ 錨點命中 MD&A (位置: {mda_idx})")
+                                mda_text = extract_section(clean_text, 
+                                    "MANAGEMENT'S DISCUSSION", 
+                                    ["ITEM 7A", "ITEM 8", "QUANTITATIVE AND QUALITATIVE", "FINANCIAL STATEMENTS"]
+                                )
+                                if mda_text:
+                                    raw_texts.append(f"SEC 10-K [營運分析]: {mda_text}")
+                                    print(f"   ✅ 錨點命中 MD&A")
 
                                 # 都找不到才用盲切，但跳過前 15000 字（封面+目錄+法律聲明）
-                                if risk_idx == -1 and mda_idx == -1:
+                                if not risk_text and not mda_text:
                                     raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
                                     print(f"   ⚠️ 錨點全部未命中，盲切 [15000:19000]")
                                 
@@ -445,20 +472,23 @@ def run_turbo_trinity_scout(stock="NVDA"):
                             upper_text = clean_text.upper() # 轉大寫方便搜尋
 
                             # 🎯 第一刀：尋找「風險因素 (Risk Factors)」錨點 (通常是 Item 3.D)
-                            risk_idx = upper_text.find("RISK FACTOR")
-                            if risk_idx != -1:
-                                raw_texts.append(f"SEC 20-F [風險因素]: {clean_text[risk_idx : risk_idx + 3000]}")
+                            risk_text = extract_section(clean_text, 
+                                "RISK FACTOR", 
+                                ["ITEM 4", "ITEM 5", "INFORMATION ON THE COMPANY"]
+                            )
+                            if risk_text:
+                                raw_texts.append(f"SEC 20-F [風險因素]: {risk_text}")
                             else:
                                 # 找不到標題盲切：跳過前面 1萬字 的封面廢話，抓取中間段落
                                 raw_texts.append(f"SEC 20-F [年報摘要A]: {clean_text[10000 : 13000]}")
 
                             # 🎯 第二刀：尋找「營運分析 (Operating and Financial Review)」錨點 (通常是 Item 5)
-                            op_idx = upper_text.find("OPERATING AND FINANCIAL REVIEW")
-                            if op_idx == -1:
-                                op_idx = upper_text.find("ITEM 5") # 備用標題
-                                
-                            if op_idx != -1:
-                                raw_texts.append(f"SEC 20-F [營運分析]: {clean_text[op_idx : op_idx + 3000]}")
+                            mda_text = extract_section(clean_text, 
+                                "OPERATING AND FINANCIAL REVIEW", 
+                                ["ITEM 6", "ITEM 7", "DIRECTORS", "MAJOR SHAREHOLDERS"]
+                            )
+                            if mda_text:
+                                raw_texts.append(f"SEC 20-F [營運分析]: {mda_text}")
                             else:
                                 # 找不到標題盲切：再往後抓一段
                                 raw_texts.append(f"SEC 20-F [年報摘要B]: {clean_text[13000 : 16000]}")
