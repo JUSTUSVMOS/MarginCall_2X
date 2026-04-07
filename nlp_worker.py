@@ -585,48 +585,45 @@ def run_turbo_trinity_scout(stock="NVDA"):
             print(f"  {i+1}. {s[:150]}...")
     print("\n--- 🧠 啟動 GPU 語意分析 ---")
 
-    # 並行分析
+    # --- 分組合併，只跑 4 次 LLM ( Map 階段 ) ---
     categorized_tags = {"SEC": [], "Macro": [], "Retail": []}
-    platform_scores = {"Reddit": 0.0, "StockTwits": 0.0, "Macro": 0.0, "SEC": 0.0}
-    platform_counts = {"Reddit": 0, "StockTwits": 0, "Macro": 0, "SEC": 0}
-    SENT_MAP = {"strong_bullish": 1.0, "mild_bullish": 0.5, "neutral": 0.0, "mild_bearish": 0.0, "strong_bearish": -1.0}
+    SENT_MAP = {
+        "strong_bullish": 1.0, "mild_bullish": 0.5, "neutral": 0.0, 
+        "mild_bearish": -0.5, "strong_bearish": -1.0
+    }
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        futures = {executor.submit(extract_insight_parallel, t, stock): t for t in raw_texts}
-        for f in concurrent.futures.as_completed(futures):
-            src = futures[f]
-            res = f.result()
-            score = SENT_MAP.get(res['sentiment'], 0.0)
-            tags = res.get('tags', [])
+    groups = {
+        "SEC":    [t for t in raw_texts if t.startswith("SEC")],
+        "Macro":  [t for t in raw_texts if t.startswith("Macro")],
+        "Retail": [t for t in raw_texts if t.startswith("Reddit") or t.startswith("StockTwits")],
+    }
+
+    platform_scores = {}
+    for category, texts in groups.items():
+        if not texts:
+            platform_scores[category] = 0.0
+            continue
             
-            # 👇 依照來源，把標籤放入不同的籃子
-            if src.startswith("Reddit") or src.startswith("StockTwits"): 
-                if src.startswith("Reddit"):
-                    platform_scores["Reddit"] += score
-                    platform_counts["Reddit"] += 1
-                else:
-                    platform_scores["StockTwits"] += score
-                    platform_counts["StockTwits"] += 1
-                categorized_tags["Retail"].extend(tags)
-            elif src.startswith("Macro"): 
-                platform_scores["Macro"] += score
-                platform_counts["Macro"] += 1
-                categorized_tags["Macro"].extend(tags)
-            elif src.startswith("SEC"): 
-                platform_scores["SEC"] += score
-                platform_counts["SEC"] += 1
-                categorized_tags["SEC"].extend(tags)
+        # 動態分配預算：資料多每筆少看，資料少每筆多看
+        budget_per_item = 3000 // max(len(texts), 1)
+        budget_per_item = max(budget_per_item, 150)
+        budget_per_item = min(budget_per_item, 500)
+        
+        combined = "\n---\n".join([t[:budget_per_item] for t in texts])
+        combined = combined[:4000]
+        
+        print(f"    🧠 分析 {category} ( {len(texts)} 篇合併 )...")
+        res = extract_insight_parallel(combined, stock)
+        score = SENT_MAP.get(res['sentiment'], 0.0)
+        tags = res.get('tags', [])
+        
+        platform_scores[category] = score
+        categorized_tags[category].extend(tags)
 
-    # 計算各平台的平均情緒強度
-    a_red = (platform_scores["Reddit"] / platform_counts["Reddit"]) if platform_counts["Reddit"] > 0 else 0.0
-    a_stw = (platform_scores["StockTwits"] / platform_counts["StockTwits"]) if platform_counts["StockTwits"] > 0 else 0.0
-    a_mac = (platform_scores["Macro"] / platform_counts["Macro"]) if platform_counts["Macro"] > 0 else 0.0
-    a_sec = (platform_scores["SEC"] / platform_counts["SEC"]) if platform_counts["SEC"] > 0 else 0.0
-    
-    # 組合 Retail (散戶) 分數：Reddit 佔一半，StockTwits 佔一半
-    a_retail = (a_red + a_stw) / 2.0 if (platform_counts["Reddit"] > 0 or platform_counts["StockTwits"] > 0) else 0.0
+    a_sec = platform_scores.get("SEC", 0.0)
+    a_mac = platform_scores.get("Macro", 0.0)
+    a_retail = platform_scores.get("Retail", 0.0)
 
-    # 嚴格的專家權重公式：散戶 20% (已融合兩種來源), 媒體 30%, 官方 50%
     nlp_alpha = (a_retail * 0.2) + (a_mac * 0.3) + (a_sec * 0.5)
 
     # 🚨 核彈級利空熔斷機制 (Tail-Risk Override)
