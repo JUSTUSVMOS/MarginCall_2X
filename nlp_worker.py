@@ -23,9 +23,6 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY")
 
 from finnlp.data_sources.news.finnhub_date_range import Finnhub_Date_Range
-from finnlp.data_sources.social_media.stocktwits_streaming import Stocktwits_Streaming
-from finnlp.data_sources.company_announcement.sec import SEC_Announcement
-from finnlp.data_sources.sec_filings.sec_filings import SECExtractor
 from bs4 import BeautifulSoup
 import re
 
@@ -37,6 +34,14 @@ SEC_HEADERS = {
 
 # --- 1. 資料庫配置 ---
 DB_FILE = os.path.join(PROJECT_ROOT, "portfolio.db")
+
+def check_ollama():
+    """快速檢查 Ollama 是否存活，避免浪費 5 分鐘等超時"""
+    try:
+        r = requests.get("http://localhost:11434/api/tags", timeout=5)
+        return r.status_code == 200
+    except:
+        return False
 
 def get_cik(symbol):
     symbol = symbol.upper().replace(".", "-") # 把 BRK.B 轉成 BRK-B
@@ -377,7 +382,11 @@ def adjust_retail_score(raw_score, source_count):
 
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
-    # ... (前段代碼保持不變)
+    # --- 0. Ollama 預檢 ---
+    if not check_ollama():
+        print("❌ Ollama 未啟動或無法連線，中止分析。")
+        sys.exit(1)
+
     # --- 0. 動態獲取公司背景 ---
     try:
         ticker_info = yf.Ticker(stock).info
@@ -474,80 +483,43 @@ def run_turbo_trinity_scout(stock="NVDA"):
                 if form in ['10-K', '20-F']:
                     acc_num_raw = str(accessions[i])
                     acc_num = acc_num_raw.replace('-', '')
-                    annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{acc_num_raw}.txt"
-                    print(f"   🎯 找到最新年報 ({form}, 發布於 {dates[i]})，準備解析...")
+                    doc_name = docs[i]
+                    annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
+                    print(f"  🎯 找到最新年報 ({form}, 發布於 {dates[i]}), 下載 primaryDocument...")
 
-                    doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=15)
+                    doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=30)
                     if doc_res.status_code == 200:
-                        # 分流 1：美國本土公司 (10-K)，使用 FinNLP 精準打擊
                         if form == '10-K':
-                            try:
-                                from finnlp.data_sources.sec_filings.prepline_sec_filings.sec_document import SECDocument
-                                # 🎯 匯入 FinNLP 官方的 Enum 字典
-                                from finnlp.data_sources.sec_filings.prepline_sec_filings.sections import section_string_to_enum
+                            soup = BeautifulSoup(doc_res.text, 'html.parser')
+                            valid_paragraphs = []
+                            for p in soup.find_all(['p', 'span']):
+                                text = p.get_text(separator=' ', strip=True)
+                                if len(text) > 120 and 'us-gaap:' not in text.lower():
+                                    valid_paragraphs.append(text)
 
-                                sec_doc = SECDocument.from_string(doc_res.text)
+                            clean_text = " ".join(valid_paragraphs)
+                            clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
 
-                                # 💡 修正：傳入正確的 Enum 物件，而不是數字
-                                item_1a_content = sec_doc.get_section_narrative(section_string_to_enum["RISK_FACTORS"])
-                                item_7_content = sec_doc.get_section_narrative(section_string_to_enum["MANAGEMENT_DISCUSSION"])
+                            risk_text = extract_section(clean_text,
+                                "RISK FACTOR",
+                                ["UNRESOLVED STAFF", "ITEM 1B", "ITEM 2", "PROPERTIES"]
+                            )
+                            if risk_text:
+                                raw_texts.append(f"SEC 10-K [風險因素]: {risk_text}")
+                                print(f"      ✅ 錨點命中 Risk Factors")
 
-                                sec_extracted_texts = []
-                                if item_1a_content:
-                                    text_1a = " ".join([item["text"] for item in item_1a_content if isinstance(item, dict) and "text" in item]) if isinstance(item_1a_content, list) else str(item_1a_content)
-                                    if len(text_1a) > 200:
-                                        safe_start = 2500 if len(text_1a) > 5000 else 0
-                                        sec_extracted_texts.append(f"SEC 10-K [風險因素]: {text_1a[safe_start : safe_start+2500]}")
-                                        print(f"   ✅ FinNLP 成功抓取 RISK_FACTORS (長度: {len(text_1a)})")
+                            mda_text = extract_section(clean_text,
+                                "MANAGEMENT'S DISCUSSION",
+                                ["ITEM 7A", "ITEM 8", "QUANTITATIVE AND QUALITATIVE", "FINANCIAL STATEMENTS"]
+                            )
+                            if mda_text:
+                                raw_texts.append(f"SEC 10-K [營運分析]: {mda_text}")
+                                print(f"      ✅ 錨點命中 MD&A")
 
-                                if item_7_content:
-                                    text_7 = " ".join([item["text"] for item in item_7_content if isinstance(item, dict) and "text" in item]) if isinstance(item_7_content, list) else str(item_7_content)
-                                    if len(text_7) > 200:
-                                        safe_start = 2500 if len(text_7) > 5000 else 0
-                                        sec_extracted_texts.append(f"SEC 10-K [營運分析]: {text_7[safe_start : safe_start+2500]}")
-                                        print(f"   ✅ FinNLP 成功抓取 MD&A (長度: {len(text_7)})")
+                            if not risk_text and not mda_text:
+                                raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
+                                print(f"      ⚠️ 錨點全部未命中，盲切 [15000:19000]")
 
-                                if not sec_extracted_texts:
-                                    raise ValueError("FinNLP 提取內容過短或為空")
-                                
-                                raw_texts.extend(sec_extracted_texts)
-
-                            except Exception as parse_e:
-                                print(f"   ⚠️ FinNLP 解析 10-K 失敗或內容為空 ({parse_e})，自動降級啟用智能段落解析...")
-                                # 啟動我們的降級神技：智能段落抓取 (Bypass iXBRL)
-                                soup = BeautifulSoup(doc_res.text, 'html.parser')
-                                valid_paragraphs = []
-                                for p in soup.find_all(['p', 'span']):
-                                    text = p.get_text(separator=' ', strip=True)
-                                    # 過濾掉太短的數字表格和包含 gaap 會計標籤的亂碼
-                                    if len(text) > 120 and 'us-gaap:' not in text.lower():
-                                        valid_paragraphs.append(text)
-                                        
-                                clean_text = " ".join(valid_paragraphs)
-                                clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
-                                upper_text = clean_text.upper()
-                                
-                                risk_text = extract_section(clean_text, 
-                                    "RISK FACTOR", 
-                                    ["UNRESOLVED STAFF", "ITEM 1B", "ITEM 2", "PROPERTIES"]
-                                )
-                                if risk_text:
-                                    raw_texts.append(f"SEC 10-K [風險因素]: {risk_text}")
-                                    print(f"   ✅ 錨點命中 Risk Factors")
-
-                                mda_text = extract_section(clean_text, 
-                                    "MANAGEMENT'S DISCUSSION", 
-                                    ["ITEM 7A", "ITEM 8", "QUANTITATIVE AND QUALITATIVE", "FINANCIAL STATEMENTS"]
-                                )
-                                if mda_text:
-                                    raw_texts.append(f"SEC 10-K [營運分析]: {mda_text}")
-                                    print(f"   ✅ 錨點命中 MD&A")
-
-                                # 都找不到才用盲切，但跳過前 15000 字（封面+目錄+法律聲明）
-                                if not risk_text and not mda_text:
-                                    raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
-                                    print(f"   ⚠️ 錨點全部未命中，盲切 [15000:19000]")
-                                
                         # 分流 2：外國發行人 (20-F)，使用智能段落抓取避開 iXBRL 亂碼
                         elif form == '20-F':
                             print("   ℹ️ 20-F 外國年報啟用智能段落解析 (過濾 iXBRL)...")

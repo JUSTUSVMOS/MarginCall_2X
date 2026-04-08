@@ -219,6 +219,7 @@ def add_dynamic_metrics(df, column_name, window=120):
     )
     df[f'{column_name}_10MA'] = df[column_name].rolling(window=10).mean()
     df[f'{column_name}_20MA'] = df[column_name].rolling(window=20).mean()
+    df[f'{column_name}_200MA'] = df[column_name].rolling(window=200).mean()
     return df
 
 def fetch_all_market_data():
@@ -285,7 +286,7 @@ def get_global_risk_radar() -> str:
         spx = latest.get('SPX', 0)
         ma10 = latest.get('SPX_10MA', 0)
         ma20 = latest.get('SPX_20MA', 0)
-        ma200 = latest.get('SPX_200MA', 0) # 假設有 200MA，若無則 fallback
+        ma200 = latest.get('SPX_200MA', 0) 
 
         if ma200 > 0 and spx < ma200:
             risk_multiplier *= 1.4
@@ -299,14 +300,14 @@ def get_global_risk_radar() -> str:
 
         # 轉換成 0-100 分
         # 1.0 = 0分 (無風險)，3.0+ = 100分 (極端風險)
-        score = min(100, int((risk_multiplier - 1.0) / 2.0 * 100))
+        score = max(0, min(100, int((risk_multiplier - 1.0) / 2.0 * 100)))
         state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
         
         msg = f"📊 *【MarginCall_2X 全局雷達】*\n🔥 風險分數：{score} ({state})\n"
         msg += "\n".join(reasons) if reasons else "🟢 指標目前健康"
         
         msg += f"\n\n- DIX_PR: {latest.get('dix_PR', 0):.2f}\n- GEX: {final_gex:.2f}B\n- Sentiment: {sent_label}({sent_score:.2f})"
-        msg += f"\n- SPX: {spx:.1f} (10MA:{ma10:.1f}, 20MA:{ma20:.1f})"
+        msg += f"\n- SPX: {spx:.1f} (10MA:{ma10:.1f}, 20MA:{ma20:.1f}, 200MA:{ma200:.1f})"
         
         _risk_cache["report"] = msg
         _risk_cache["timestamp"] = current_time

@@ -27,53 +27,33 @@ genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 def detect_symbols(text: str) -> list:
     """
-    【核武級降級策略 V2】全彈發射 -> 自動退避 -> 指數加權重試。
+    Regex-First: 先用正則快速抓，抓不到才問 LLM (省 API quota) 。
     """
-    symbols = []
+    # 1. Regex 先行 (零成本)
+    symbols = _regex_fallback(text)
+    if symbols:
+        return symbols
+
+    # 2. Regex 沒抓到，才用 LLM (只試一個輕量模型)
     if not genai_client:
-        return _regex_fallback(text)
+        return []
 
-    # 1. 定義降級鏈 (由強至穩)
-    fallback_chain = [
-        "gemini-3.1-pro-preview",    # 最強推理
-        "gemini-2.5-pro",            # 旗艦生力軍
-        "gemini-2.5-flash",          # 次世代輕量
-        "gemini-3.1-flash-lite-preview", # 測試版輕量
-        "gemini-2.0-flash",          # 目前效能最穩
-        "gemini-flash-latest"        # 最後防線 (自動指向最新穩定版)
-    ]
+    try:
+        prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如：TSLA, 2330.TW, BRK-B) 。只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字：{text}"
+        response = genai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        res_text = response.text.strip()
+        if res_text and res_text != "None":
+            symbols = [s.strip().upper() for s in res_text.split(',') if s.strip()]
+            if symbols:
+                logger.info(f"LLM detected symbols: {symbols}")
+                return list(set(symbols))
+    except Exception as e:
+        logger.warning(f"LLM symbol detection failed: {e}")
 
-    import time
-    prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如: TSLA, 2330.TW, BRK-B)。只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字：{text}"
-
-    for i, model_name in enumerate(fallback_chain):
-        try:
-            # 如果是前兩級模型報錯過，給一點點緩衝時間 (Exponential Backoff 概念)
-            if i > 0: time.sleep(0.5 * i) 
-            
-            response = genai_client.models.generate_content(
-                model=model_name, 
-                contents=prompt
-            )
-            res_text = response.text.strip()
-            if res_text and res_text != "None":
-                symbols = [s.strip().upper() for s in res_text.split(',') if s.strip()]
-                if symbols:
-                    logger.info(f"Successfully detected symbols using {model_name}: {symbols}")
-                    return list(set(symbols))
-        except Exception as e:
-            err_msg = str(e)
-            if "429" in err_msg:
-                logger.warning(f"⚠️ {model_name} Quota Exceeded (429). Falling down...")
-            elif "503" in err_msg:
-                logger.warning(f"⚠️ {model_name} Service Unavailable (503). Falling down...")
-            else:
-                logger.warning(f"⚠️ {model_name} Failed: {err_msg}. Next...")
-            continue
-
-    # --- 2. 最終 Regex 備援 (Tier 5) ---
-    return _regex_fallback(text)
-
+    return []
 def _regex_fallback(text: str) -> list:
     """Regex 備援邏輯"""
     symbols = []

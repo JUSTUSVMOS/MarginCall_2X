@@ -68,29 +68,47 @@ AVAILABLE_MODELS = [
     'gemini-flash-latest'
 ]
 
-# --- AI 核心工具箱統一配置 ---
+# --- 工具呼叫追蹤器 (用於 Debug 卡住問題) ---
+def tool_wrapper(func):
+    from functools import wraps
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        arg_str = f"args={args}, kwargs={kwargs}"
+        logger.info(f"🛠️ [TOOL_START] 正在呼叫工具: {func.__name__} | 參數: {arg_str[:100]}...")
+        start_t = time.time()
+        try:
+            result = func(*args, **kwargs)
+            duration = time.time() - start_t
+            logger.info(f"✅ [TOOL_DONE] {func.__name__} 執行完畢 (耗時: {duration:.2f}s)")
+            return result
+        except Exception as e:
+            logger.error(f"❌ [TOOL_ERROR] {func.__name__} 報錯: {e}")
+            raise e
+    return wrapper
+
+# --- AI 核心工具箱統一配置 (套用追蹤器) ---
 AGENT_TOOLS = [
-    portfolio.update_position, portfolio.get_portfolio_raw_data, 
-    portfolio.calculate_pnl, portfolio.get_exchange_rate,
-    market.get_live_price, market.get_us_realtime_insight,
-    market.resolve_symbol_identity, 
-    market.get_market_sentiment, market.get_stock_news,
-    market.get_fundamental_data, market.get_market_history,
-    market.get_technical_analysis, 
-    fubon.get_market_hot_stocks, fubon.get_intraday_trend,
-    fubon.get_market_trades, fubon.get_price_volumes,
-    fubon.get_quote_and_orderbook, fubon.get_historical_stats, 
-    fubon.get_txo_sentiment, 
-    risk.get_global_risk_radar, risk.get_v_turn_confirmation
+    tool_wrapper(portfolio.update_position), tool_wrapper(portfolio.get_portfolio_raw_data), 
+    tool_wrapper(portfolio.calculate_pnl), tool_wrapper(portfolio.get_exchange_rate),
+    tool_wrapper(market.get_live_price), tool_wrapper(market.get_us_realtime_insight),
+    tool_wrapper(market.resolve_symbol_identity), 
+    tool_wrapper(market.get_market_sentiment), tool_wrapper(market.get_stock_news),
+    tool_wrapper(market.get_fundamental_data), tool_wrapper(market.get_market_history),
+    tool_wrapper(market.get_technical_analysis), 
+    tool_wrapper(fubon.get_market_hot_stocks), tool_wrapper(fubon.get_intraday_trend),
+    tool_wrapper(fubon.get_market_trades), tool_wrapper(fubon.get_price_volumes),
+    tool_wrapper(fubon.get_quote_and_orderbook), tool_wrapper(fubon.get_historical_stats), 
+    tool_wrapper(fubon.get_txo_sentiment), 
+    tool_wrapper(risk.get_global_risk_radar), tool_wrapper(risk.get_v_turn_confirmation)
 ]
 
 def get_dynamic_models():
     models = AVAILABLE_MODELS.copy()
     if market.is_us_market_open() or market.is_tw_market_open():
-        # 開盤時優先使用 3.1 Pro 進行深度分析
-        if 'gemini-3.1-pro-preview' in models:
-            models.remove('gemini-3.1-pro-preview')
-            models.insert(0, 'gemini-3.1-pro-preview')
+        # 開盤時優先使用 2.0 Flash 進行快速反應
+        if 'gemini-2.0-flash' in models:
+            models.remove('gemini-2.0-flash')
+            models.insert(0, 'gemini-2.0-flash')
     return list(dict.fromkeys(models)) # 去重
 
 def create_agent_chat(model_name, history=None):
@@ -118,9 +136,16 @@ def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
             worker_path = os.path.join(script_dir, "nlp_worker.py")
             cmd = [python_exe, worker_path, symbol]
             
-            # 讓背景進程耐心跑完，不設超時
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=300)  # 5 分鐘硬上限
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                logger.error(f"❌ [情報局] {symbol} 超時被強制終止")
+                if chat_id:
+                    bot.send_message(chat_id, f"❌ {symbol} 情報收割超時 (>5min)，請檢查 Ollama 是否正常運行。")
+                return
             
             if process.returncode == 0:
                 logger.info(f"✅ [情報局] {symbol} 收割完成")
@@ -266,6 +291,16 @@ def handle_all_text(message):
 
     for i, model_name in enumerate(current_models):
         try:
+            # 更新狀態
+            if i > 0:
+                try:
+                    bot.edit_message_text(
+                        chat_id=message.chat.id, 
+                        message_id=sent_msg.message_id, 
+                        text=f"🔄 正在切換至備援引擎: {model_name}..."
+                    )
+                except: pass
+
             chat = client.chats.create(
                 model=model_name,
                 config=types.GenerateContentConfig(
@@ -274,7 +309,35 @@ def handle_all_text(message):
                     temperature=0.3, 
                 )
             )
-            response = chat.send_message(user_text)
+            
+            # 使用線程實作 45 秒超時，防止工具調用無限循環
+            response_container = []
+            exception_container = []
+            
+            def _ask_llm():
+                try:
+                    res = chat.send_message(user_text)
+                    response_container.append(res)
+                except Exception as ex:
+                    exception_container.append(ex)
+
+            llm_thread = threading.Thread(target=_ask_llm)
+            llm_thread.start()
+            llm_thread.join(timeout=45) # 45 秒硬上限
+
+            if llm_thread.is_alive():
+                # 超時處理
+                logger.warning(f"Engine {model_name} timeout (>45s).")
+                dead_engines[model_name] = time.time() + 60
+                continue
+            
+            if exception_container:
+                raise exception_container[0]
+            
+            if not response_container:
+                continue
+
+            response = response_container[0]
             final_text = response.text if response.text else "大腦空白。"
             
             try:
