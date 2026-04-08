@@ -291,24 +291,42 @@ def get_us_realtime_insight(symbol: str) -> str:
 
 def get_market_sentiment() -> str:
     indicators = {
-        "ES=F": "標普期", "NQ=F": "那指期", "YM=F": "道瓊期",
-        "WTX=F": "台指期", "TSM": "台積ADR", # 補上台股核心領先指標
-        "^TNX": "美債10Y", "DX-Y.NYB": "美元", "GC=F": "黃金",
-        "^VIX": "恐慌", "BTC-USD": "BTC"
+        "^TWII": "台股(加權)", "TSM": "台積ADR", "EWT": "台灣ETF",
+        "^GSPC": "標普500(大盤)", "^IXIC": "那指(科技)", "^SOX": "費半(基石)", "^RUT": "羅素2000(水溫)",
+        "^TNX": "美債10Y(重力)", "TLT": "20Y美債(避風港)",
+        "DX-Y.NYB": "美元(水龍頭)", "TWD=X": "台幣(外資)", "JPY=X": "日圓(套利)",
+        "^VIX": "恐慌(絞肉機)", "HYG": "高收債(風險)", "XLU": "公用事業(防禦)",
+        "GC=F": "黃金(避險)", "CL=F": "原油(通膨)", "BZ=F": "布蘭特(地緣)", "HG=F": "銅(景氣)",
+        "BTC-USD": "BTC"
     }
-    report = "【🌐 全球資金流向與台美連動】\n"
+    report = "【🌐 全球宏觀資金流向雷達】\n"
     for symbol, name in indicators.items():
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="5d")
+            hist = ticker.history(period="10d")
             if not hist.empty:
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 change = ((curr - prev) / prev) * 100
                 
-                # 針對 TSM 與 台指期 增加戰術標記
-                emoji = '🚀' if change > 1.5 else '📈' if change > 0 else '📉' if change > -1.5 else '💀'
-                report += f"{emoji} {name}: {curr:.2f} ({change:+.2f}%)\n"
+                # 計算量能比 (今日成交量 / 前 5 日平均成交量)
+                vol_ratio_str = ""
+                if 'Volume' in hist.columns:
+                    today_vol = hist['Volume'].iloc[-1]
+                    avg_vol = hist['Volume'].iloc[-6:-1].mean()
+                    if avg_vol > 0:
+                        v_ratio = today_vol / avg_vol
+                        # 過濾掉異常過大的期貨換月雜訊
+                        if 0.1 < v_ratio < 10:
+                            vol_ratio_str = f" [量:{v_ratio:.1f}x]"
+
+                # 判定狀態圖示
+                if change > 1.5: emoji = '🚀'
+                elif change > 0: emoji = '📈'
+                elif change < -1.5: emoji = '💀'
+                else: emoji = '📉'
+                
+                report += f"{emoji} {name}: {curr:.2f} ({change:+.2f}%){vol_ratio_str}\n"
         except Exception as e:
             logger.debug(f"Market sentiment fetch failed for {symbol}: {e}")
     return report

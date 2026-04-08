@@ -9,12 +9,12 @@ import re  # 補回此行
 from google import genai
 import engine_market as market
 import engine_risk as risk
+from config import DB_FILE
 
 # 設定日誌
 logger = logging.getLogger(__name__)
 
 # --- 0. 資料庫路徑與初始化 ---
-DB_FILE = os.path.join(os.path.dirname(__file__), "portfolio.db")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -25,16 +25,49 @@ def get_my_user_id():
 bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
 genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
+# --- 0. 全域 Regex 配置 (預編譯提高效能) ---
+
+# 俗稱與中文對照表 (Lookup Table)：將口語直接對應 yfinance 標準代號
+TICKER_ALIASES = {
+    # 科技巨頭 & 常見標的
+    'APPLE': 'AAPL', '蘋果': 'AAPL',
+    'TESLA': 'TSLA', '特斯拉': 'TSLA',
+    'NVIDIA': 'NVDA', '輝達': 'NVDA', 'NV': 'NVDA',
+    'BROADCOM': 'AVGO', '博通': 'AVGO',
+    'PALANTIR': 'PLTR',
+    'TELEDYNE': 'TDY',
+    'BERKSHIRE': 'BRK-B', '波克夏': 'BRK-B',
+    
+    # 台股口語 (直接轉好 .TW)
+    '台積電': '2330.TW', '神山': '2330.TW',
+    '聯發科': '2454.TW', '發哥': '2454.TW'
+}
+
+# 提取對照表的 keys，組成 Regex 條件 (例如：APPLE|蘋果|TESLA...)
+alias_pattern = '|'.join(map(re.escape, TICKER_ALIASES.keys()))
+
+# 支援：1.自訂中英俗稱 2.純英文字母(1-6碼) 3.台股數字/ETF(4-6碼數字，可帶字母)
+# 使用 Lookaround (?<!...) (?!) 確保不會被中文字黏住而抓不到
+regex_str = rf'(?<![a-zA-Z0-9])({alias_pattern}|[a-zA-Z]{{1,6}}|\d{{4,6}}[A-Za-z]?|\d{{4}}\.(?:tw|two|TW|TWO))(?![a-zA-Z0-9])'
+SYMBOL_PATTERN = re.compile(regex_str, re.IGNORECASE)
+
+# 黑名單：防止 Regex 抓到常用金融術語
+STOP_WORDS = {
+    'BUY', 'SELL', 'CALL', 'PUT', 'INFO', 'NEWS', 'CHAT', 'THE', 'AND', 
+    'FOR', 'STOCK', 'PRICE', 'GOOD', 'BAD', 'RISK', 'TECH', 'USER', 'LIST',
+    'LONG', 'SHORT', 'OPEN', 'CLOSE', 'HIGH', 'LOW', 'VOL', 'BULL', 'BEAR'
+}
+
 def detect_symbols(text: str) -> list:
     """
-    Regex-First: 先用正則快速抓，抓不到才問 LLM (省 API quota) 。
+    Regex-First: 
+    1. 使用不分大小寫的 Regex 抓取候選字。
+    2. 若 Regex 沒抓到，才將原始文字丟給 LLM 判斷語意。
     """
-    # 1. Regex 先行 (零成本)
     symbols = _regex_fallback(text)
     if symbols:
         return symbols
 
-    # 2. Regex 沒抓到，才用 LLM (只試一個輕量模型)
     if not genai_client:
         return []
 
@@ -54,15 +87,35 @@ def detect_symbols(text: str) -> list:
         logger.warning(f"LLM symbol detection failed: {e}")
 
     return []
+
 def _regex_fallback(text: str) -> list:
-    """Regex 備援邏輯"""
-    symbols = []
-    # 尋找 2-5 個大寫字母 (美股) 或 數字.TW/TWO (台股)
-    regex_patterns = [r'\b[A-Z]{2,5}\b', r'\b\d{4}\.TW\b', r'\b\d{4}\.TWO\b']
-    for p in regex_patterns:
-        matches = re.findall(p, text)
-        symbols.extend(matches)
-    return list(set(symbols))
+    """
+    優化後的 Regex 邏輯：
+    1. 查表轉換：若是俗稱，直接轉為標準代號。
+    2. 自動補綴：若是台股代號 (4-6碼數字/ETF) 且未帶後綴，自動補上 .TW。
+    3. 排除雜訊：過濾掉 STOP_WORDS 黑名單。
+    """
+    matches = SYMBOL_PATTERN.findall(text)
+    
+    results = []
+    for m in matches:
+        upper_m = m.upper()
+        
+        # 1. 優先檢查是否在俗稱對照表內 (完全不花 AI 額度)
+        if upper_m in TICKER_ALIASES:
+            results.append(TICKER_ALIASES[upper_m])
+            continue
+            
+        # 2. 如果不是俗稱，檢查是否為誤抓的英文黑名單
+        if upper_m not in STOP_WORDS:
+            # 3. 如果是 4~6 碼純數字 (或數字加一字母如 00981A)，且沒有小數點
+            # 代表是台股口語，自動幫 yfinance 補齊格式
+            if re.match(r'^\d{4,6}[A-Z]?$', upper_m) and '.' not in upper_m:
+                upper_m = f"{upper_m}.TW" 
+                
+            results.append(upper_m)
+            
+    return list(set(results))
 
 def fetch_nlp_alpha(symbol: str) -> dict:
     """

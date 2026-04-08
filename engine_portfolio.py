@@ -4,9 +4,10 @@ import time
 import os
 import csv
 import yfinance as yf
+import fubon
 from typing import Dict, List
+from config import DB_FILE
 
-DB_FILE = "portfolio.db"
 CSV_BACKUP = "my_portfolio.csv"
 
 # --- 匯率快取 ---
@@ -28,7 +29,7 @@ def get_exchange_rate() -> float:
 
 # --- 資料庫初始化與遷移 ---
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(str(DB_FILE))
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS portfolio (
@@ -197,8 +198,6 @@ def get_symbol_name(symbol: str) -> str:
 
     _AUTO_NAME_CACHE[symbol] = name
     return name
-
-import fubon
 
 def get_portfolio_raw_data() -> str:
     """獲取倉位原始數據，並與富邦實體帳戶自動同步 (庫存 + 成本 + 銀行餘額)"""

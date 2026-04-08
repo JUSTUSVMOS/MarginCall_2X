@@ -1,3 +1,12 @@
+from pathlib import Path
+
+# 鎖定專案根目錄 (config.py 所在位置)
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+# 統一 DB 與 Log 路徑為絕對路徑
+DB_FILE = PROJECT_ROOT / "portfolio.db"
+LOG_FILE = PROJECT_ROOT / "bot.log"
+
 # 根據心情分類的垃圾話
 WDT_MESSAGES = {
     "normal": [

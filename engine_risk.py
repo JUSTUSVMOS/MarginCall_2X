@@ -13,12 +13,13 @@ from datetime import datetime, timedelta
 # 設定日誌
 logger = logging.getLogger(__name__)
 
-DB_FILE = "portfolio.db"
+from config import DB_FILE
+
 db_lock = threading.Lock() # 【V4 加固】資料庫互斥鎖
 
 def init_market_db():
     with db_lock:
-        conn = sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(str(DB_FILE))
         cursor = conn.cursor()
         # 【V5 終極加固】WAL 模式啟動指令
         cursor.execute("PRAGMA journal_mode=WAL;")
@@ -110,7 +111,11 @@ def update_market_db():
         last_date_str = last_date_df['last_date'].iloc[0]
         period = "1y" if not last_date_str else "7d"
         
-        tickers = {'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW'}
+        tickers = {
+            'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 
+            'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW',
+            'SOX': '^SOX', 'HYG': 'HYG', 'OIL': 'CL=F'
+        }
         yf_dfs = []
         for name, ticker in tickers.items():
             try:
@@ -142,9 +147,11 @@ def update_market_db():
         conn_cursor = conn.cursor()
         for date, row in final_new_df.iterrows():
             conn_cursor.execute("""
-                INSERT OR REPLACE INTO market_history (date, SPX, VIX, DXY, TNX, GOLD, SKEW, dix, gex)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (date, row['SPX'], row['VIX'], row['DXY'], row['TNX'], row['GOLD'], row['SKEW'], row['dix'], row['gex']))
+                INSERT OR REPLACE INTO market_history (date, SPX, VIX, DXY, TNX, GOLD, SKEW, SOX, HYG, OIL, dix, gex)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (date, row.get('SPX'), row.get('VIX'), row.get('DXY'), row.get('TNX'), 
+                  row.get('GOLD'), row.get('SKEW'), row.get('SOX'), row.get('HYG'), 
+                  row.get('OIL'), row.get('dix'), row.get('gex')))
         conn.commit()
     except Exception as e:
         logger.error(f"Market DB update failed: {e}")
@@ -430,3 +437,90 @@ def get_v_turn_confirmation() -> str:
         except Exception as e:
             logger.error(f"V-turn confirmation failed: {e}")
             return f"❌ V 轉監測失敗: {e}"
+
+def get_capital_flow_matrix() -> str:
+    """
+    【宏觀資金流向矩陣】
+    專門用於計算不同板塊、資產間的「比值 (Ratios)」與「量能」，來判斷資金的流向與避險情緒。
+    回傳一段結構化的文字戰報，提供給 AI 進行深度解讀。
+    """
+    try:
+        symbols = ['^SOX', 'XLU', 'HG=F', 'GC=F', '^TNX', 'TLT', 'DX-Y.NYB', 'TWD=X', 'JPY=X', '^VIX']
+        hist_data = yf.download(symbols, period="1mo", group_by='ticker', progress=False)
+        
+        def get_recent(ticker_data):
+            if ticker_data is None or ticker_data.empty: return None, None
+            df = ticker_data.dropna()
+            if df.empty or len(df) < 2: return None, None
+            return float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
+            
+        def get_vol_ratio(ticker_data):
+            if ticker_data is None or ticker_data.empty or 'Volume' not in ticker_data: return 1.0
+            df = ticker_data.dropna()
+            if len(df) < 6: return 1.0
+            today_vol = float(df['Volume'].iloc[-1])
+            avg_vol = float(df['Volume'].iloc[-6:-1].mean())
+            if avg_vol > 0:
+                v_ratio = today_vol / avg_vol
+                return v_ratio if 0.1 < v_ratio < 10 else 1.0
+            return 1.0
+
+        sox, sox_prev = get_recent(hist_data.get('^SOX'))
+        xlu, xlu_prev = get_recent(hist_data.get('XLU'))
+        hg, hg_prev = get_recent(hist_data.get('HG=F'))
+        gc, gc_prev = get_recent(hist_data.get('GC=F'))
+        tnx, tnx_prev = get_recent(hist_data.get('^TNX'))
+        tlt, tlt_prev = get_recent(hist_data.get('TLT'))
+        jpy, jpy_prev = get_recent(hist_data.get('JPY=X'))
+        
+        tlt_vol = get_vol_ratio(hist_data.get('TLT'))
+        xlu_vol = get_vol_ratio(hist_data.get('XLU'))
+        
+        report = "🧠 *【Capital Flow Matrix 資金流向矩陣】*\n"
+        
+        # 1. 景氣與板塊輪動
+        if sox is not None and xlu is not None:
+            sox_chg = (sox - sox_prev) / sox_prev * 100
+            xlu_chg = (xlu - xlu_prev) / xlu_prev * 100
+            tech_def_spread = sox_chg - xlu_chg
+            if tech_def_spread < -1.5 and xlu_vol > 1.2:
+                report += f"🔄 **板塊輪動 (Risk-Off):** 資金從科技股(SOX {sox_chg:+.2f}%) 撤退，防禦性公用事業(XLU {xlu_chg:+.2f}%) 放量({xlu_vol:.1f}x)承接。\n"
+            elif tech_def_spread > 1.5:
+                report += f"🔥 **風險偏好 (Risk-On):** 資金集中攻擊科技股 (SOX {sox_chg:+.2f}%)，公用事業跑輸大盤。\n"
+            else:
+                report += f"⚖️ **板塊狀態中性:** SOX({sox_chg:+.2f}%) vs XLU({xlu_chg:+.2f}%) 輪動不明顯。\n"
+                
+        # 2. 實體景氣 (銅金比)
+        if hg is not None and gc is not None:
+            hg_chg = (hg - hg_prev) / hg_prev * 100
+            gc_chg = (gc - gc_prev) / gc_prev * 100
+            cg_spread = hg_chg - gc_chg
+            if cg_spread < -1.0:
+                report += f"📉 **衰退疑慮 (銅金比轉弱):** 銅博士({hg_chg:+.2f}%)走弱，黃金({gc_chg:+.2f}%)避險升溫，實體經濟預期放緩。\n"
+            elif cg_spread > 1.0:
+                report += f"🏭 **復甦預期 (銅金比轉強):** 銅價({hg_chg:+.2f}%)跑贏黃金，工業/實體需求強勁。\n"
+                
+        # 3. 匯率與套利平倉 (Carry Trade)
+        if jpy is not None:
+            jpy_chg = (jpy - jpy_prev) / jpy_prev * 100 # JPY=X 是 USD/JPY，數字變小代表日圓升值
+            if jpy_chg < -0.8: # 日圓單日急升超過 0.8%
+                report += f"🚨 **套利平倉警戒 (Carry Trade Unwind):** 日圓急升({jpy_chg:+.2f}%)，高度留意全球流動性收緊與跨國資產拋售。\n"
+            elif jpy_chg > 0.8:
+                report += f"💸 **套利資金寬鬆:** 日圓貶值({jpy_chg:+.2f}%)，有利於全球風險資產的槓桿資金池。\n"
+
+        # 4. 長債避風港
+        if tnx is not None and tlt is not None:
+            tlt_chg = (tlt - tlt_prev) / tlt_prev * 100
+            tnx_chg = (tnx - tnx_prev) / tnx_prev * 100
+            if tnx_chg > 2.0:
+                report += f"🎈 **估值重力壓迫:** 10年期美債殖利率飆升({tnx_chg:+.2f}%)，將對科技股估值造成壓力。\n"
+            elif tlt_chg > 1.0 and tlt_vol > 1.3:
+                report += f"🛡️ **終極避風港進駐:** 20年期美債(TLT) 放量上漲({tlt_chg:+.2f}%, 量:{tlt_vol:.1f}x)，大資金正在尋求絕對避險。\n"
+                
+        if report == "🧠 *【Capital Flow Matrix 資金流向矩陣】*\n":
+            return report + "目前無明顯異常資金流向信號。\n"
+            
+        return report
+    except Exception as e:
+        logger.error(f"Capital Flow Matrix calculation failed: {e}")
+        return f"❌ 資金流向矩陣計算失敗: {e}\n"

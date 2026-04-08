@@ -15,13 +15,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import pytz
 
-# 設定日誌
+# 設定日誌 (只保留 FileHandler 避免雙重輸出)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
+        logging.FileHandler("bot.log")
     ]
 )
 logger = logging.getLogger(__name__)
@@ -57,14 +56,14 @@ fubon.init_fubon()
 bot = telebot.TeleBot(BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_KEY)
 
-# AI 模型清單
+# AI 模型清單 (暫時將 Flash 移至第一位，避開 Pro 的 429 延遲)
 AVAILABLE_MODELS = [
-    'gemini-3.1-pro-preview',
     'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
     'gemini-2.5-flash',
-    'gemma-4-31b-it',
     'gemini-2.5-flash-lite',
+    'gemma-4-31b-it',
     'gemini-flash-latest'
 ]
 
@@ -99,7 +98,8 @@ AGENT_TOOLS = [
     tool_wrapper(fubon.get_market_trades), tool_wrapper(fubon.get_price_volumes),
     tool_wrapper(fubon.get_quote_and_orderbook), tool_wrapper(fubon.get_historical_stats), 
     tool_wrapper(fubon.get_txo_sentiment), 
-    tool_wrapper(risk.get_global_risk_radar), tool_wrapper(risk.get_v_turn_confirmation)
+    tool_wrapper(risk.get_global_risk_radar), tool_wrapper(risk.get_v_turn_confirmation),
+    tool_wrapper(risk.get_capital_flow_matrix)
 ]
 
 def get_dynamic_models():
@@ -123,6 +123,7 @@ def create_agent_chat(model_name, history=None):
     )
 
 dead_engines = {}
+user_chat_history = [] # --- 全域對話歷史紀錄 ---
 
 # --- 1. 本地非阻塞喚醒機制 (非同步回調版) ---
 def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
@@ -229,10 +230,6 @@ def daily_nlp_scout():
         trigger_nlp_and_callback(stock)
         time.sleep(20)
 
-scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Taipei'))
-scheduler.add_job(daily_nlp_scout, 'interval', hours=4)
-scheduler.start()
-
 # --- 3. Telegram 雙重視角決策 ---
 @bot.message_handler(commands=['analyze', 'nlp'])
 def handle_deep_analysis(message):
@@ -261,15 +258,22 @@ def handle_deep_analysis(message):
 @bot.message_handler(commands=['reset'])
 def reset_memory(message):
     if message.from_user.id != MY_USER_ID: return
-    global chat
-    chat = create_agent_chat(get_dynamic_models()[0])
-    bot.reply_to(message, "🧹 推進器記憶體已排空！")
+    global user_chat_history
+    user_chat_history = []
+    bot.reply_to(message, "🧹 推進器記憶體已排空！對話上下文已重置。")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
     if message.from_user.id != MY_USER_ID: return
     user_text = message.text
+    global user_chat_history
     
+    # 1. 立即回應「推進器點火」 (降低體感延遲)
+    mood = "bad_market" if any(w in user_text for w in ["損益", "賠", "慘"]) else "normal"
+    sent_msg = bot.reply_to(message, f"【推進器點火】\n{random.choice(WDT_MESSAGES[mood])}")
+    bot.send_chat_action(message.chat.id, 'typing')
+
+    # 2. 開始抓取 Context (可能耗時數秒)
     tw_tz = pytz.timezone('Asia/Taipei')
     us_tz = pytz.timezone('US/Eastern')
     now_tw = datetime.now(tw_tz).strftime('%Y-%m-%d %H:%M:%S')
@@ -282,10 +286,6 @@ def handle_all_text(message):
     strat_context = router.get_strat_context(user_text)
     dynamic_prompt = system_prompt + time_context + strat_context
     
-    mood = "bad_market" if any(w in user_text for w in ["損益", "賠", "慘"]) else "normal"
-    sent_msg = bot.reply_to(message, f"【推進器點火】\n{random.choice(WDT_MESSAGES[mood])}")
-    bot.send_chat_action(message.chat.id, 'typing')
-
     now = time.time()
     current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
 
@@ -307,7 +307,8 @@ def handle_all_text(message):
                     system_instruction=dynamic_prompt,
                     tools=AGENT_TOOLS,
                     temperature=0.3, 
-                )
+                ),
+                history=user_chat_history
             )
             
             # 使用線程實作 45 秒超時，防止工具調用無限循環
@@ -318,12 +319,15 @@ def handle_all_text(message):
                 try:
                     res = chat.send_message(user_text)
                     response_container.append(res)
+                    # 成功後存回歷史紀錄，限制最近 20 筆
+                    global user_chat_history
+                    user_chat_history = chat.get_history()[-20:]
                 except Exception as ex:
                     exception_container.append(ex)
 
             llm_thread = threading.Thread(target=_ask_llm)
             llm_thread.start()
-            llm_thread.join(timeout=45) # 45 秒硬上限
+            llm_thread.join(timeout=15) # 45 秒硬上限
 
             if llm_thread.is_alive():
                 # 超時處理
@@ -386,6 +390,7 @@ if __name__ == "__main__":
         except: pass
 
     scheduler.add_job(auto_v_turn_monitor, 'interval', hours=2)
+    scheduler.add_job(daily_nlp_scout, 'interval', hours=4)
     scheduler.start()
 
     while True:

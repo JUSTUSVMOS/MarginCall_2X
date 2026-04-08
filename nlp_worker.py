@@ -11,29 +11,16 @@ from collections import Counter
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import yfinance as yf
 import cloudscraper  # ⚠️ 新增：用於打穿 Cloudflare 防護
+from config import PROJECT_ROOT, DB_FILE
 
 # --- 0. Ubuntu 路徑配置與全局 SEC 偽裝 ---
-PROJECT_ROOT = "/home/margincaller/MarginCall_2X"
-FINNLP_PATH = os.path.join(PROJECT_ROOT, "FinNLP-main", "FinNLP-main")
+FINNLP_PATH = os.path.join(str(PROJECT_ROOT), "FinNLP-main", "FinNLP-main")
 if os.path.exists(FINNLP_PATH):
     sys.path.append(FINNLP_PATH)
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+load_dotenv(os.path.join(str(PROJECT_ROOT), ".env"))
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY")
-
-from finnlp.data_sources.news.finnhub_date_range import Finnhub_Date_Range
-from bs4 import BeautifulSoup
-import re
-
-# SEC 官方要求必須提供 User-Agent 與聯繫 Email
-SEC_HEADERS = {
-    "User-Agent": "MarginCall Bot (research@margincall.ai)",
-    "Accept-Encoding": "gzip, deflate"
-}
-
-# --- 1. 資料庫配置 ---
-DB_FILE = os.path.join(PROJECT_ROOT, "portfolio.db")
 
 def check_ollama():
     """快速檢查 Ollama 是否存活，避免浪費 5 分鐘等超時"""
