@@ -62,7 +62,10 @@ AVAILABLE_MODELS = [
     'gemini-3.1-pro-preview',
     'gemini-3.1-flash-lite-preview',
     'gemini-2.5-pro',
-    'gemini-2.5-flash'
+    'gemini-2.5-flash',
+    'gemma-4-31b-it',
+    'gemini-2.5-flash-lite',
+    'gemini-flash-latest'
 ]
 
 # --- AI 核心工具箱統一配置 ---
@@ -181,10 +184,18 @@ def generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id=Non
     if message_id:
         try:
             bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode='Markdown')
-        except:
-            bot.send_message(chat_id, final_text, parse_mode='Markdown')
+        except Exception as te:
+            logger.warning(f"Report Markdown parse failed, falling back to plain text: {te}")
+            try:
+                bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text)
+            except:
+                bot.send_message(chat_id, final_text)
     else:
-        bot.send_message(chat_id, final_text, parse_mode='Markdown')
+        try:
+            bot.send_message(chat_id, final_text, parse_mode='Markdown')
+        except Exception as te:
+            logger.warning(f"Report Markdown parse failed (send), falling back to plain text: {te}")
+            bot.send_message(chat_id, final_text)
 
 # --- 2. 背景定時巡邏 ---
 def daily_nlp_scout():
@@ -253,7 +264,7 @@ def handle_all_text(message):
     now = time.time()
     current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
 
-    for model_name in current_models:
+    for i, model_name in enumerate(current_models):
         try:
             chat = client.chats.create(
                 model=model_name,
@@ -265,15 +276,39 @@ def handle_all_text(message):
             )
             response = chat.send_message(user_text)
             final_text = response.text if response.text else "大腦空白。"
-            bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=final_text, parse_mode='Markdown')
+            
+            try:
+                bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=final_text, parse_mode='Markdown')
+            except Exception as te:
+                logger.warning(f"Markdown parse failed, falling back to plain text: {te}")
+                bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=final_text)
             return
         except Exception as e:
-            if any(k in str(e).upper() for k in ['429', 'RESOURCE_EXHAUSTED']):
-                dead_engines[model_name] = time.time() + 180
+            err_str = str(e).upper()
+            # 只有當錯誤是來自 Gemini API 的暫時性故障時才進行 fallback
+            if any(k in err_str for k in ['429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE', 'INTERNAL', 'DEADLINE_EXCEEDED']):
+                logger.warning(f"Engine {model_name} temporary failure: {str(e)}")
+                dead_engines[model_name] = time.time() + 60
+                # 如果還有備援模型，通知使用者正在切換
+                if i < len(current_models) - 1:
+                    try:
+                        bot.edit_message_text(
+                            chat_id=message.chat.id, 
+                            message_id=sent_msg.message_id, 
+                            text=f"⚠️ 當前引擎 ({model_name}) 壓力大，正在切換備援推進器..."
+                        )
+                    except: pass
                 continue
             else:
-                bot.send_message(message.chat.id, f"⚠️ 錯誤: {str(e)[:100]}")
+                # 其他嚴重錯誤（如授權問題）才顯示報錯
+                logger.error(f"Engine {model_name} fatal failure: {str(e)}")
+                try:
+                    bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=f"⚠️ 模型報錯: {str(e)[:100]}")
+                except:
+                    bot.send_message(message.chat.id, f"⚠️ 模型報錯: {str(e)[:100]}")
                 return
+
+    bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text="🧪 所有推進器皆暫時熄火，請稍後再試。")
 
 if __name__ == "__main__":
     print("🚀 MarginCall Express 已啟動！")

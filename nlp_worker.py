@@ -120,18 +120,21 @@ def save_to_db(symbol, nlp_alpha, a_ret, a_mac, a_off, total, summary, i_type):
 
 # --- 2. 【並行 Map 階段】 ---
 def extract_insight_parallel(text, symbol):
-    # 🎯 拔除偷懶藉口，強制模型提取商業事實
+    # 🎯 角色識別引擎：將機構、KOL 與純散戶情緒剝離
     prompt = f"""
-        Task: Extract market insights and sentiment from the financial text for {symbol}.
-        Rules: 
-        1. Return valid JSON. 
-        2. Sentiment MUST be: 'strong_bullish', 'mild_bullish', 'neutral', 'mild_bearish', 'strong_bearish'.
-        3. Insights: Max 3 short sentences. 
-        4. 🚨 BOILERPLATE FILTER: You MUST IGNORE standard SEC cover page text (e.g., "Indicate by check mark", "correction of an error to previously issued financial statements", "forward-looking statements"). These are NOT insights. If the text only contains this boilerplate, return an empty array [].
-        5. 🚨 STRICT GROUNDING: ONLY extract facts explicitly written in the text. DO NOT invent prices or events.
+        Task: Analyze the text for {symbol} and categorize insights by ACTOR.
+        1. "institutional": Professional analysts (JPMorgan, GS), Funds (ARK), or CEOs.
+        2. "retail": Anonymous retail sentiment, forum chatter, hype.
+        
+        For each actor type, provide:
+        - sentiment: "strong_bullish", "mild_bullish", "neutral", "mild_bearish", "strong_bearish".
+        - insights: 1-2 core facts.
         
         Text: "{text[:2500]}"
-        Format: {{"sentiment": "neutral", "insights": ["Insight 1", "Insight 2"]}}
+        Format: {{
+            "institutional": {{"sentiment": "neutral", "insights": []}},
+            "retail": {{"sentiment": "neutral", "insights": []}}
+        }}
         """
     
     try:
@@ -140,28 +143,34 @@ def extract_insight_parallel(text, symbol):
             "prompt": prompt, 
             "stream": False, 
             "format": "json",
-            "options": {"temperature": 0.0, "num_predict": 250}
+            "options": {"temperature": 0.0, "num_predict": 300}
         }, timeout=60)
         
         raw_res = response.json().get("response", "")
-        
-        # 🛡️ 終極淨化：剝除 LLM 常犯的 Markdown JSON 外衣
         clean_res = re.sub(r'^```json\s*|\s*```$', '', raw_res.strip(), flags=re.IGNORECASE|re.MULTILINE)
         
-        res_data = json.loads(clean_res)
-        res_data['sentiment'] = str(res_data.get('sentiment', 'neutral')).lower().strip()
+        try:
+            res_data = json.loads(clean_res)
+        except:
+            res_data = {}
+
+        # 🎯 格式標準化與強制填充
+        final_data = {}
+        for actor in ['institutional', 'retail']:
+            found_key = next((k for k in res_data if k.lower() == actor), None)
+            if found_key and isinstance(res_data[found_key], dict):
+                final_data[actor] = res_data[found_key]
+            else:
+                final_data[actor] = {"sentiment": "neutral", "insights": []}
+            
+            final_data[actor]['sentiment'] = str(final_data[actor].get('sentiment', 'neutral')).lower().strip()
+            final_data[actor]['insights'] = final_data[actor].get('insights', [])
+            
+        return final_data
         
-        # 確保向下相容性，把 insights 轉進 tags
-        res_data['tags'] = res_data.get('insights', res_data.get('tags', []))
-        return res_data
-        
-    except json.JSONDecodeError as je:
-        # 讓錯誤浮出水面，不再默默吞掉
-        print(f"   [Debug] JSON 解析失敗: 原始回傳 -> {raw_res[:100]}...")
-        return {"sentiment": "neutral", "tags": []}
     except Exception as e:
         print(f"   [Debug] Gemma 萃取異常: {e}")
-        return {"sentiment": "neutral", "tags": []}
+        return {"institutional": {"sentiment": "neutral", "insights": []}, "retail": {"sentiment": "neutral", "insights": []}}
     
 import textwrap # 如果最上面沒有 import，記得加上去
 
@@ -280,8 +289,95 @@ def extract_section(text, start_keyword, stop_keywords, max_len=5000):
         return section[:2500] + " [...] " + section[-2000:]
     return section
 
+def fetch_earning_call_from_fool(symbol):
+    """從 Motley Fool 抓取最新的財報逐字稿"""
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+    
+    # 策略 1：總覽頁 (抓取全市場最新的 20-30 篇)
+    list_url = "https://www.fool.com/earnings-call-transcripts/"
+    transcript_url = None
+    try:
+        resp = scraper.get(list_url, timeout=15)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            links = soup.find_all('a', href=True)
+            for link in links:
+                text = link.get_text().upper()
+                href = link['href'].lower()
+                if (symbol.upper() in text or f"-{symbol.lower()}-" in href) and "/earnings-call-transcripts/" in href:
+                    transcript_url = "https://www.fool.com" + href if href.startswith('/') else href
+                    break
+        
+        # 策略 2：搜尋接口備援 (利用 Motley Fool 內部搜尋)
+        if not transcript_url:
+            search_api = f"https://www.fool.com/search/solr-proxy/?q={symbol}+earnings+call+transcript&sort=publish_date&order=desc"
+            s_resp = scraper.get(search_api, timeout=10)
+            if s_resp.status_code == 200:
+                s_data = s_resp.json()
+                results = s_data.get('results', [])
+                for res in results:
+                    path = res.get('url', '')
+                    title = res.get('title', '').upper()
+                    if "EARNINGS CALL TRANSCRIPT" in title and symbol.upper() in title:
+                        transcript_url = "https://www.fool.com" + path if path.startswith('/') else path
+                        break
+        
+        # 策略 3：標的專屬列表頁 (備援)
+        if not transcript_url:
+            for exchange in ['nasdaq', 'nyse']:
+                quote_url = f"https://www.fool.com/quote/{exchange}/{symbol.lower()}/transcripts/"
+                q_resp = scraper.get(quote_url, timeout=10)
+                if q_resp.status_code == 200:
+                    q_soup = BeautifulSoup(q_resp.text, 'html.parser')
+                    # 尋找列表中的第一篇
+                    q_links = q_soup.find_all('a', href=True)
+                    for q_link in q_links:
+                        if "/earnings-call-transcripts/" in q_link['href'].lower():
+                            href = q_link['href'].lower()
+                            transcript_url = "https://www.fool.com" + href if href.startswith('/') else href
+                            break
+                if transcript_url: break
+        
+        if not transcript_url: return None
+        
+        article_resp = scraper.get(transcript_url, timeout=15)
+        if article_resp.status_code != 200: return None
+        
+        article_soup = BeautifulSoup(article_resp.text, 'html.parser')
+        content_div = article_soup.find('div', class_='tailwind-article-body') or article_soup.find('div', class_='article-body')
+        
+        if content_div:
+            for unwanted in content_div.find_all(['div', 'section'], class_=re.compile(r'pitch|promo|ads|sidebar')):
+                unwanted.decompose()
+            return content_div.get_text(separator='\n', strip=True)
+    except:
+        pass
+    return None
+
+def adjust_retail_score(raw_score, source_count):
+    """
+    🎯 解決缺陷 6：散戶情緒校正 (反向指標)
+    參考 FinNLP 哲學：極端值反著看，中間區域當雜訊
+    """
+    if source_count < 5:
+        return 0.0  # 樣本太少，不可信
+    
+    if raw_score >= 0.8:
+        # 散戶極度狂熱 -> 反向指標，大概率是頂部
+        return -0.3
+    elif raw_score <= -0.7:
+        # 散戶極度恐慌 -> 反向指標，大概率是底部
+        return 0.3
+    elif -0.3 <= raw_score <= 0.3:
+        # 中間區域 -> 沒有訊號意義 (Neutral)
+        return 0.0
+    else:
+        # 輕微偏多/偏空 -> 保留但權重降低，避免過度影響
+        return raw_score * 0.5
+
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
+    # ... (前段代碼保持不變)
     # --- 0. 動態獲取公司背景 ---
     try:
         ticker_info = yf.Ticker(stock).info
@@ -567,6 +663,42 @@ def run_turbo_trinity_scout(stock="NVDA"):
                         
                         dynamic_count += 1
             print(f"   ✅ SEC 雙軌解析完成")
+
+            # ==========================================
+            # 軌道三：最新一季財報電話會議 (Earning Call)
+            # ==========================================
+            print(f"   🚀 軌道 3：搜尋 {stock} 最新 Earning Call (via Motley Fool)...")
+            try:
+                content = fetch_earning_call_from_fool(stock)
+                if content and len(content) > 500:
+                    upper_content = content.upper()
+                    # 1. 尋找 Q&A 段落
+                    qa_keywords = ["QUESTIONS AND ANSWERS", "QUESTION AND ANSWER", "Q&A SESSION", "Q & A"]
+                    qa_start = -1
+                    for kw in qa_keywords:
+                        idx = upper_content.find(kw, len(content) // 4) 
+                        if idx != -1:
+                            qa_start = idx
+                            break
+                    if qa_start != -1:
+                        raw_texts.append(f"SEC EarningCall [Q&A]: {content[qa_start : qa_start + 3000]}")
+                        print(f"   ✅ Earning Call Q&A 命中")
+                    else:
+                        raw_texts.append(f"SEC EarningCall [後半段]: {content[len(content)//2 : len(content)//2 + 3000]}")
+                        print(f"   ✅ Earning Call 取後半段")
+
+                    # 2. 尋找前瞻指引
+                    guidance_keywords = ["GUIDANCE", "OUTLOOK", "EXPECT", "FORECAST"]
+                    for kw in guidance_keywords:
+                        g_idx = upper_content.find(kw)
+                        if g_idx != -1 and g_idx < len(content) // 2: 
+                            raw_texts.append(f"SEC EarningCall [指引]: {content[g_idx : g_idx + 1500]}")
+                            print(f"   ✅ Earning Call 前瞻指引命中")
+                            break
+                else:
+                    print(f"   ⚠️ Earning Call 未在 Motley Fool 總覽頁找到")
+            except Exception as e:
+                print(f"   ⚠️ Earning Call 抓取失敗: {e}")
         else:
             print(f"   ⚠️ SEC 請求被拒絕 (HTTP {res.status_code})")
     except Exception as e: 
@@ -585,11 +717,16 @@ def run_turbo_trinity_scout(stock="NVDA"):
             print(f"  {i+1}. {s[:150]}...")
     print("\n--- 🧠 啟動 GPU 語意分析 ---")
 
-    # --- 分組合併，只跑 4 次 LLM ( Map 階段 ) ---
+    # --- 分組合併，只跑 3 次 LLM ( Map 階段 ) ---
     categorized_tags = {"SEC": [], "Macro": [], "Retail": []}
+    
+    # 情緒對照表：放寬 Mild 權重，不再歸零
     SENT_MAP = {
-        "strong_bullish": 1.0, "mild_bullish": 0.5, "neutral": 0.0, 
-        "mild_bearish": -0.5, "strong_bearish": -1.0
+        "strong_bullish": 1.0, 
+        "mild_bullish": 0.3,   # 讓 Mild 也能貢獻 Alpha
+        "neutral": 0.0, 
+        "mild_bearish": -0.3, 
+        "strong_bearish": -1.0
     }
 
     groups = {
@@ -598,33 +735,65 @@ def run_turbo_trinity_scout(stock="NVDA"):
         "Retail": [t for t in raw_texts if t.startswith("Reddit") or t.startswith("StockTwits")],
     }
 
-    platform_scores = {}
+    # 角色評分累積器
+    score_inst = 0.0
+    score_retail = 0.0
+    count_inst = 0
+    count_retail = 0
+
     for category, texts in groups.items():
-        if not texts:
-            platform_scores[category] = 0.0
-            continue
+        if not texts: continue
             
-        # 動態分配預算：資料多每筆少看，資料少每筆多看
-        budget_per_item = 3000 // max(len(texts), 1)
-        budget_per_item = max(budget_per_item, 150)
-        budget_per_item = min(budget_per_item, 500)
-        
-        combined = "\n---\n".join([t[:budget_per_item] for t in texts])
-        combined = combined[:4000]
-        
+        combined = "\n---\n".join([t[:500] for t in texts])[:4000]
         print(f"    🧠 分析 {category} ( {len(texts)} 篇合併 )...")
-        res = extract_insight_parallel(combined, stock)
-        score = SENT_MAP.get(res['sentiment'], 0.0)
-        tags = res.get('tags', [])
         
-        platform_scores[category] = score
-        categorized_tags[category].extend(tags)
+        res_data = extract_insight_parallel(combined, stock)
+        
+        # A. 處理機構觀點 (不反轉)
+        inst_sent = res_data['institutional']['sentiment']
+        if inst_sent != 'neutral':
+            score_inst += SENT_MAP.get(inst_sent, 0.0)
+            count_inst += 1
+            categorized_tags[category].extend(res_data['institutional'].get('insights', []))
+        
+        # B. 處理散戶情緒 (視類別決定是否反轉)
+        ret_sent = res_data['retail']['sentiment']
+        if ret_sent != 'neutral':
+            raw_ret_score = SENT_MAP.get(ret_sent, 0.0)
+            if category == "Retail":
+                # 只有來自 Reddit/StockTwits 的散戶情緒才執行反向校正
+                score_retail += adjust_retail_score(raw_ret_score, len(texts))
+            else:
+                # 來自新聞/SEC 的散戶敘述（例如：消費者信心下降）不反轉
+                score_retail += raw_ret_score * 0.5 
+            count_retail += 1
+            categorized_tags[category].extend(res_data['retail'].get('insights', []))
 
-    a_sec = platform_scores.get("SEC", 0.0)
-    a_mac = platform_scores.get("Macro", 0.0)
-    a_retail = platform_scores.get("Retail", 0.0)
+    # 計算最終 Alpha 分數
+    # 機構權重 0.7, 散戶權重 0.3 (可調)
+    a_inst = score_inst / max(count_inst, 1)
+    a_retail = score_retail / max(count_retail, 1)
+    
+    # 這裡的 a_sec, a_mac 僅為了存入資料庫相容性，暫時以 a_inst 代替官方維度
+    a_sec = a_inst if groups["SEC"] else 0.0
+    a_mac = a_inst if groups["Macro"] else 0.0
 
-    nlp_alpha = (a_retail * 0.2) + (a_mac * 0.3) + (a_sec * 0.5)
+    nlp_alpha = (a_inst * 0.7) + (a_retail * 0.3)
+
+    # 🎯 矛盾偵測 (Divergence Detection)
+    # 使用新架構的角色情緒進行判定
+    divergence_alert = ""
+    
+    # 判斷方向 (簡化邏輯)
+    inst_dir = "bullish" if a_inst > 0.2 else "bearish" if a_inst < -0.2 else "neutral"
+    ret_dir = "bullish" if a_retail > 0.2 else "bearish" if a_retail < -0.2 else "neutral"
+
+    if ret_dir == "bullish" and inst_dir == "bearish":
+        divergence_alert = "⚠️ 散戶情緒看多 vs 機構分析看空 -> 散戶陷阱風險"
+        nlp_alpha -= 0.15  # 額外懲罰
+    elif ret_dir == "bearish" and inst_dir == "bullish":
+        divergence_alert = "🔍 散戶情緒恐慌 vs 機構抄底加碼 -> 潛在反轉機會"
+        nlp_alpha += 0.1  # 額外獎勵
 
     # 🚨 核彈級利空熔斷機制 (Tail-Risk Override)
     # 把所有新聞跟 SEC 的原始字串轉小寫，檢查是否有毀滅性字眼
@@ -633,10 +802,56 @@ def run_turbo_trinity_scout(stock="NVDA"):
     
     triggered_nukes = [k for k in nuclear_keywords if k in macro_sec_text]
     if triggered_nukes:
-        print(f"   ☢️ 警告！偵測到核彈級利空字眼: {triggered_nukes}，觸發 Alpha 熔斷機制！")
-        nlp_alpha = -0.95 # 強制給予極度悲觀的量化分數
+        # 🎯 解決缺陷：由 LLM 判斷上下文，避免關鍵字誤殺 (例如 "investigating new markets")
+        context_snippets = []
+        for kw in triggered_nukes:
+            idx = macro_sec_text.find(kw)
+            # 抓取關鍵字前後 150 字作為上下文
+            start = max(0, idx - 100)
+            end = min(len(macro_sec_text), idx + 200)
+            snippet = macro_sec_text[start:end].replace("\n", " ")
+            context_snippets.append(f"[{kw.upper()}]: ...{snippet}...")
+            
+        verify_prompt = f"""
+            Identify if the following context indicates a SEVERE LEGAL or FINANCIAL THREAT (e.g., fraud, DOJ/SEC investigation INTO {stock}, delisting) 
+            to {stock} itself, or if the keyword is used in a benign/common way (e.g., "investigating new markets", "won a lawsuit", "legal victory", "routine investigation").
+            
+            Keywords detected: {triggered_nukes}
+            Context: {" | ".join(context_snippets[:3])}
+            
+            Question: Is this a REAL catastrophic threat or just benign/positive news?
+            Answer ONLY with "REAL_THREAT" or "BENIGN".
+            """
+        
+        try:
+            # 使用較強的模型進行二次確認
+            v_response = requests.post("http://localhost:11434/api/generate", json={
+                "model": "gemma2:9b", # 嘗試呼叫通用名稱，若失敗再 fallback
+                "prompt": verify_prompt,
+                "stream": False,
+                "options": {"temperature": 0.0, "num_predict": 10}
+            }, timeout=15)
+            
+            if v_response.status_code == 200:
+                answer = v_response.json().get("response", "").strip().upper()
+                if "REAL_THREAT" in answer:
+                    print(f"   ☢️ LLM 確認核彈級利空！字眼: {triggered_nukes}，觸發 Alpha 熔斷！")
+                    nlp_alpha = -0.95 # 強制給予極度悲觀的量化分數
+                    divergence_alert = f"☢️ 偵測到重大法律或會計風險 (經 LLM 核實: {triggered_nukes})"
+                else:
+                    print(f"   ✅ LLM 判定為良性用法 ({triggered_nukes})，解除警報。")
+            else:
+                # 若較強模型失敗，不再強行熔斷，改為標註警告
+                divergence_alert = f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實服務超時，請人工確認。"
+        except Exception as ve:
+            print(f"   ⚠️ 核彈核實異常: {ve}")
+            divergence_alert = f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實過程異常，請人工確認。"
 
-    report = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f}\n" + semantic_reduce(categorized_tags, stock, company_name, sector)
+    report_header = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f}\n"
+    if divergence_alert:
+        report_header += f"{divergence_alert}\n"
+        
+    report = report_header + semantic_reduce(categorized_tags, stock, company_name, sector)
     save_to_db(stock, nlp_alpha, a_retail, a_mac, a_sec, total, report, "TRINITY")
     print(f"\n{report}")
 

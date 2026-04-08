@@ -27,33 +27,62 @@ genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 def detect_symbols(text: str) -> list:
     """
-    從用戶輸入中提取股票代號。優先使用 LLM，失敗則使用 Regex 備援。
+    【核武級降級策略 V2】全彈發射 -> 自動退避 -> 指數加權重試。
     """
     symbols = []
-    
-    # --- 1. 嘗試使用 LLM 偵測 (精準度高) ---
-    if genai_client:
+    if not genai_client:
+        return _regex_fallback(text)
+
+    # 1. 定義降級鏈 (由強至穩)
+    fallback_chain = [
+        "gemini-3.1-pro-preview",    # 最強推理
+        "gemini-2.5-pro",            # 旗艦生力軍
+        "gemini-2.5-flash",          # 次世代輕量
+        "gemini-3.1-flash-lite-preview", # 測試版輕量
+        "gemini-2.0-flash",          # 目前效能最穩
+        "gemini-flash-latest"        # 最後防線 (自動指向最新穩定版)
+    ]
+
+    import time
+    prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如: TSLA, 2330.TW, BRK-B)。只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字：{text}"
+
+    for i, model_name in enumerate(fallback_chain):
         try:
-            prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如: TSLA, 2330.TW, BRK-B)。只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字：{text}"
+            # 如果是前兩級模型報錯過，給一點點緩衝時間 (Exponential Backoff 概念)
+            if i > 0: time.sleep(0.5 * i) 
+            
             response = genai_client.models.generate_content(
-                model="gemini-2.0-flash-lite", 
+                model=model_name, 
                 contents=prompt
             )
             res_text = response.text.strip()
-            if res_text != "None" and res_text:
+            if res_text and res_text != "None":
                 symbols = [s.strip().upper() for s in res_text.split(',') if s.strip()]
+                if symbols:
+                    logger.info(f"Successfully detected symbols using {model_name}: {symbols}")
+                    return list(set(symbols))
         except Exception as e:
-            logger.warning(f"LLM Symbol detection failed (Quota?): {e}")
+            err_msg = str(e)
+            if "429" in err_msg:
+                logger.warning(f"⚠️ {model_name} Quota Exceeded (429). Falling down...")
+            elif "503" in err_msg:
+                logger.warning(f"⚠️ {model_name} Service Unavailable (503). Falling down...")
+            else:
+                logger.warning(f"⚠️ {model_name} Failed: {err_msg}. Next...")
+            continue
 
-    # --- 2. Regex 備援 (確保系統不掛掉) ---
-    if not symbols:
-        # 尋找 2-5 個大寫字母 (美股) 或 數字.TW (台股)
-        regex_patterns = [r'\b[A-Z]{2,5}\b', r'\b\d{4}\.TW\b']
-        for p in regex_patterns:
-            matches = re.findall(p, text)
-            symbols.extend(matches)
-    
-    return list(set(symbols)) # 去重
+    # --- 2. 最終 Regex 備援 (Tier 5) ---
+    return _regex_fallback(text)
+
+def _regex_fallback(text: str) -> list:
+    """Regex 備援邏輯"""
+    symbols = []
+    # 尋找 2-5 個大寫字母 (美股) 或 數字.TW/TWO (台股)
+    regex_patterns = [r'\b[A-Z]{2,5}\b', r'\b\d{4}\.TW\b', r'\b\d{4}\.TWO\b']
+    for p in regex_patterns:
+        matches = re.findall(p, text)
+        symbols.extend(matches)
+    return list(set(symbols))
 
 def fetch_nlp_alpha(symbol: str) -> dict:
     """
@@ -77,8 +106,8 @@ def fetch_nlp_alpha(symbol: str) -> dict:
             # 檢查時間新鮮度 (10 分鐘內)
             try:
                 data_time = datetime.datetime.strptime(row[5], '%Y-%m-%d %H:%M:%S')
-                if (datetime.datetime.now() - data_time).total_seconds() > 600:
-                    return {"error": "NLP data expired (over 10 mins). Needs refresh."}
+                if (datetime.datetime.now() - data_time).total_seconds() > 1800:
+                    return {"error": "NLP data expired (over 30 mins). Needs refresh."}
             except: pass # 若格式不對則跳過時間檢查
 
             return {
@@ -94,6 +123,42 @@ def fetch_nlp_alpha(symbol: str) -> dict:
         logger.error(f"Failed to fetch NLP Alpha for {symbol}: {e}")
         return {"error": str(e)}
 
+def get_relative_move(symbol):
+    """比較個股 vs 大盤，區分系統性和個股風險"""
+    try:
+        # 抓取 2 天數據以計算最新一日漲跌幅 (今天 vs 昨天收盤)
+        stock = yf.Ticker(symbol).history(period="2d")
+        spy = yf.Ticker("SPY").history(period="2d")
+        
+        if len(stock) < 2 or len(spy) < 2:
+            return "UNKNOWN", 0.0
+
+        stock_ret = (stock['Close'].iloc[-1] / stock['Close'].iloc[-2]) - 1
+        spy_ret = (spy['Close'].iloc[-1] / spy['Close'].iloc[-2]) - 1
+        
+        excess_return = stock_ret - spy_ret # 超額報酬
+        
+        if abs(excess_return) < 0.01:
+            return "SYSTEMATIC", excess_return # 跟大盤同步 -> 系統性風險
+        elif excess_return < -0.02:
+            return "IDIOSYNCRATIC_BAD", excess_return # 獨自大跌 -> 個股利空
+        elif excess_return > 0.02:
+            return "IDIOSYNCRATIC_GOOD", excess_return # 獨自大漲 -> 個股利多
+        return "NORMAL", excess_return
+    except Exception as e:
+        logger.warning(f"Relative move calculation failed for {symbol}: {e}")
+        return "UNKNOWN", 0.0
+
+def parse_pc_ratio(insight_text: str) -> float:
+    """從 get_us_realtime_insight 的文字報告中提取 P/C Ratio"""
+    try:
+        match = re.search(r'P/C Ratio:\s*([\d\.]+)', insight_text)
+        if match:
+            return float(match.group(1))
+    except:
+        pass
+    return None
+
 def fetch_strat_data(symbol: str) -> dict:
     """
     根據資產類型分流抓取數據，並實作 CVD & NLP 雙重熔斷中斷。
@@ -105,11 +170,18 @@ def fetch_strat_data(symbol: str) -> dict:
     # --- 核心升級：抓取 NLP Alpha 因子 ---
     nlp_data = fetch_nlp_alpha(symbol)
     
+    # --- 核心升級：區分系統性 vs 個股風險 ---
+    risk_type, excess = get_relative_move(symbol)
+    
     data = {
         "symbol": symbol,
         "asset_type": asset_type,
         "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         "nlp_insights": nlp_data, # 注入語意情緒
+        "relative_move": {
+            "risk_type": risk_type,
+            "excess_return": round(excess, 4)
+        },
         "metrics": {},
         "raw_profile": profile
     }
@@ -136,11 +208,33 @@ def fetch_strat_data(symbol: str) -> dict:
 
             # 抓取技術面 (RSI, MACD 等)
             tech_report = market.get_technical_analysis(symbol)
+            live_insight = market.get_us_realtime_insight(symbol)
+            
             data["metrics"] = {
                 "cvd": round(cvd, 4),
                 "technical_analysis": tech_report,
-                "live_insight": market.get_us_realtime_insight(symbol)
+                "live_insight": live_insight
             }
+
+            # 🎯 解決缺陷 7：整合領先指標修正 NLP Alpha
+            if "nlp_alpha" in nlp_data:
+                # 修正因子 1：CVD (資金流向)
+                if cvd < -0.5:
+                    nlp_data["nlp_alpha"] -= 0.15
+                    logger.info(f"Leading Indicator Correction: {symbol} CVD {cvd} -> Alpha -0.15")
+                elif cvd > 0.5:
+                    nlp_data["nlp_alpha"] += 0.1
+                    logger.info(f"Leading Indicator Correction: {symbol} CVD {cvd} -> Alpha +0.1")
+                
+                # 修正因子 2：P/C Ratio (市場避險情緒)
+                pc_ratio = parse_pc_ratio(live_insight)
+                if pc_ratio:
+                    if pc_ratio > 1.5:
+                        nlp_data["nlp_alpha"] -= 0.1
+                        logger.info(f"Leading Indicator Correction: {symbol} P/C {pc_ratio} -> Alpha -0.1")
+                    elif pc_ratio < 0.5:
+                        nlp_data["nlp_alpha"] += 0.1
+                        logger.info(f"Leading Indicator Correction: {symbol} P/C {pc_ratio} -> Alpha +0.1")
 
         elif asset_type == 'Value_Holding':
             # 抓取基本面 (P/B, EPS 等)

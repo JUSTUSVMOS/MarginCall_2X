@@ -255,56 +255,51 @@ def get_global_risk_radar() -> str:
         sent_score, sent_label = get_market_sentiment_score()
         
         # --- 移植自 test.py 的核心計分邏輯 ---
-        base_risk = 0
+        risk_multiplier = 1.0
         reasons = []
 
-        # 1. 環境與籌碼底分 (Armed 狀態判斷)
+        # 1. 環境與籌碼底分 (Multiplicative Factors)
         if latest.get('DXY_Z', 0) > 1.5 or latest.get('TNX_Z', 0) > 1.5:
-            base_risk += 25
-            reasons.append("🔴 [Armed] 資金緊縮 (美元/美債突波)")
+            risk_multiplier *= 1.5    # 資金緊縮
+            reasons.append("🔴 資金緊縮 (美元/美債突波)")
         
         if latest.get('VIX_Z', 0) > 2.0 or final_gex < 0:
-            base_risk += 25
-            reasons.append(f"🔴 [Armed] 波動率失控 / 負 Gamma ({final_gex:.2f}B)")
+            risk_multiplier *= 1.6    # 波動率失控
+            reasons.append(f"🔴 波動率失控 / 負 Gamma ({final_gex:.2f}B)")
         
-        if latest.get('SKEW_PR', 0) > 0.90 or latest.get('GOLD_PR', 0) > 0.85:
-            base_risk += 15
-            reasons.append("🔴 [Armed] 尾部風險升溫 (黑天鵝/黃金擁擠)")
+        if latest.get('SKEW_PR', 0) > 0.90:
+            risk_multiplier *= 1.3    # 尾部風險
+            reasons.append("🟠 尾部風險升溫")
             
-        # 滅火器：大戶吸籌
+        # 滅火器：大戶吸籌 (打折但不清零)
         if latest.get('dix_PR', 0) > 0.85:
-            base_risk = max(0, base_risk - 20)
-            reasons.append("🟢 [Safe] 暗池吸籌，大戶提供下檔支撐")
+            risk_multiplier *= 0.7
+            reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
 
-        # 整合新聞情緒 (額外加權)
+        # 整合新聞情緒 (乘法因子)
         if sent_score < -0.4:
-            base_risk += 10
+            risk_multiplier *= 1.2
             reasons.append(f"📰 新聞極度偏空 ({sent_label})")
 
-        is_armed = base_risk >= 40
-        final_score = base_risk
-        
-        # 2. 技術扳機 (動態權重)
+        # 2. 技術扳機 (動態權重，改為乘法)
         spx = latest.get('SPX', 0)
         ma10 = latest.get('SPX_10MA', 0)
         ma20 = latest.get('SPX_20MA', 0)
+        ma200 = latest.get('SPX_200MA', 0) # 假設有 200MA，若無則 fallback
 
-        if spx < ma20:
-            if is_armed:
-                final_score += 40
-                reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線且環境惡化！")
-            else:
-                final_score += 15
-                reasons.append("🟠 [中期轉弱] 跌破月線，部位應收斂。")
+        if ma200 > 0 and spx < ma200:
+            risk_multiplier *= 1.4
+            reasons.append("🚨 [Trigger] 熊市區間：跌破 200MA 均線！")
+        elif spx < ma20:
+            risk_multiplier *= 1.25
+            reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線！")
         elif spx < ma10:
-            if is_armed:
-                final_score += 25
-                reasons.append("🚨 [Trigger] 致命破線：環境不佳且跌破 10MA。")
-            else:
-                final_score += 5
-                reasons.append("🟡 [技術回檔] 跌破 10MA，籌碼尚可。")
+            risk_multiplier *= 1.15
+            reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
 
-        score = min(100, final_score)
+        # 轉換成 0-100 分
+        # 1.0 = 0分 (無風險)，3.0+ = 100分 (極端風險)
+        score = min(100, int((risk_multiplier - 1.0) / 2.0 * 100))
         state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
         
         msg = f"📊 *【MarginCall_2X 全局雷達】*\n🔥 風險分數：{score} ({state})\n"
@@ -384,9 +379,11 @@ def get_v_turn_confirmation() -> str:
             conn.close()
 
             # --- 模組二：護法判定 (CVD 升級) ---
-            rsp_ret = (rsp['Close'].iloc[-1] - rsp['Close'].iloc[-2]) / rsp['Close'].iloc[-2]
-            splg_ret = (splg['Close'].iloc[-1] - splg['Close'].iloc[-2]) / splg['Close'].iloc[-2]
-            breadth_safe = (rsp_ret >= splg_ret * 0.8)
+            # 🎯 解決缺陷 8：市場寬度確認 (5D RSP vs SPLG)
+            rsp_5d = (rsp['Close'].iloc[-1] / rsp['Close'].iloc[-5]) - 1 if len(rsp) >= 5 else 0
+            splg_5d = (splg['Close'].iloc[-1] / splg['Close'].iloc[-5]) - 1 if len(splg) >= 5 else 0
+            breadth_val = rsp_5d - splg_5d
+            breadth_safe = (breadth_val > -0.005) # 至少不能輸大盤太多 (健康反彈門檻)
             
             vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
             vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else yf.Ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
@@ -420,6 +417,7 @@ def get_v_turn_confirmation() -> str:
             report += f"- VIX 期限結構: {vix_term:.2f} {'🟢' if vix_term_safe else '🔴'}\n"
             report += f"- VVIX 恐慌速率: {vvix_val:.1f} {'🟢' if vvix_safe else '🔴'}\n"
             report += f"- 信用市場(HYG/LQD): {'🟢' if credit_safe else '🔴'}\n"
+            report += f"- 市場寬度(RSP/SPLG): {breadth_val:+.2%} {'🟢' if breadth_safe else '🔴'}\n"
             report += f"- 買盤推力(CVD): {tick_msg} {tick_emoji}\n"
             report += f"- MA20 技術位階: {'🟢' if ma20_safe else '🔴'}\n"
             
