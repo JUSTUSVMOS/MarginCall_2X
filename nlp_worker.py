@@ -22,6 +22,16 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(str(PROJECT_ROOT), ".env"))
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY")
 
+from finnlp.data_sources.news.finnhub_date_range import Finnhub_Date_Range
+from bs4 import BeautifulSoup
+import re
+
+# SEC 官方要求必須提供 User-Agent 與聯繫 Email
+SEC_HEADERS = {
+    "User-Agent": "MarginCall Bot (research@margincall.ai)",
+    "Accept-Encoding": "gzip, deflate"
+}
+
 def check_ollama():
     """快速檢查 Ollama 是否存活，避免浪費 5 分鐘等超時"""
     try:
