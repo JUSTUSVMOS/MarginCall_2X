@@ -104,7 +104,7 @@ def save_v_turn_state(is_confirmed, day1_date, day1_price, ftd_date):
 
 def calculate_buying_pressure(df, window=5):
     """
-    【V5 強化】計算 K 線的淨買盤壓力 (CVD 邏輯替代 $TICK)
+    【V5 強化】計算 K 線的淨買盤壓力 (CLV 邏輯替代 $TICK)
     """
     if df is None or df.empty or len(df) < window:
         return 0.0
@@ -392,7 +392,7 @@ def get_global_risk_radar() -> str:
 
 def get_v_turn_confirmation() -> str:
     """
-    【終極 V 轉確認模組 V5 - 事務安全與 CVD 強化版】
+    【終極 V 轉確認模組 V5 - 事務安全與 CLV 強化版】
     網路 I/O 在 lock 外執行，只有 DB 讀寫才 acquire db_lock，避免阻塞其他 DB 操作。
     """
     try:
@@ -483,16 +483,16 @@ def get_v_turn_confirmation() -> str:
         report += f"- 目前進度: Day {day_count}\n"
         if is_confirmed: report += f"- ✅ FTD 點火日: {ftd_date}\n"
 
-        report += f"\n🪬 *核心護法狀態 (CVD 強化):*\n"
+        report += f"\n🪬 *核心護法狀態 (CLV 強化):*\n"
         report += f"- VIX 期限結構: {vix_term:.2f} {'🟢' if vix_term_safe else '🔴'}\n"
         report += f"- VVIX 恐慌速率: {vvix_val:.1f} {'🟢' if vvix_safe else '🔴'}\n"
         report += f"- 信用市場(HYG/LQD): {'🟢' if credit_safe else '🔴'}\n"
         report += f"- 市場寬度(RSP/SPLG): {breadth_val:+.2%} {'🟢' if breadth_safe else '🔴'}\n"
-        report += f"- 買盤推力(CVD): {tick_msg} {tick_emoji}\n"
+        report += f"- K線推力(CLV): {tick_msg} {tick_emoji}\n"
         report += f"- MA20 技術位階: {'🟢' if ma20_safe else '🔴'}\n"
         
         if is_confirmed and all_macro_safe and ma20_safe:
-            report += "\n🏁 *【最終判定：發射訊號！】*\n👉 機構確認進場，CVD 買盤力道強勁。建議分批建倉。"
+            report += "\n🏁 *【最終判定：發射訊號！】*\n👉 機構確認進場，CLV 推力強勁。建議分批建倉。"
         else:
             report += "\n🏁 *【最終判定：維持現狀】*\n👉 市場尚未出現轉強信號或條件未齊。"
         return report

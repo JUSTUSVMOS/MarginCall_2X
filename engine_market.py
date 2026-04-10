@@ -320,7 +320,7 @@ def get_us_realtime_insight(symbol: str) -> str:
         report += f"● 成交量能比: {vol_ratio_report} | POC 密集區: {poc_price:.2f} ({vp_status})\n"
         report += "【📊 最近 5 根 K 線】\n"
         for _, row in df.tail(5).iterrows():
-            report += f"  [{row.name.strftime('%H:%M')}] {'🔴' if row['Close']>row['Open'] else '🟢'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
+            report += f"  [{row.name.strftime('%H:%M')}] {'🟢' if row['Close']>row['Open'] else '🔴'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
         return report
     except Exception as e: return f"❌ 美股掃描失敗: {e}"
 
@@ -414,7 +414,7 @@ def get_fundamental_data(symbol: str) -> str:
         
         report = f"【📊 {symbol} 深度基本面】\n"
         report += f"● EPS: {eps} | P/E: {pe} | P/B: {pb}\n"
-        report += f"● Short Ratio (軋空比): {short_ratio}\n"
+        report += f"● 空頭回補天數 (Days to Cover): {short_ratio}\n"
         report += f"● 機構持倉比: {inst_own_str}"
         
         return report
@@ -450,7 +450,7 @@ def get_technical_analysis(symbol: str) -> str:
         exp26 = close.ewm(span=26, adjust=False).mean()
         dif = exp12 - exp26
         dea = dif.ewm(span=9, adjust=False).mean()
-        macd_hist = (dif - dea) * 2
+        macd_hist = dif - dea
         
         # 3. 計算布林通道 (20)
         ma20 = close.rolling(window=20).mean()

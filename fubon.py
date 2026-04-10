@@ -40,7 +40,7 @@ def get_fubon_technical(symbol: str) -> str:
         
         report = f"🇹🇼 === {symbol} 台股全武裝分析 ===\n"
         report += f"● 現價: {curr} | 52週高: {h52} | 52週低: {l52}\n"
-        report += f"● RSI(6): {rsi:.2f} ({'🔥超買' if rsi>75 else '❄️超跌' if rsi<25 else '⚖️中性'})\n"
+        report += f"● RSI(14): {rsi:.2f} ({'🔥極度超買' if rsi>75 else '❄️極度超跌' if rsi<25 else '⚖️中性'})\n"
         report += f"● MACD: DIF:{dif:.2f} | 柱狀體:{macd_hist:.2f} ({'📈多頭增強' if macd_hist>0 else '📉空頭衰退'})\n"
         report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
         
