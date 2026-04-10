@@ -112,58 +112,74 @@ def calculate_buying_pressure(df, window=5):
 
 def update_market_db():
     init_market_db()
-    conn = sqlite3.connect(DB_FILE)
-    try:
-        last_date_df = pd.read_sql("SELECT MAX(date) as last_date FROM market_history", conn)
-        last_date_str = last_date_df['last_date'].iloc[0]
-        period = "1y" if not last_date_str else "7d"
-        
-        tickers = {
-            'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 
-            'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW',
-            'SOX': '^SOX', 'HYG': 'HYG', 'OIL': 'CL=F'
-        }
-        yf_dfs = []
-        for name, ticker in tickers.items():
-            try:
-                hist = yf.Ticker(ticker).history(period=period)
-                if not hist.empty:
-                    s = hist['Close'].rename(name)
-                    s.index = s.index.tz_localize(None).strftime('%Y-%m-%d')
-                    yf_dfs.append(s)
-            except Exception as e:
-                logger.warning(f"Failed to fetch market ticker {ticker}: {e}")
-        
-        if not yf_dfs: return
-        new_yf_df = pd.concat(yf_dfs, axis=1, sort=True)
 
-        url = 'https://squeezemetrics.com/monitor/static/DIX.csv'
-        headers = {'User-Agent': 'Mozilla/5.0'}
+    # 階段 1：短 DB 讀 (持鎖)
+    with db_lock:
+        conn = get_db_connection()
         try:
-            req = requests.get(url, headers=headers, timeout=5)
-            sm_df = pd.read_csv(io.StringIO(req.text))
-            sm_df['date'] = pd.to_datetime(sm_df['date']).dt.strftime('%Y-%m-%d')
-            sm_df.set_index('date', inplace=True)
-            sm_data = sm_df[['dix', 'gex']]
-        except Exception as e:
-            logger.warning(f"Failed to fetch DIX data: {e}")
-            sm_data = pd.DataFrame(columns=['dix', 'gex'])
+            last_date_df = pd.read_sql(
+                "SELECT MAX(date) as last_date FROM market_history", conn)
+            last_date_str = last_date_df['last_date'].iloc[0]
+        finally:
+            conn.close()
 
-        final_new_df = pd.merge(new_yf_df, sm_data, left_index=True, right_index=True, how='left').ffill()
-        
-        conn_cursor = conn.cursor()
-        for date, row in final_new_df.iterrows():
-            conn_cursor.execute("""
-                INSERT OR REPLACE INTO market_history (date, SPX, VIX, DXY, TNX, GOLD, SKEW, SOX, HYG, OIL, dix, gex)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (date, row.get('SPX'), row.get('VIX'), row.get('DXY'), row.get('TNX'), 
-                  row.get('GOLD'), row.get('SKEW'), row.get('SOX'), row.get('HYG'), 
-                  row.get('OIL'), row.get('dix'), row.get('gex')))
-        conn.commit()
+    period = "1y" if not last_date_str else "7d"
+
+    # 階段 2：網路 I/O (不持鎖、不開 conn)
+    tickers = {
+        'SPX': '^GSPC', 'VIX': '^VIX', 'DXY': 'DX-Y.NYB',
+        'TNX': '^TNX', 'GOLD': 'GC=F', 'SKEW': '^SKEW',
+        'SOX': '^SOX', 'HYG': 'HYG', 'OIL': 'CL=F'
+    }
+    yf_dfs = []
+    for name, ticker in tickers.items():
+        try:
+            hist = yf.Ticker(ticker).history(period=period)
+            if not hist.empty:
+                s = hist['Close'].rename(name)
+                s.index = s.index.tz_localize(None).strftime('%Y-%m-%d')
+                yf_dfs.append(s)
+        except Exception as e:
+            logger.warning(f"Failed to fetch market ticker {ticker}: {e}")
+
+    if not yf_dfs: return
+    new_yf_df = pd.concat(yf_dfs, axis=1, sort=True)
+
+    url = 'https://squeezemetrics.com/monitor/static/DIX.csv'
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        req = requests.get(url, headers=headers, timeout=5)
+        sm_df = pd.read_csv(io.StringIO(req.text))
+        sm_df['date'] = pd.to_datetime(sm_df['date']).dt.strftime('%Y-%m-%d')
+        sm_df.set_index('date', inplace=True)
+        sm_data = sm_df[['dix', 'gex']]
     except Exception as e:
-        logger.error(f"Market DB update failed: {e}")
-    finally:
-        conn.close()
+        logger.warning(f"Failed to fetch DIX data: {e}")
+        sm_data = pd.DataFrame(columns=['dix', 'gex'])
+
+    final_new_df = pd.merge(
+        new_yf_df, sm_data, left_index=True, right_index=True, how='left'
+    ).ffill()
+
+    # 階段 3：短 DB 寫 (持鎖)
+    with db_lock:
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            for date, row in final_new_df.iterrows():
+                cursor.execute("""
+                    INSERT OR REPLACE INTO market_history
+                    (date, SPX, VIX, DXY, TNX, GOLD, SKEW, SOX, HYG, OIL, dix, gex)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (date, row.get('SPX'), row.get('VIX'), row.get('DXY'),
+                      row.get('TNX'), row.get('GOLD'), row.get('SKEW'),
+                      row.get('SOX'), row.get('HYG'), row.get('OIL'),
+                      row.get('dix'), row.get('gex')))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Market DB update failed: {e}")
+        finally:
+            conn.close()
 
 def calculate_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0: return 0

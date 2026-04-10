@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 import requests
 import json
+import textwrap
 import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
@@ -174,7 +175,6 @@ def extract_insight_parallel(text, symbol):
         print(f"   [Debug] Gemma 萃取異常: {e}")
         return {"institutional": {"sentiment": "neutral", "insights": []}, "retail": {"sentiment": "neutral", "insights": []}}
     
-import textwrap # 如果最上面沒有 import，記得加上去
 
 # --- 3. 【語意 Reduce 階段】 ---
 def semantic_reduce(categorized_tags, symbol, company_name, sector):
@@ -377,6 +377,224 @@ def adjust_retail_score(raw_score, source_count):
         # 輕微偏多/偏空 -> 保留但權重降低，避免過度影響
         return raw_score * 0.5
 
+def _fetch_sec_data(stock, raw_texts):
+    """SEC 資料抓取，回傳 None 表示跳過"""
+    cik = get_cik(stock)
+    print(f"    🔍 CIK: {cik}")
+    if not cik:
+        print(f"    ⚠️ {stock} 無法查到 CIK，跳過 SEC 分析")
+        return
+        
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    res = requests.get(url, headers=SEC_HEADERS, timeout=15)
+    
+    if res.status_code == 200:
+        sec_data = res.json()
+        recent_filings = sec_data.get("filings", {}).get("recent", {})
+        forms = recent_filings.get("form", [])
+        accessions = recent_filings.get("accessionNumber", [])
+        docs = recent_filings.get("primaryDocument", [])
+        dates = recent_filings.get("filingDate", [])
+
+        # ==========================================
+        # 軌道一：深度解剖「最新一份年報」(10-K / 20-F)
+        # ==========================================
+        print(f"   🕵️ 軌道 1：搜尋 {stock} 最新年報...")
+        for i, form in enumerate(forms):
+            if form in ['10-K', '20-F']:
+                acc_num_raw = str(accessions[i])
+                acc_num = acc_num_raw.replace('-', '')
+                doc_name = docs[i]
+                annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
+                print(f"  🎯 找到最新年報 ({form}, 發布於 {dates[i]}), 下載 primaryDocument...")
+
+                doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=30)
+                if doc_res.status_code == 200:
+                    if form == '10-K':
+                        soup = BeautifulSoup(doc_res.text, 'html.parser')
+                        valid_paragraphs = []
+                        for p in soup.find_all(['p', 'span']):
+                            text = p.get_text(separator=' ', strip=True)
+                            if len(text) > 120 and 'us-gaap:' not in text.lower():
+                                valid_paragraphs.append(text)
+
+                        clean_text = " ".join(valid_paragraphs)
+                        clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+
+                        risk_text = extract_section(clean_text,
+                            "RISK FACTOR",
+                            ["UNRESOLVED STAFF", "ITEM 1B", "ITEM 2", "PROPERTIES"]
+                        )
+                        if risk_text:
+                            raw_texts.append(f"SEC 10-K [風險因素]: {risk_text}")
+                            print(f"      ✅ 錨點命中 Risk Factors")
+
+                        mda_text = extract_section(clean_text,
+                            "MANAGEMENT'S DISCUSSION",
+                            ["ITEM 7A", "ITEM 8", "QUANTITATIVE AND QUALITATIVE", "FINANCIAL STATEMENTS"]
+                        )
+                        if mda_text:
+                            raw_texts.append(f"SEC 10-K [營運分析]: {mda_text}")
+                            print(f"      ✅ 錨點命中 MD&A")
+
+                        if not risk_text and not mda_text:
+                            raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
+                            print(f"      ⚠️ 錨點全部未命中，盲切 [15000:19000]")
+
+                    # 分流 2：外國發行人 (20-F)，使用智能段落抓取避開 iXBRL 亂碼
+                    elif form == '20-F':
+                        print("   ℹ️ 20-F 外國年報啟用智能段落解析 (過濾 iXBRL)...")
+                        soup = BeautifulSoup(doc_res.text, 'html.parser')
+                        
+                        valid_paragraphs = []
+                        # 專門抓取段落 <p> 或文字區塊 <span>
+                        for p in soup.find_all(['p', 'span']):
+                            text = p.get_text(separator=' ', strip=True)
+                            
+                            # 🛡️ 核心濾網：長度太短不要(通常是表格數字)，包含 gaap 標籤的不要
+                            if len(text) > 120 and 'us-gaap:' not in text.lower():
+                                valid_paragraphs.append(text)
+                                
+                        clean_text = " ".join(valid_paragraphs)
+                        clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+                        
+                        upper_text = clean_text.upper() # 轉大寫方便搜尋
+
+                        # 🎯 第一刀：尋找「風險因素 (Risk Factors)」錨點 (通常是 Item 3.D)
+                        risk_text = extract_section(clean_text, 
+                            "RISK FACTOR", 
+                            ["ITEM 4", "ITEM 5", "INFORMATION ON THE COMPANY"]
+                        )
+                        if risk_text:
+                            raw_texts.append(f"SEC 20-F [風險因素]: {risk_text}")
+                        else:
+                            # 找不到標題盲切：跳過前面 1萬字 的封面廢話，抓取中間段落
+                            raw_texts.append(f"SEC 20-F [年報摘要A]: {clean_text[10000 : 13000]}")
+
+                        # 🎯 第二刀：尋找「營運分析 (Operating and Financial Review)」錨點 (通常是 Item 5)
+                        mda_text = extract_section(clean_text, 
+                            "OPERATING AND FINANCIAL REVIEW", 
+                            ["ITEM 6", "ITEM 7", "DIRECTORS", "MAJOR SHAREHOLDERS"]
+                        )
+                        if mda_text:
+                            raw_texts.append(f"SEC 20-F [營運分析]: {mda_text}")
+                        else:
+                            # 找不到標題盲切：再往後抓一段
+                            raw_texts.append(f"SEC 20-F [年報摘要B]: {clean_text[13000 : 16000]}")
+                        
+                break # 找到最新的一份就跳出迴圈
+
+        # ==========================================
+        # 軌道二：近期動態監控 (45天內)
+        # ==========================================
+        limit_date = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
+        print(f"   🕵️ 軌道 2：監控 45 天內動態 (自 {limit_date} 起)...")
+        
+        dynamic_count = 0
+        for i, form in enumerate(forms):
+            if dates[i] < limit_date or dynamic_count >= 10:
+                break
+            
+            if form in ['4', '8-K', '6-K', '10-Q']:
+                acc_num = str(accessions[i]).replace('-', '')
+                doc_name = docs[i]
+                doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
+                doc_res = requests.get(doc_url, headers=SEC_HEADERS, timeout=10)
+                
+                if doc_res.status_code == 200:
+                    # 情況 A：如果是內部人交易 (Form 4)
+                    if form == '4':
+                        insider_result = parse_form4_insider(doc_res.text)
+                        # 🛡️ 內部濾網：如果沒有真正的買賣金額，直接丟棄這份文件！
+                        if "未發現實質交易" not in insider_result and "無顯著方向" not in insider_result and "解析異常" not in insider_result:
+                            raw_texts.append(f"SEC Form 4: {insider_result}")
+                    
+                    # 情況 B：如果是其他重大公告 (8-K, 6-K, 10-Q)
+                    else:
+                        soup = BeautifulSoup(doc_res.text, 'html.parser')
+                        clean_text = soup.get_text(separator=' ', strip=True)
+                        clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
+                        upper_text = clean_text.upper()
+
+                        extracted = ""
+
+                        if form == '8-K':
+                            # 8-K 的真正內容在 "Item X.XX" 之後
+                            # 常見：Item 2.02 (財報), Item 1.01 (重大合約), Item 5.02 (人事), Item 8.01 (其他)
+                            item_match = re.search(r'ITEM\s+\d+\.\d+', upper_text)
+                            if item_match:
+                                start = item_match.start()
+                                extracted = clean_text[start : start + 1500]
+                                
+                        elif form == '10-Q':
+                            # 10-Q 的 MD&A 通常在 Item 2
+                            mda_idx = upper_text.find("MANAGEMENT'S DISCUSSION")
+                            if mda_idx == -1:
+                                mda_idx = upper_text.find("MANAGEMENT\u2019S DISCUSSION")
+                            if mda_idx != -1:
+                                extracted = clean_text[mda_idx : mda_idx + 2000]
+
+                        elif form == '6-K':
+                            # 6-K (外國公司) 找正文開頭：通常在 "SIGNATURE" 之前的最後大段文字
+                            sig_idx = upper_text.find("SIGNATURE")
+                            if sig_idx > 2000:
+                                # 從中間段開始抓，避開封面
+                                mid = sig_idx // 2
+                                extracted = clean_text[mid : mid + 1500]
+
+                        # Fallback：如果關鍵字都沒命中，跳過前 800 字（封面）再抓
+                        if not extracted:
+                            extracted = clean_text[800:2000]
+
+                        # 最終過濾：如果內容超過 60% 是法律套話，直接丟棄
+                        boilerplate_signals = ['check mark', 'indicate by', 'forward-looking', 
+                                               'securities registered', 'commission file']
+                        boilerplate_count = sum(1 for sig in boilerplate_signals if sig in extracted.lower())
+                        
+                        if boilerplate_count < 3:
+                            raw_texts.append(f"SEC {form} ({dates[i]}): {extracted}")
+                    
+                    dynamic_count += 1
+        print(f"   ✅ SEC 雙軌解析完成")
+
+        # ==========================================
+        # 軌道三：最新一季財報電話會議 (Earning Call)
+        # ==========================================
+        print(f"   🚀 軌道 3：搜尋 {stock} 最新 Earning Call (via Motley Fool)...")
+        try:
+            content = fetch_earning_call_from_fool(stock)
+            if content and len(content) > 500:
+                upper_content = content.upper()
+                # 1. 尋找 Q&A 段落
+                qa_keywords = ["QUESTIONS AND ANSWERS", "QUESTION AND ANSWER", "Q&A SESSION", "Q & A"]
+                qa_start = -1
+                for kw in qa_keywords:
+                    idx = upper_content.find(kw, len(content) // 4) 
+                    if idx != -1:
+                        qa_start = idx
+                        break
+                if qa_start != -1:
+                    raw_texts.append(f"SEC EarningCall [Q&A]: {content[qa_start : qa_start + 3000]}")
+                    print(f"   ✅ Earning Call Q&A 命中")
+                else:
+                    raw_texts.append(f"SEC EarningCall [後半段]: {content[len(content)//2 : len(content)//2 + 3000]}")
+                    print(f"   ✅ Earning Call 取後半段")
+
+                # 2. 尋找前瞻指引
+                guidance_keywords = ["GUIDANCE", "OUTLOOK", "EXPECT", "FORECAST"]
+                for kw in guidance_keywords:
+                    g_idx = upper_content.find(kw)
+                    if g_idx != -1 and g_idx < len(content) // 2: 
+                        raw_texts.append(f"SEC EarningCall [指引]: {content[g_idx : g_idx + 1500]}")
+                        print(f"   ✅ Earning Call 前瞻指引命中")
+                        break
+            else:
+                print(f"   ⚠️ Earning Call 未在 Motley Fool 總覽頁找到")
+        except Exception as e:
+            print(f"   ⚠️ Earning Call 抓取失敗: {e}")
+    else:
+        print(f"    ⚠️ SEC 請求被拒絕 (HTTP {res.status_code})")
+
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
     # --- 0. Ollama 預檢 ---
@@ -459,221 +677,12 @@ def run_turbo_trinity_scout(stock="NVDA"):
 
     # D. SEC
     try:
-        cik = get_cik(stock)
-        print(f"   🔍 CIK: {cik}")
-        url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-        res = requests.get(url, headers=SEC_HEADERS, timeout=15)
-        
-        if res.status_code == 200:
-            sec_data = res.json()
-            recent_filings = sec_data.get("filings", {}).get("recent", {})
-            forms = recent_filings.get("form", [])
-            accessions = recent_filings.get("accessionNumber", [])
-            docs = recent_filings.get("primaryDocument", [])
-            dates = recent_filings.get("filingDate", [])
-
-            # ==========================================
-            # 軌道一：深度解剖「最新一份年報」(10-K / 20-F)
-            # ==========================================
-            print(f"   🕵️ 軌道 1：搜尋 {stock} 最新年報...")
-            for i, form in enumerate(forms):
-                if form in ['10-K', '20-F']:
-                    acc_num_raw = str(accessions[i])
-                    acc_num = acc_num_raw.replace('-', '')
-                    doc_name = docs[i]
-                    annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
-                    print(f"  🎯 找到最新年報 ({form}, 發布於 {dates[i]}), 下載 primaryDocument...")
-
-                    doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=30)
-                    if doc_res.status_code == 200:
-                        if form == '10-K':
-                            soup = BeautifulSoup(doc_res.text, 'html.parser')
-                            valid_paragraphs = []
-                            for p in soup.find_all(['p', 'span']):
-                                text = p.get_text(separator=' ', strip=True)
-                                if len(text) > 120 and 'us-gaap:' not in text.lower():
-                                    valid_paragraphs.append(text)
-
-                            clean_text = " ".join(valid_paragraphs)
-                            clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
-
-                            risk_text = extract_section(clean_text,
-                                "RISK FACTOR",
-                                ["UNRESOLVED STAFF", "ITEM 1B", "ITEM 2", "PROPERTIES"]
-                            )
-                            if risk_text:
-                                raw_texts.append(f"SEC 10-K [風險因素]: {risk_text}")
-                                print(f"      ✅ 錨點命中 Risk Factors")
-
-                            mda_text = extract_section(clean_text,
-                                "MANAGEMENT'S DISCUSSION",
-                                ["ITEM 7A", "ITEM 8", "QUANTITATIVE AND QUALITATIVE", "FINANCIAL STATEMENTS"]
-                            )
-                            if mda_text:
-                                raw_texts.append(f"SEC 10-K [營運分析]: {mda_text}")
-                                print(f"      ✅ 錨點命中 MD&A")
-
-                            if not risk_text and not mda_text:
-                                raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
-                                print(f"      ⚠️ 錨點全部未命中，盲切 [15000:19000]")
-
-                        # 分流 2：外國發行人 (20-F)，使用智能段落抓取避開 iXBRL 亂碼
-                        elif form == '20-F':
-                            print("   ℹ️ 20-F 外國年報啟用智能段落解析 (過濾 iXBRL)...")
-                            soup = BeautifulSoup(doc_res.text, 'html.parser')
-                            
-                            valid_paragraphs = []
-                            # 專門抓取段落 <p> 或文字區塊 <span>
-                            for p in soup.find_all(['p', 'span']):
-                                text = p.get_text(separator=' ', strip=True)
-                                
-                                # 🛡️ 核心濾網：長度太短不要(通常是表格數字)，包含 gaap 標籤的不要
-                                if len(text) > 120 and 'us-gaap:' not in text.lower():
-                                    valid_paragraphs.append(text)
-                                    
-                            clean_text = " ".join(valid_paragraphs)
-                            clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
-                            
-                            upper_text = clean_text.upper() # 轉大寫方便搜尋
-
-                            # 🎯 第一刀：尋找「風險因素 (Risk Factors)」錨點 (通常是 Item 3.D)
-                            risk_text = extract_section(clean_text, 
-                                "RISK FACTOR", 
-                                ["ITEM 4", "ITEM 5", "INFORMATION ON THE COMPANY"]
-                            )
-                            if risk_text:
-                                raw_texts.append(f"SEC 20-F [風險因素]: {risk_text}")
-                            else:
-                                # 找不到標題盲切：跳過前面 1萬字 的封面廢話，抓取中間段落
-                                raw_texts.append(f"SEC 20-F [年報摘要A]: {clean_text[10000 : 13000]}")
-
-                            # 🎯 第二刀：尋找「營運分析 (Operating and Financial Review)」錨點 (通常是 Item 5)
-                            mda_text = extract_section(clean_text, 
-                                "OPERATING AND FINANCIAL REVIEW", 
-                                ["ITEM 6", "ITEM 7", "DIRECTORS", "MAJOR SHAREHOLDERS"]
-                            )
-                            if mda_text:
-                                raw_texts.append(f"SEC 20-F [營運分析]: {mda_text}")
-                            else:
-                                # 找不到標題盲切：再往後抓一段
-                                raw_texts.append(f"SEC 20-F [年報摘要B]: {clean_text[13000 : 16000]}")
-                            
-                    break # 找到最新的一份就跳出迴圈
-
-            # ==========================================
-            # 軌道二：近期動態監控 (45天內)
-            # ==========================================
-            limit_date = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
-            print(f"   🕵️ 軌道 2：監控 45 天內動態 (自 {limit_date} 起)...")
-            
-            dynamic_count = 0
-            for i, form in enumerate(forms):
-                if dates[i] < limit_date or dynamic_count >= 10:
-                    break
-                
-                if form in ['4', '8-K', '6-K', '10-Q']:
-                    acc_num = str(accessions[i]).replace('-', '')
-                    doc_name = docs[i]
-                    doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
-                    doc_res = requests.get(doc_url, headers=SEC_HEADERS, timeout=10)
-                    
-                    if doc_res.status_code == 200:
-                        # 情況 A：如果是內部人交易 (Form 4)
-                        if form == '4':
-                            insider_result = parse_form4_insider(doc_res.text)
-                            # 🛡️ 內部濾網：如果沒有真正的買賣金額，直接丟棄這份文件！
-                            if "未發現實質交易" not in insider_result and "無顯著方向" not in insider_result and "解析異常" not in insider_result:
-                                raw_texts.append(f"SEC Form 4: {insider_result}")
-                        
-                        # 情況 B：如果是其他重大公告 (8-K, 6-K, 10-Q)
-                        else:
-                            soup = BeautifulSoup(doc_res.text, 'html.parser')
-                            clean_text = soup.get_text(separator=' ', strip=True)
-                            clean_text = re.sub(r'http[s]?://\S+', '', clean_text)
-                            upper_text = clean_text.upper()
-
-                            extracted = ""
-
-                            if form == '8-K':
-                                # 8-K 的真正內容在 "Item X.XX" 之後
-                                # 常見：Item 2.02 (財報), Item 1.01 (重大合約), Item 5.02 (人事), Item 8.01 (其他)
-                                item_match = re.search(r'ITEM\s+\d+\.\d+', upper_text)
-                                if item_match:
-                                    start = item_match.start()
-                                    extracted = clean_text[start : start + 1500]
-                                    
-                            elif form == '10-Q':
-                                # 10-Q 的 MD&A 通常在 Item 2
-                                mda_idx = upper_text.find("MANAGEMENT'S DISCUSSION")
-                                if mda_idx == -1:
-                                    mda_idx = upper_text.find("MANAGEMENT\u2019S DISCUSSION")
-                                if mda_idx != -1:
-                                    extracted = clean_text[mda_idx : mda_idx + 2000]
-
-                            elif form == '6-K':
-                                # 6-K (外國公司) 找正文開頭：通常在 "SIGNATURE" 之前的最後大段文字
-                                sig_idx = upper_text.find("SIGNATURE")
-                                if sig_idx > 2000:
-                                    # 從中間段開始抓，避開封面
-                                    mid = sig_idx // 2
-                                    extracted = clean_text[mid : mid + 1500]
-
-                            # Fallback：如果關鍵字都沒命中，跳過前 800 字（封面）再抓
-                            if not extracted:
-                                extracted = clean_text[800:2000]
-
-                            # 最終過濾：如果內容超過 60% 是法律套話，直接丟棄
-                            boilerplate_signals = ['check mark', 'indicate by', 'forward-looking', 
-                                                   'securities registered', 'commission file']
-                            boilerplate_count = sum(1 for sig in boilerplate_signals if sig in extracted.lower())
-                            
-                            if boilerplate_count < 3:
-                                raw_texts.append(f"SEC {form} ({dates[i]}): {extracted}")
-                        
-                        dynamic_count += 1
-            print(f"   ✅ SEC 雙軌解析完成")
-
-            # ==========================================
-            # 軌道三：最新一季財報電話會議 (Earning Call)
-            # ==========================================
-            print(f"   🚀 軌道 3：搜尋 {stock} 最新 Earning Call (via Motley Fool)...")
-            try:
-                content = fetch_earning_call_from_fool(stock)
-                if content and len(content) > 500:
-                    upper_content = content.upper()
-                    # 1. 尋找 Q&A 段落
-                    qa_keywords = ["QUESTIONS AND ANSWERS", "QUESTION AND ANSWER", "Q&A SESSION", "Q & A"]
-                    qa_start = -1
-                    for kw in qa_keywords:
-                        idx = upper_content.find(kw, len(content) // 4) 
-                        if idx != -1:
-                            qa_start = idx
-                            break
-                    if qa_start != -1:
-                        raw_texts.append(f"SEC EarningCall [Q&A]: {content[qa_start : qa_start + 3000]}")
-                        print(f"   ✅ Earning Call Q&A 命中")
-                    else:
-                        raw_texts.append(f"SEC EarningCall [後半段]: {content[len(content)//2 : len(content)//2 + 3000]}")
-                        print(f"   ✅ Earning Call 取後半段")
-
-                    # 2. 尋找前瞻指引
-                    guidance_keywords = ["GUIDANCE", "OUTLOOK", "EXPECT", "FORECAST"]
-                    for kw in guidance_keywords:
-                        g_idx = upper_content.find(kw)
-                        if g_idx != -1 and g_idx < len(content) // 2: 
-                            raw_texts.append(f"SEC EarningCall [指引]: {content[g_idx : g_idx + 1500]}")
-                            print(f"   ✅ Earning Call 前瞻指引命中")
-                            break
-                else:
-                    print(f"   ⚠️ Earning Call 未在 Motley Fool 總覽頁找到")
-            except Exception as e:
-                print(f"   ⚠️ Earning Call 抓取失敗: {e}")
-        else:
-            print(f"   ⚠️ SEC 請求被拒絕 (HTTP {res.status_code})")
-    except Exception as e: 
-        print(f"   ⚠️ SEC 抓取失敗: {e}")
+        _fetch_sec_data(stock, raw_texts)
+    except Exception as e:
+        print(f"    ⚠️ SEC 抓取失敗: {e}")
 
     total = len(raw_texts)
+
     if total == 0: return print("📭 無情報")
 
     # --- 🔍 偵錯列印：檢視抓取內容 ---

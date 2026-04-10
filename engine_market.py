@@ -42,9 +42,9 @@ def normalize_ticker(symbol: str) -> str:
     is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
     
     if not is_taiwan:
-        # 美股習慣將 Class B 寫成 .B，但 yfinance 需要 -B
-        if "." in symbol and not symbol.endswith((".TW", ".TWO", ".HK", ".SS", ".SZ")):
-            # 排除掉已經有市場後綴的
+        # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
+        suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
+        if "." in symbol and not symbol.endswith(suffixes):
             return symbol.replace(".", "-")
     return symbol
 

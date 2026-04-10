@@ -56,6 +56,9 @@ fubon.init_fubon()
 bot = telebot.TeleBot(BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_KEY)
 
+# --- 全局狀態開關 ---
+v_turn_active = True  # V 轉監控預設開啟
+
 # AI 模型清單 (暫時將 Flash 移至第一位，避開 Pro 的 429 延遲)
 AVAILABLE_MODELS = [
     'gemini-3.1-flash-lite-preview',
@@ -272,7 +275,7 @@ def reset_memory(message):
     bot.reply_to(message, "🧹 推進器記憶體已排空！對話上下文已重置。")
 
 # --- 核心 LLM 調用邏輯 (支援 Tool 切換) ---
-def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None):
+def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, allow_retry=True):
     """
     統一的 LLM 調用入口，處理模型切換、超時與 Tool 呼叫。
     """
@@ -291,7 +294,11 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None):
     now = time.time()
     current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
 
+    max_timeouts = 1 if not allow_retry else 2
+    timeout_count = 0
     for i, model_name in enumerate(current_models):
+        if timeout_count >= max_timeouts:
+            break
         try:
             chat = client.chats.create(
                 model=model_name,
@@ -315,11 +322,14 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None):
 
             llm_thread = threading.Thread(target=_thread_task)
             llm_thread.start()
-            llm_thread.join(timeout=45) 
+            llm_thread.join(timeout=30) 
 
             if llm_thread.is_alive():
                 logger.warning(f"Engine {model_name} timeout.")
-                dead_engines[model_name] = time.time() + 60
+                dead_engines[model_name] = time.time() + 120
+                timeout_count += 1
+                if not allow_retry:
+                    return "⚠️ 記帳請求超時，請稍後重試。"
                 continue
             
             if exception_container:
@@ -340,7 +350,7 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None):
             err_str = str(e).upper()
             if any(k in err_str for k in ['429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE', 'INTERNAL', 'DEADLINE_EXCEEDED']):
                 logger.warning(f"Engine {model_name} temp failure: {str(e)}")
-                dead_engines[model_name] = time.time() + 60
+                dead_engines[model_name] = time.time() + 120
                 continue
             else:
                 logger.error(f"Engine {model_name} fatal: {str(e)}")
@@ -362,12 +372,20 @@ def handle_trade_command(message):
     trade_prompt = system_prompt + "\n\n【⚠️ 記帳指令模式】你現在擁有「更新持倉 (update_position)」的權限。請根據使用者輸入精確執行買入、賣出或校正。"
     
     # 記帳模式不使用全域歷史，避免上下文干擾
-    result = ask_llm(user_input, tools=FULL_AGENT_TOOLS, system_prompt_override=trade_prompt)
+    result = ask_llm(user_input, tools=FULL_AGENT_TOOLS, system_prompt_override=trade_prompt, allow_retry=False)
     
     try:
         bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=result, parse_mode='Markdown')
     except:
         bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=result)
+
+@bot.message_handler(commands=['vturn'])
+def toggle_v_turn(message):
+    if message.from_user.id != MY_USER_ID: return
+    global v_turn_active
+    v_turn_active = not v_turn_active
+    status = "🟢 已啟動" if v_turn_active else "🔴 已關閉"
+    bot.reply_to(message, f"V 轉監控 {status}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_text(message):
@@ -395,11 +413,16 @@ if __name__ == "__main__":
     
     def auto_v_turn_monitor():
         try:
-            if not market.is_us_market_open() and datetime.now(pytz.timezone('US/Eastern')).hour < 16: return
+            if not v_turn_active: return
+            now_et = datetime.now(pytz.timezone('US/Eastern'))
+            if now_et.weekday() >= 5: return # 週末不執行
+            if not market.is_us_market_open() and now_et.hour < 16: return
+
             report = risk.get_v_turn_confirmation()
-            if any(k in report for k in ["✅ 觸發", "偵測", "🚨", "🏁"]):
+            if any(k in report for k in ["✅ 觸發", "偵測", "📈", "📉"]):
                 bot.send_message(MY_USER_ID, report, parse_mode='Markdown')
-        except: pass
+        except Exception as e:
+            logger.error(f"V-turn monitor failed: {e}")
 
     scheduler.add_job(auto_v_turn_monitor, 'interval', hours=2)
     scheduler.add_job(daily_nlp_scout, 'interval', hours=4)
@@ -419,8 +442,3 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"🚨 Polling 崩潰: {e}")
             time.sleep(5)
-    while True:
-        try:
-            bot.infinity_polling(timeout=10, long_polling_timeout=5)
-        except Exception as e:
-            time.sleep(3)
