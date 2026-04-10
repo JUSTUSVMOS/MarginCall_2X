@@ -22,8 +22,12 @@ def get_my_user_id():
     val = os.getenv("TELEGRAM_USER_ID")
     return int(val) if val else 0
 
-bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
+bot = None # 改為延後初始化或從外部注入
 genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+
+def set_bot(external_bot):
+    global bot
+    bot = external_bot
 
 # --- 0. 全域 Regex 配置 (預編譯提高效能) ---
 
@@ -46,9 +50,9 @@ TICKER_ALIASES = {
 # 提取對照表的 keys，組成 Regex 條件 (例如：APPLE|蘋果|TESLA...)
 alias_pattern = '|'.join(map(re.escape, TICKER_ALIASES.keys()))
 
-# 支援：1.自訂中英俗稱 2.純英文字母(1-6碼) 3.台股數字/ETF(4-6碼數字，可帶字母)
+# 支援：1.自訂中英俗稱 2.純英文字母(1-6碼，可帶點) 3.台股數字/ETF(4-6碼數字，可帶字母)
 # 使用 Lookaround (?<!...) (?!) 確保不會被中文字黏住而抓不到
-regex_str = rf'(?<![a-zA-Z0-9])({alias_pattern}|[a-zA-Z]{{1,6}}|\d{{4,6}}[A-Za-z]?|\d{{4}}\.(?:tw|two|TW|TWO))(?![a-zA-Z0-9])'
+regex_str = rf'(?<![a-zA-Z0-9])({alias_pattern}|[a-zA-Z]{{1,6}}(?:\.[a-zA-Z])?|\d{{4,6}}[A-Za-z]?|\d{{4}}\.(?:tw|two|TW|TWO))(?![a-zA-Z0-9])'
 SYMBOL_PATTERN = re.compile(regex_str, re.IGNORECASE)
 
 # 黑名單：防止 Regex 抓到常用金融術語
@@ -196,7 +200,7 @@ def fetch_strat_data(symbol: str) -> dict:
     """
     根據資產類型分流抓取數據，並實作 CVD & NLP 雙重熔斷中斷。
     """
-    symbol = symbol.upper()
+    symbol = market.normalize_ticker(symbol)
     profile = market.get_asset_profile(symbol)
     asset_type = profile.get('asset_type', 'Unknown')
     

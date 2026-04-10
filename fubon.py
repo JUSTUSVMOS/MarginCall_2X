@@ -110,7 +110,7 @@ def get_fubon_inventories():
                 s = item.stock_no
                 qty = getattr(item, 'today_qty', 0)
                 # 嘗試多種可能的成本欄位名稱
-                cost = getattr(item, 'buy_price', getattr(item, 'price_avg', 0.0))
+                cost = getattr(item, 'cost_price', getattr(item, 'buy_price', getattr(item, 'price_avg', 0.0)))
 
                 if s in inventory_map:
                     inventory_map[s]['cost'] = cost

@@ -73,6 +73,20 @@ def init_db():
 # 啟動時自動初始化
 init_db()
 
+def normalize_ticker(symbol: str) -> str:
+    """
+    將使用者輸入的代號正規化。
+    特別處理美股中帶點的代號 (如 BRK.B -> BRK-B)
+    """
+    symbol = symbol.upper().strip()
+    is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
+    if not is_taiwan:
+        # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
+        suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
+        if "." in symbol and not symbol.endswith(suffixes):
+            return symbol.replace(".", "-")
+    return symbol
+
 def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
     """
     更新持倉或現金。
@@ -82,7 +96,7 @@ def update_position(symbol: str, price: float, shares: float, action: str = 'set
     total_amount_twd: 選填，如果 AI 直接知道台幣總額可帶入
     locked: 0 (解鎖), 1 (鎖定)。若不填則維持現狀。
     """
-    symbol = symbol.upper()
+    symbol = normalize_ticker(symbol)
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
     is_cash = 'CASH' in symbol
     fx_rate = get_exchange_rate() if (not is_taiwan and not is_cash) else 1.0
@@ -159,7 +173,7 @@ SYMBOL_NAME_MAP = {
 _AUTO_NAME_CACHE = {}
 
 def get_symbol_name(symbol: str) -> str:
-    symbol = symbol.upper()
+    symbol = normalize_ticker(symbol)
     if symbol in SYMBOL_NAME_MAP:
         return SYMBOL_NAME_MAP[symbol]
     
@@ -205,8 +219,14 @@ def get_portfolio_raw_data() -> str:
     cursor = conn.cursor()
     
     # 1. 取得富邦實體數據 (包含股數與買進成本)
-    fubon_inv = fubon.get_fubon_inventories()
-    fubon_cash = fubon.get_fubon_bank_remain()
+    # if fubon.fubon_ready:
+    #     fubon_inv = fubon.get_fubon_inventories()
+    #     fubon_cash = fubon.get_fubon_bank_remain()
+    # else:
+    #     fubon_inv = {}
+    #     fubon_cash = None
+    fubon_inv = {}
+    fubon_cash = None
     
     try:
         # 2. 取得資料庫目前的倉位
@@ -214,51 +234,51 @@ def get_portfolio_raw_data() -> str:
         db_rows = cursor.fetchall()
         db_dict = {r[0]: list(r) for r in db_rows}
 
-        # 3. 智能合併與清洗
-        # A. 遍歷富邦抓到的標的，更新或新增
-        for symbol, data in fubon_inv.items():
-            fb_shares = data['shares']
-            fb_cost = data['cost']
-            
-            if symbol in db_dict:
-                # 已有紀錄，更新股數。只有當 db 成本為 0 時才更新成本。
-                update_needed = False
-                if db_dict[symbol][2] != fb_shares:
-                    db_dict[symbol][2] = fb_shares
-                    update_needed = True
-                if db_dict[symbol][1] == 0.0 and fb_cost > 0:
-                    db_dict[symbol][1] = fb_cost
-                    update_needed = True
-                
-                if update_needed:
-                    cursor.execute("UPDATE portfolio SET shares = ?, cost = ? WHERE symbol = ?", (fb_shares, db_dict[symbol][1], symbol))
-            else:
-                # 資料庫沒記錄，自動新增
-                cursor.execute("INSERT INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)", (symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0))
-                db_dict[symbol] = [symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0]
-
-        # B. 【清洗邏輯】如果資料庫中的台股標的不在富邦清單內，且未被鎖定，則刪除
-        fb_symbols = set(fubon_inv.keys())
-        to_delete = []
-        for sym in db_dict.keys():
-            # 判斷是否為台股 (非 CASH, 非海外股)
-            is_taiwan = (any(char.isdigit() for char in sym) and len(sym) <= 6)
-            is_locked = db_dict[sym][4] == 1
-            
-            if is_taiwan and sym not in fb_symbols and not is_locked:
-                to_delete.append(sym)
-        
-        for sym in to_delete:
-            cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (sym,))
-            del db_dict[sym]
-            print(f"🧹 已自動清理幽靈庫存: {sym}")
-
-        # C. 自動同步台幣現金
-        if fubon_cash is not None:
-            cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = ? WHERE symbol = 'CASH_TWD'", (float(fubon_cash), float(fubon_cash)))
-            if 'CASH_TWD' in db_dict:
-                db_dict['CASH_TWD'][2] = float(fubon_cash)
-                db_dict['CASH_TWD'][3] = float(fubon_cash)
+        # if fubon.fubon_ready:
+        #     # 3. 智能合併與清洗
+        #     # A. 遍歷富邦抓到的標的，更新或新增
+        #     for symbol, data in fubon_inv.items():
+        #         fb_shares = data['shares']
+        #         fb_cost = data['cost']
+        #         
+        #         if symbol in db_dict:
+        #             # 已有紀錄，更新股數。只有當 db 成本為 0 時才更新成本。
+        #             update_needed = False
+        #             if db_dict[symbol][2] != fb_shares:
+        #                 db_dict[symbol][2] = fb_shares
+        #                 update_needed = True
+        #             if db_dict[symbol][1] == 0.0 and fb_cost > 0:
+        #                 db_dict[symbol][1] = fb_cost
+        #                 update_needed = True
+        #             
+        #             if update_needed:
+        #                 cursor.execute("UPDATE portfolio SET shares = ?, cost = ? WHERE symbol = ?", (fb_shares, db_dict[symbol][1], symbol))
+        #         else:
+        #             # 資料庫沒記錄，自動新增
+        #             cursor.execute("INSERT INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)", (symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0))
+        #             db_dict[symbol] = [symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0]
+        #
+        #     # B. 【清洗邏輯】如果資料庫中的台股標的不在富邦清單內，且未被鎖定，則刪除
+        #     fb_symbols = set(fubon_inv.keys())
+        #     to_delete = []
+        #     for sym in db_dict.keys():
+        #         # 判斷是否為台股 (非 CASH, 非海外股)
+        #         is_taiwan = (any(char.isdigit() for char in sym) and len(sym) <= 6)
+        #         is_locked = db_dict[sym][4] == 1
+        #         
+        #         if is_taiwan and sym not in fb_symbols and not is_locked:
+        #             to_delete.append(sym)
+        #     
+        #     for sym in to_delete:
+        #         cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (sym,))
+        #         del db_dict[sym]
+        #         print(f"🧹 已自動清理幽靈庫存: {sym}")
+        #
+        #     # C. 自動同步台幣現金
+        #     if fubon_cash is not None:
+        #         cursor.execute("INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES ('CASH_TWD', 1.0, ?, ?, 0)", (float(fubon_cash), float(fubon_cash)))
+        #         # 更新 db_dict 讓回傳的 JSON 也有資料
+        #         db_dict['CASH_TWD'] = ['CASH_TWD', 1.0, float(fubon_cash), float(fubon_cash), 0]
         
         conn.commit()
 

@@ -32,11 +32,27 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 # 初始化 Gemini 客戶端 (用於 Stage 2)
 genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
+def normalize_ticker(symbol: str) -> str:
+    """
+    將使用者輸入的代號正規化。
+    特別處理美股中帶點的代號 (如 BRK.B -> BRK-B)
+    """
+    symbol = symbol.upper().strip()
+    # 如果不是台股 (不含數字且長度不符合台股規則)
+    is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
+    
+    if not is_taiwan:
+        # 美股習慣將 Class B 寫成 .B，但 yfinance 需要 -B
+        if "." in symbol and not symbol.endswith((".TW", ".TWO", ".HK", ".SS", ".SZ")):
+            # 排除掉已經有市場後綴的
+            return symbol.replace(".", "-")
+    return symbol
+
 def get_asset_profile(symbol: str) -> dict:
     """
     【核心】資產分類器：Stage 1 (規則) + Stage 2 (LLM Fallback)
     """
-    symbol = symbol.upper()
+    symbol = normalize_ticker(symbol)
     
     # 1. 檢查 SQLite 快取
     with db_lock:
@@ -162,7 +178,7 @@ def resolve_symbol_identity(symbol: str) -> str:
     【核心修復】專門解決機器人不認識新標的(如 009816)的問題。
     在任何分析前，先呼叫此工具確認標的名與真實性。
     """
-    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    symbol = normalize_ticker(symbol).replace('.TW', '').replace('.TWO', '')
     is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol) <= 6)
     
     if is_taiwan and fubon.fubon_ready:
@@ -185,7 +201,7 @@ def resolve_symbol_identity(symbol: str) -> str:
         return f"❌ 無法識別標的: {symbol}，請確認代號是否正確。"
 
 def get_live_price(symbol: str) -> str:
-    symbol = symbol.upper()
+    symbol = normalize_ticker(symbol)
     clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
     if clean_symbol == "2454_ESOP": clean_symbol = "2454"
     # 支援新形態 ETF (009816 等 6 碼)
@@ -230,7 +246,7 @@ def get_live_price(symbol: str) -> str:
     return "無法取得報價"
 
 def get_us_realtime_insight(symbol: str) -> str:
-    symbol = symbol.upper()
+    symbol = normalize_ticker(symbol)
     try:
         ticker = yf.Ticker(symbol)
         full_df = ticker.history(period="1d", interval="5m")
@@ -333,6 +349,7 @@ def get_market_sentiment() -> str:
 
 def get_stock_news(symbol: str) -> str:
     try:
+        symbol = normalize_ticker(symbol)
         search_symbol = symbol.upper()
         if search_symbol.isdigit(): search_symbol += ".TW"
         ticker = yf.Ticker(search_symbol)
@@ -348,6 +365,7 @@ def get_stock_news(symbol: str) -> str:
 
 def get_fundamental_data(symbol: str) -> str:
     try:
+        symbol = normalize_ticker(symbol)
         s = symbol.upper()
         if s.isdigit(): s += ".TW"
         ticker = yf.Ticker(s)
@@ -372,6 +390,7 @@ def get_fundamental_data(symbol: str) -> str:
 
 def get_technical_analysis(symbol: str) -> str:
     try:
+        symbol = normalize_ticker(symbol)
         s = symbol.upper()
         clean_symbol = s.replace('.TW', '').replace('.TWO', '')
         is_taiwan = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
@@ -429,6 +448,7 @@ def get_technical_analysis(symbol: str) -> str:
 
 def get_market_history(symbol: str, days: int) -> str:
     try:
+        symbol = normalize_ticker(symbol)
         s = symbol.upper()
         if s.isdigit() and not s.endswith('.TW'): s += '.TW'
         hist = yf.Ticker(s).history(period="1mo").tail(days)
