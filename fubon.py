@@ -249,9 +249,19 @@ def get_txo_sentiment() -> str:
             
             # 判斷是否為台指選 (TXO)
             if 'TXO' in sym:
-                # 富邦 SDK 合約代號通常包含 C 或 P
-                if 'C' in sym: calls_vol += vol
-                elif 'P' in sym: puts_vol += vol
+                # 兼容性判斷：優先找 C/P，若無則看 TAIFEX 月份代號
+                if 'C' in sym:
+                    calls_vol += vol
+                elif 'P' in sym:
+                    puts_vol += vol
+                elif len(sym) >= 10:
+                    # 假設格式如 TXO17000A4, 第 9 碼是 A (index 8)
+                    # 或是 TXO17000A4 的 sym[-2]
+                    month_code = sym[-2]
+                    if month_code in 'ABCDEFGHIJKL':
+                        calls_vol += vol
+                    elif month_code in 'MNOPQRSTUVWX':
+                        puts_vol += vol
 
         pc_ratio = (puts_vol / calls_vol) if calls_vol > 0 else 0
         pc_label = "🔴 極度看空" if pc_ratio > 1.2 else "🟡 避險轉強" if pc_ratio > 1.0 else "🟢 多頭佔優" if pc_ratio < 0.8 else "⚖️ 中性偏多"

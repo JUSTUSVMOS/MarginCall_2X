@@ -256,15 +256,29 @@ def get_us_realtime_insight(symbol: str) -> str:
         bid, ask = info.get('bid', 0), info.get('ask', 0)
         ba_ratio = (info.get('bidSize', 1) / info.get('askSize', 1)) if info.get('askSize', 0) > 0 else 1
         
-        # 🎭 Put/Call Ratio 計算 (整合自 test_yf.py)
+        # 🎭 Put/Call Ratio 計算 (優化：跳過超短期周選)
         pc_report = "N/A"
         try:
-            if ticker.options:
-                opt = ticker.option_chain(ticker.options[0])
-                calls_vol = opt.calls['volume'].sum()
-                puts_vol = opt.puts['volume'].sum()
-                pc_ratio = puts_vol / calls_vol if calls_vol > 0 else 0
-                pc_report = f"{pc_ratio:.2f}"
+            expirations = ticker.options
+            if expirations:
+                total_calls, total_puts, valid_fetched = 0, 0, 0
+                target_count = 4
+                min_days = 7
+                today = datetime.datetime.now()
+                for date_str in expirations:
+                    if valid_fetched >= target_count: break
+                    try:
+                        expiry_date = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+                        if (expiry_date - today).days < min_days: continue
+                        chain = ticker.option_chain(date_str)
+                        c_sum = chain.calls['volume'].sum() if not chain.calls.empty else 0
+                        p_sum = chain.puts['volume'].sum() if not chain.puts.empty else 0
+                        total_calls += (c_sum if not np.isnan(c_sum) else 0)
+                        total_puts += (p_sum if not np.isnan(p_sum) else 0)
+                        valid_fetched += 1
+                    except: continue
+                if total_calls > 0:
+                    pc_report = f"{total_puts / total_calls:.2f}"
         except Exception as e:
             logger.warning(f"Put/Call ratio calculation failed for {symbol}: {e}")
 
@@ -283,17 +297,22 @@ def get_us_realtime_insight(symbol: str) -> str:
             avg_vol = info.get('averageVolume')
             curr_vol = info.get('regularMarketVolume')
             if avg_vol and curr_vol and avg_vol > 0:
-                # 計算美股開盤至今經過的比例 (美東 09:30 ~ 16:00, 共 6.5 小時)
                 import pytz
                 est = pytz.timezone('US/Eastern')
                 now_est = datetime.datetime.now(est)
                 open_time = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
                 
                 # 計算已開盤分鐘數 (最多 390 分鐘)
-                elapsed_mins = max(1, min(390, (now_est - open_time).total_seconds() / 60))
-                expected_vol_at_now = (avg_vol / 390) * elapsed_mins
-                vol_ratio = curr_vol / expected_vol_at_now
-                vol_ratio_report = f"{vol_ratio:.2f}x"
+                if now_est < open_time:
+                    vol_ratio_report = "N/A (未開盤)"
+                else:
+                    elapsed_mins = min(390, (now_est - open_time).total_seconds() / 60)
+                    if elapsed_mins <= 0:
+                        vol_ratio_report = "N/A"
+                    else:
+                        expected_vol_at_now = (avg_vol / 390) * elapsed_mins
+                        vol_ratio = curr_vol / expected_vol_at_now
+                        vol_ratio_report = f"{vol_ratio:.2f}x"
         except: pass
 
         report = f"🚀 === {symbol} 美股即時戰情 ===\n"
@@ -325,13 +344,27 @@ def get_market_sentiment() -> str:
                 prev = hist['Close'].iloc[-2]
                 change = ((curr - prev) / prev) * 100
                 
-                # 計算量能比 (今日成交量 / 前 5 日平均成交量)
+                # 計算量能比 (今日成交量 / 前 5 日平均成交量) - 加入時間加權修正
                 vol_ratio_str = ""
                 if 'Volume' in hist.columns:
                     today_vol = hist['Volume'].iloc[-1]
                     avg_vol = hist['Volume'].iloc[-6:-1].mean()
                     if avg_vol > 0:
                         v_ratio = today_vol / avg_vol
+                        
+                        # 時間加權修正 (如果是美股/全球市場)
+                        is_global = any(kw in symbol for kw in ['^', 'BTC', '=F', 'DX-Y', 'X'])
+                        if is_global:
+                            import pytz
+                            est = pytz.timezone('US/Eastern')
+                            now_est = datetime.datetime.now(est)
+                            # 粗略估計美股開盤進度 (09:30 - 16:00)
+                            open_time = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
+                            if now_est >= open_time:
+                                elapsed_mins = min(390, (now_est - open_time).total_seconds() / 60)
+                                if 10 < elapsed_mins < 390:
+                                    v_ratio = v_ratio / (elapsed_mins / 390)
+
                         # 過濾掉異常過大的期貨換月雜訊
                         if 0.1 < v_ratio < 10:
                             vol_ratio_str = f" [量:{v_ratio:.1f}x]"
@@ -405,10 +438,10 @@ def get_technical_analysis(symbol: str) -> str:
         if df.empty: return f"❌ {s} 無法取得歷史數據。"
         
         close = df['Close']
-        # 1. 計算 RSI (14)
+        # 1. 計算 RSI (14) - 修正為標準 Wilder's Smoothing (EWM)
         delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         
@@ -437,11 +470,26 @@ def get_technical_analysis(symbol: str) -> str:
         report += f"● MACD: DIF:{dif.iloc[-1]:.2f} | 柱狀體:{macd_hist.iloc[-1]:.2f} ({'📈多頭增強' if macd_hist.iloc[-1]>0 else '📉空頭衰退'})\n"
         report += f"● 布林通道: 上軌:{upper.iloc[-1]:.2f} | 下軌:{lower.iloc[-1]:.2f}\n"
         
-        # 戰術建議
-        if curr >= upper.iloc[-1]: report += "⚠️ 戰略：股價觸及布林上軌，短線噴發過頭，不建議追高。\n"
-        elif curr <= lower.iloc[-1]: report += "🎯 戰略：股價觸及布林下軌，且 RSI 偏低，具備反彈潛力！\n"
-        elif rsi.iloc[-1] < 30: report += "🔥 戰略：RSI 極度超跌，隨時可能暴力反彈。\n"
-        else: report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
+        # 戰術建議 (優化：結合 RSI 濾網)
+        curr_rsi = rsi.iloc[-1]
+        if curr >= upper.iloc[-1]:
+            if curr_rsi > 75:
+                report += f"⚠️ 戰略：觸及布林上軌且 RSI 極度過熱 ({curr_rsi:.2f})，短線噴發過頭，不建議追高。\n"
+            elif 55 < curr_rsi <= 75:
+                report += f"🔥 戰略：強勢沿上軌攀升中 (RSI: {curr_rsi:.2f})，留意跌破均線停利。\n"
+            else:
+                report += "⚠️ 戰略：觸及布林上軌，留意拉回風險。\n"
+        elif curr <= lower.iloc[-1]:
+            if curr_rsi < 25:
+                report += f"🎯 戰略：觸及布林下軌且極度超跌 ({curr_rsi:.2f})，具備技術性反彈潛力！\n"
+            elif 25 <= curr_rsi < 45:
+                report += f"⚠️ 戰略：沿下軌弱勢下跌中 ({curr_rsi:.2f})，切勿盲目抄底。\n"
+            else:
+                report += "🎯 戰略：觸及布林下軌，具備反彈潛力。\n"
+        elif curr_rsi < 30:
+            report += f"🔥 戰略：RSI 極度超跌 ({curr_rsi:.2f})，隨時可能暴力反彈。\n"
+        else:
+            report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
         
         return report
     except Exception as e: return f"❌ 技術分析失敗: {e}"

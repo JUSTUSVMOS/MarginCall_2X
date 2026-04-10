@@ -7,11 +7,20 @@ import numpy as np
 import yfinance as yf
 import threading
 import logging
+import os
+import math
 from scipy import stats
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from google import genai
 
 # 設定日誌
 logger = logging.getLogger(__name__)
+
+# 載入環境變數
+load_dotenv()
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 from config import DB_FILE
 
@@ -196,6 +205,13 @@ def get_realtime_spy_gex():
     try:
         spy = yf.Ticker("SPY")
         spot = spy.history(period="1d")["Close"].iloc[-1]
+        
+        # 動態無風險利率 (TNX)
+        try:
+            r = yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100.0
+        except:
+            r = 0.04 # Fallback
+
         expirations = spy.options[:3]
         total_gex = 0
         for exp in expirations:
@@ -207,10 +223,10 @@ def get_realtime_spy_gex():
             calls = opt.calls.dropna()
             puts = opt.puts.dropna()
             for _, row in calls.iterrows():
-                g = calculate_gamma(spot, row['strike'], T, 0.04, row['impliedVolatility'])
+                g = calculate_gamma(spot, row['strike'], T, r, row['impliedVolatility'])
                 total_gex += row['openInterest'] * 100 * g * (spot**2) * 0.01
             for _, row in puts.iterrows():
-                g = calculate_gamma(spot, row['strike'], T, 0.04, row['impliedVolatility'])
+                g = calculate_gamma(spot, row['strike'], T, r, row['impliedVolatility'])
                 total_gex -= row['openInterest'] * 100 * g * (spot**2) * 0.01
         return total_gex / 10**9 
     except Exception as e:
@@ -218,19 +234,42 @@ def get_realtime_spy_gex():
         return None
 
 def get_market_sentiment_score():
-    """整合新聞情緒分析 (取代冗長新聞清單)"""
+    """整合新聞情緒分析 (LLM 優先，關鍵字備援)"""
     try:
         news = yf.Ticker("SPY").news[:10]
         if not news: return 0.0, "無數據"
-        bear_keywords = ['drop', 'fall', 'recession', 'lower', 'fear', 'warn', 'weak', 'risk', 'inflation', 'sell']
-        bull_keywords = ['rise', 'rally', 'growth', 'strong', 'gain', 'support', 'buy', 'optimism', 'beat']
+        
+        titles = [(item.get('title') or "") for item in news]
+        all_titles = "\n".join([f"- {t}" for t in titles])
+
+        # 優先嘗試 LLM (Gemini)
+        if genai_client:
+            try:
+                prompt = f"""請分析以下美股新聞標題的綜合市場情緒：
+{all_titles}
+請僅回傳一個浮點數，範圍從 -1.0 (極度悲觀/利空) 到 1.0 (極度樂觀/利多)。不要回傳任何其他文字。"""
+                response = genai_client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt
+                )
+                if response.text:
+                    normalized_score = float(response.text.strip())
+                    normalized_score = max(-1.0, min(1.0, normalized_score))
+                    summary = "偏多" if normalized_score > 0.2 else "偏空" if normalized_score < -0.2 else "中性"
+                    return normalized_score, summary
+            except Exception as e:
+                logger.warning(f"LLM sentiment analysis failed, falling back to keywords: {e}")
+
+        # 備援：關鍵字計分
+        bear_keywords = ['drop', 'fall', 'recession', 'lower', 'fear', 'warn', 'weak', 'risk', 'inflation', 'sell', 'plunge', 'crisis']
+        bull_keywords = ['rise', 'rally', 'growth', 'strong', 'gain', 'support', 'buy', 'optimism', 'beat', 'surge', 'rebound']
         score = 0
-        for item in news:
-            title = (item.get('title') or "").lower()
+        for title in titles:
+            t_lower = title.lower()
             for w in bear_keywords:
-                if w in title: score -= 1
+                if w in t_lower: score -= 1
             for w in bull_keywords:
-                if w in title: score += 1
+                if w in t_lower: score += 1
         normalized_score = max(-1.0, min(1.0, score / 10.0))
         summary = "偏多" if normalized_score > 0.2 else "偏空" if normalized_score < -0.2 else "中性"
         return normalized_score, summary
@@ -328,9 +367,14 @@ def get_global_risk_radar() -> str:
             risk_multiplier *= 1.15
             reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
 
-        # 轉換成 0-100 分
+        # 轉換成 0-100 分 (優化：對數映射)
         # 1.0 = 0分 (無風險)，3.0+ = 100分 (極端風險)
-        score = max(0, min(100, int((risk_multiplier - 1.0) / 2.0 * 100)))
+        if risk_multiplier <= 1.0:
+            score = 0
+        else:
+            # 使用 log 讓前期的風險疊加更快反映到分數上
+            raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
+            score = max(0, min(100, int(raw_score)))
         state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
         
         msg = f"📊 *【MarginCall_2X 全局雷達】*\n🔥 風險分數：{score} ({state})\n"
@@ -356,7 +400,7 @@ def get_v_turn_confirmation() -> str:
 
         # === 階段一：網路 I/O ( 不持鎖 ) ===
         symbols = ["SPLG", "RSP", "HYG", "LQD", "CL=F"]
-        hist_data = yf.download(symbols, period="30d", group_by='ticker', progress=False)
+        hist_data = yf.download(symbols, period="60d", group_by='ticker', progress=False)
 
         splg = hist_data['SPLG'].dropna()
         rsp = hist_data['RSP'].dropna()
@@ -416,7 +460,7 @@ def get_v_turn_confirmation() -> str:
         vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else yf.Ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
         vix_term = vix_p / vix3m_p
-        vix_term_safe = (vix_term < 1.0)
+        vix_term_safe = (vix_term < 0.93)
 
         bp_ratio = calculate_buying_pressure(spy_5m, window=5)
         tick_safe = (bp_ratio > 0.15)
@@ -466,11 +510,13 @@ def get_capital_flow_matrix() -> str:
         symbols = ['^SOX', 'XLU', 'HG=F', 'GC=F', '^TNX', 'TLT', 'DX-Y.NYB', 'TWD=X', 'JPY=X', '^VIX']
         hist_data = yf.download(symbols, period="1mo", group_by='ticker', progress=False)
         
-        def get_recent(ticker_data):
-            if ticker_data is None or ticker_data.empty: return None, None
+        def get_chg_5d(ticker_data):
+            if ticker_data is None or ticker_data.empty: return None
             df = ticker_data.dropna()
-            if df.empty or len(df) < 2: return None, None
-            return float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
+            if len(df) < 5: 
+                # Fallback to max available
+                return (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100 if not df.empty else 0
+            return (df['Close'].iloc[-1] / df['Close'].iloc[-5] - 1) * 100
             
         def get_vol_ratio(ticker_data):
             if ticker_data is None or ticker_data.empty or 'Volume' not in ticker_data: return 1.0
@@ -483,13 +529,13 @@ def get_capital_flow_matrix() -> str:
                 return v_ratio if 0.1 < v_ratio < 10 else 1.0
             return 1.0
 
-        sox, sox_prev = get_recent(hist_data.get('^SOX'))
-        xlu, xlu_prev = get_recent(hist_data.get('XLU'))
-        hg, hg_prev = get_recent(hist_data.get('HG=F'))
-        gc, gc_prev = get_recent(hist_data.get('GC=F'))
-        tnx, tnx_prev = get_recent(hist_data.get('^TNX'))
-        tlt, tlt_prev = get_recent(hist_data.get('TLT'))
-        jpy, jpy_prev = get_recent(hist_data.get('JPY=X'))
+        sox_chg = get_chg_5d(hist_data.get('^SOX'))
+        xlu_chg = get_chg_5d(hist_data.get('XLU'))
+        hg_chg = get_chg_5d(hist_data.get('HG=F'))
+        gc_chg = get_chg_5d(hist_data.get('GC=F'))
+        tnx_chg = get_chg_5d(hist_data.get('^TNX'))
+        tlt_chg = get_chg_5d(hist_data.get('TLT'))
+        jpy_chg = get_chg_5d(hist_data.get('JPY=X')) # JPY=X 是 USD/JPY
         
         tlt_vol = get_vol_ratio(hist_data.get('TLT'))
         xlu_vol = get_vol_ratio(hist_data.get('XLU'))
@@ -497,43 +543,36 @@ def get_capital_flow_matrix() -> str:
         report = "🧠 *【Capital Flow Matrix 資金流向矩陣】*\n"
         
         # 1. 景氣與板塊輪動
-        if sox is not None and xlu is not None:
-            sox_chg = (sox - sox_prev) / sox_prev * 100
-            xlu_chg = (xlu - xlu_prev) / xlu_prev * 100
+        if sox_chg is not None and xlu_chg is not None:
             tech_def_spread = sox_chg - xlu_chg
-            if tech_def_spread < -1.5 and xlu_vol > 1.2:
-                report += f"🔄 **板塊輪動 (Risk-Off):** 資金從科技股(SOX {sox_chg:+.2f}%) 撤退，防禦性公用事業(XLU {xlu_chg:+.2f}%) 放量({xlu_vol:.1f}x)承接。\n"
-            elif tech_def_spread > 1.5:
-                report += f"🔥 **風險偏好 (Risk-On):** 資金集中攻擊科技股 (SOX {sox_chg:+.2f}%)，公用事業跑輸大盤。\n"
+            if tech_def_spread < -2.5 and xlu_vol > 1.2:
+                report += f"🔄 **板塊輪動 (Risk-Off):** 資金從科技股(SOX 5D {sox_chg:+.2f}%) 撤退，防禦性公用事業(XLU 5D {xlu_chg:+.2f}%) 放量({xlu_vol:.1f}x)承接。\n"
+            elif tech_def_spread > 2.5:
+                report += f"🔥 **風險偏好 (Risk-On):** 資金集中攻擊科技股 (SOX 5D {sox_chg:+.2f}%)，公用事業跑輸大盤。\n"
             else:
-                report += f"⚖️ **板塊狀態中性:** SOX({sox_chg:+.2f}%) vs XLU({xlu_chg:+.2f}%) 輪動不明顯。\n"
+                report += f"⚖️ **板塊狀態中性:** SOX({sox_chg:+.2f}%) vs XLU({xlu_chg:+.2f}%) 5日輪動不明顯。\n"
                 
         # 2. 實體景氣 (銅金比)
-        if hg is not None and gc is not None:
-            hg_chg = (hg - hg_prev) / hg_prev * 100
-            gc_chg = (gc - gc_prev) / gc_prev * 100
+        if hg_chg is not None and gc_chg is not None:
             cg_spread = hg_chg - gc_chg
-            if cg_spread < -1.0:
-                report += f"📉 **衰退疑慮 (銅金比轉弱):** 銅博士({hg_chg:+.2f}%)走弱，黃金({gc_chg:+.2f}%)避險升溫，實體經濟預期放緩。\n"
-            elif cg_spread > 1.0:
-                report += f"🏭 **復甦預期 (銅金比轉強):** 銅價({hg_chg:+.2f}%)跑贏黃金，工業/實體需求強勁。\n"
+            if cg_spread < -2.0:
+                report += f"📉 **衰退疑慮 (銅金比轉弱):** 銅博士(5D {hg_chg:+.2f}%)走弱，黃金(5D {gc_chg:+.2f}%)避險升溫，實體經濟預期放緩。\n"
+            elif cg_spread > 2.0:
+                report += f"🏭 **復甦預期 (銅金比轉強):** 銅價(5D {hg_chg:+.2f}%)跑贏黃金，工業/實體需求強勁。\n"
                 
         # 3. 匯率與套利平倉 (Carry Trade)
-        if jpy is not None:
-            jpy_chg = (jpy - jpy_prev) / jpy_prev * 100 # JPY=X 是 USD/JPY，數字變小代表日圓升值
-            if jpy_chg < -0.8: # 日圓單日急升超過 0.8%
-                report += f"🚨 **套利平倉警戒 (Carry Trade Unwind):** 日圓急升({jpy_chg:+.2f}%)，高度留意全球流動性收緊與跨國資產拋售。\n"
-            elif jpy_chg > 0.8:
-                report += f"💸 **套利資金寬鬆:** 日圓貶值({jpy_chg:+.2f}%)，有利於全球風險資產的槓桿資金池。\n"
+        if jpy_chg is not None:
+            if jpy_chg < -1.5: # 日圓 5 日急升
+                report += f"🚨 **套利平倉警戒 (Carry Trade Unwind):** 日圓週漲幅({-jpy_chg:+.2f}%)顯著，高度留意全球流動性收緊。\n"
+            elif jpy_chg > 1.5:
+                report += f"💸 **套利資金寬鬆:** 日圓週貶值({jpy_chg:+.2f}%)，有利於全球風險資產的槓桿資金池。\n"
 
         # 4. 長債避風港
-        if tnx is not None and tlt is not None:
-            tlt_chg = (tlt - tlt_prev) / tlt_prev * 100
-            tnx_chg = (tnx - tnx_prev) / tnx_prev * 100
-            if tnx_chg > 2.0:
-                report += f"🎈 **估值重力壓迫:** 10年期美債殖利率飆升({tnx_chg:+.2f}%)，將對科技股估值造成壓力。\n"
-            elif tlt_chg > 1.0 and tlt_vol > 1.3:
-                report += f"🛡️ **終極避風港進駐:** 20年期美債(TLT) 放量上漲({tlt_chg:+.2f}%, 量:{tlt_vol:.1f}x)，大資金正在尋求絕對避險。\n"
+        if tnx_chg is not None and tlt_chg is not None:
+            if tnx_chg > 5.0:
+                report += f"🎈 **估值重力壓迫:** 10年期美債殖利率週飆升({tnx_chg:+.2f}%)，將對科技股估值造成壓力。\n"
+            elif tlt_chg > 2.0 and tlt_vol > 1.3:
+                report += f"🛡️ **終極避風港進駐:** 20年期美債(TLT) 週放量上漲({tlt_chg:+.2f}%, 量:{tlt_vol:.1f}x)，大資金正在尋求絕對避險。\n"
                 
         if report == "🧠 *【Capital Flow Matrix 資金流向矩陣】*\n":
             return report + "目前無明顯異常資金流向信號。\n"
