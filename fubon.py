@@ -15,31 +15,98 @@ def get_fubon_technical(symbol: str) -> str:
     if not fubon_ready: return "❌ 富邦 SDK 未啟動"
     try:
         reststock = fubon_sdk.marketdata.rest_client.stock
-        today = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+        today_dt = datetime.now()
+        today = today_dt.strftime('%Y-%m-%d')
+        # 如果是周六或周日，把 today 往後推一天確保 API 不會報錯 (某些 API 要求的 to 必須包含最新交易日)
+        # 或者確保 start_date 至少比 today 早
+        start_date = (today_dt - timedelta(days=120)).strftime('%Y-%m-%d')
         
         # 1. 抓取 52 週高低與基本報價
-        stats = reststock.historical.stats(symbol=symbol)
+        try:
+            stats = reststock.historical.stats(symbol=symbol)
+        except Exception as e:
+            print(f"Stats fetch failed: {e}")
+            stats = {}
+
         h52, l52 = stats.get('week52High', 0), stats.get('week52Low', 0)
         curr = stats.get('closePrice', 0)
+
+        # 1.5 抓取分價量表 (Volume Profile)
+        poc_price = 0
+        vp_status = "N/A"
+        net_buy_at_poc = 0
+        try:
+            vol_data = reststock.intraday.volumes(symbol=symbol)
+            if vol_data and vol_data.get('data'):
+                # 找出成交量最大的價格點 (POC)
+                poc_item = max(vol_data['data'], key=lambda x: x['volume'])
+                poc_price = poc_item['price']
+                vp_status = "🛡️ 支撐" if curr > poc_price else "🧱 壓力"
+                # 計算 POC 價位的積極買賣力道 (外盤 - 內盤)
+                net_buy_at_poc = poc_item.get('volumeAtAsk', 0) - poc_item.get('volumeAtBid', 0)
+        except Exception as e:
+            print(f"Volume Profile fetch failed: {e}")
         
-        # 2. 抓取 RSI (週期改為國際標準 14)
-        rsi_data = reststock.technical.rsi(symbol=symbol, timeframe='D', period=14, from_=start_date, to=today)
-        rsi = rsi_data.get('data', [])[-1].get('rsi', 0) if rsi_data.get('data') else 0
+        # 2. 抓取歷史 K 線並計算 MA20, MA60
+        # 確保 to >= from
+        to_date = today
+        from_date = start_date
+        ma20, ma60 = 0, 0
+        try:
+            candles = reststock.historical.candles(symbol=symbol, to=to_date, **{'from': from_date})
+            if candles.get('data'):
+                df_hist = pd.DataFrame(candles['data'])
+                # 確保按日期升冪排序計算均線
+                df_hist['date'] = pd.to_datetime(df_hist['date'])
+                df_hist = df_hist.sort_values('date', ascending=True)
+                df_hist['ma20'] = df_hist['close'].rolling(window=20).mean()
+                df_hist['ma60'] = df_hist['close'].rolling(window=60).mean()
+                ma20 = df_hist['ma20'].iloc[-1] if len(df_hist) >= 20 else 0
+                ma60 = df_hist['ma60'].iloc[-1] if len(df_hist) >= 60 else 0
+        except Exception as e:
+            print(f"Candles fetch failed: {e}")
+
+        # 3. 抓取 RSI (週期改為國際標準 14)
+        rsi = 0
+        try:
+            rsi_data = reststock.technical.rsi(symbol=symbol, timeframe='D', period=14, to=to_date, **{'from': from_date})
+            rsi = rsi_data.get('data', [])[-1].get('rsi', 0) if rsi_data.get('data') else 0
+        except Exception as e:
+            print(f"RSI fetch failed: {e}")
         
-        # 3. 抓取 MACD
-        macd_data = reststock.technical.macd(symbol=symbol, timeframe='D', fast=12, slow=26, signal=9, from_=start_date, to=today)
-        macd_last = macd_data.get('data', [])[-1] if macd_data.get('data') else {}
-        dif, dea = macd_last.get('macdLine', 0), macd_last.get('signalLine', 0)
-        macd_hist = (dif - dea) * 2
+        # 4. 抓取 MACD
+        dif, dea, macd_hist = 0, 0, 0
+        try:
+            macd_data = reststock.technical.macd(symbol=symbol, timeframe='D', fast=12, slow=26, signal=9, to=to_date, **{'from': from_date})
+            macd_last = macd_data.get('data', [])[-1] if macd_data.get('data') else {}
+            dif, dea = macd_last.get('macdLine', 0), macd_last.get('signalLine', 0)
+            macd_hist = dif - dea 
+        except Exception as e:
+            print(f"MACD fetch failed: {e}")
         
-        # 4. 抓取布林通道
-        bb_data = reststock.technical.bb(symbol=symbol, timeframe='D', period=20, from_=start_date, to=today)
-        bb_last = bb_data.get('data', [])[-1] if bb_data.get('data') else {}
-        upper, lower = bb_last.get('upper', 0), bb_last.get('lower', 0)
+        # 5. 抓取布林通道
+        upper, lower = 0, 0
+        try:
+            bb_data = reststock.technical.bb(symbol=symbol, timeframe='D', period=20, to=to_date, **{'from': from_date})
+            bb_last = bb_data.get('data', [])[-1] if bb_data.get('data') else {}
+            upper, lower = bb_last.get('upper', 0), bb_last.get('lower', 0)
+        except Exception as e:
+            print(f"BB fetch failed: {e}")
+
+        # 6. 抓取 KDJ (9, 3, 3)
+        vk, vd, vj = 50, 50, 50
+        try:
+            kdj_data = reststock.technical.kdj(symbol=symbol, to=to_date, timeframe='D', rPeriod=9, kPeriod=3, dPeriod=3, **{'from': from_date})
+            kdj_last = kdj_data.get('data', [])[-1] if kdj_data.get('data') else {}
+            vk, vd, vj = kdj_last.get('k', 50), kdj_last.get('d', 50), kdj_last.get('j', 50)
+        except Exception as e:
+            print(f"KDJ fetch failed: {e}")
         
         report = f"🇹🇼 === {symbol} 台股全武裝分析 ===\n"
         report += f"● 現價: {curr} | 52週高: {h52} | 52週低: {l52}\n"
+        report += f"● 籌碼密集區 (POC): {poc_price} ({vp_status}) | 推力: {net_buy_at_poc:+} \n"
+        report += f"● 均線位階: MA20:{ma20:.2f} | MA60:{ma60:.2f}\n"
+        report += f"● KDJ(9,3,3): K:{vk:.1f} | D:{vd:.1f} | J:{vj:.1f}\n"
         report += f"● RSI(14): {rsi:.2f} ({'🔥極度超買' if rsi>75 else '❄️極度超跌' if rsi<25 else '⚖️中性'})\n"
         report += f"● MACD: DIF:{dif:.2f} | 柱狀體:{macd_hist:.2f} ({'📈多頭增強' if macd_hist>0 else '📉空頭衰退'})\n"
         report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
@@ -47,6 +114,13 @@ def get_fubon_technical(symbol: str) -> str:
         # 戰術建議
         if curr >= upper: report += "⚠️ 戰略：股價觸及布林上軌，短線噴發過頭，不建議追高。\n"
         elif curr <= lower: report += "🎯 戰略：股價觸及布林下軌，且 RSI 偏低，具備反彈潛力！\n"
+        elif vk > vd and vk < 30: report += f"🚀 戰略：KDJ 低檔金叉 (K:{vk:.1f})，轉折噴發信號！\n"
+        elif vk < vd and vk > 70: report += f"🥀 戰略：KDJ 高檔死叉 (K:{vk:.1f})，波段見頂信號。\n"
+        elif vj > 100: report += "🔥 戰略：J 線噴發過度，留意隨時拉回。\n"
+        elif vj < 0: report += "❄️ 戰略：J 線極度耗竭，空頭殺過頭，反彈將至。\n"
+        elif vp_status == "🛡️ 支撐" and curr > poc_price and net_buy_at_poc > 0: report += f"💎 戰略：站穩 POC 密集區 ({poc_price}) 且積極買盤支撐，結構強韌。\n"
+        elif vp_status == "🧱 壓力" and net_buy_at_poc < 0: report += f"🧱 戰略：上方 POC ({poc_price}) 賣壓沉重，主動賣盤強勁，留意拉回。\n"
+        elif curr > ma20 and curr > ma60: report += "📈 戰略：股價站上月線與季線，多頭排列建立，回檔即買點。\n"
         elif rsi < 30: report += "🔥 戰略：RSI 極度超跌，隨時可能暴力反彈。\n"
         else: report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
         
@@ -459,4 +533,96 @@ def get_intraday_trend(symbol: str) -> str:
         return f"❌ 取得 {symbol} K 線失敗 (狀態碼: {e.status_code})"
     except Exception as e:
         return f"❌ 趨勢解析異常: {e}"
+
+def get_exhaustion_analysis(symbol: str) -> str:
+    """
+    【深層戰術工具：賣盤衰竭偵測 (ExhaustionScanner)】
+    分析台股個股是否出現「賣不動」的信號。
+    結合：
+    1. 盤口掛單力道 (Bid/Ask Ratio)
+    2. 冰山單吸收 (POC Volume vs Net Buy)
+    3. 成交效率 (Tick Efficiency - 高量不跌)
+    4. 技術超跌 (RSI/KDJ-J)
+    """
+    global fubon_sdk, fubon_ready
+    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
+    
+    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    score = 0
+    reasons = []
+    
+    try:
+        reststock = fubon_sdk.marketdata.rest_client.stock
+        
+        # 1. 技術指標 (從現成工具抓取結果並解析)
+        tech_report = get_fubon_technical(symbol)
+        if "❄️極度超跌" in tech_report or "RSI < 25" in tech_report:
+            score += 25
+            reasons.append("✅ [超跌信號] RSI 進入極度超跌區，賣壓動能已釋放過度。")
+        if "J 線極度耗竭" in tech_report:
+            score += 15
+            reasons.append("✅ [動能耗竭] KDJ-J 線 < 0，顯示空頭殺過頭，轉折將至。")
+        if "觸及布林下軌" in tech_report:
+            score += 10
+            reasons.append("✅ [軌道支撐] 股價打入布林下軌，進入價值支撐區。")
+
+        # 2. 盤口掛單 (Order Book)
+        quote_res = reststock.intraday.quote(symbol=symbol)
+        bids = quote_res.get('bids', [])
+        asks = quote_res.get('asks', [])
+        if bids and asks:
+            total_bid_size = sum([b.get('size', 0) for b in bids])
+            total_ask_size = sum([a.get('size', 0) for a in asks])
+            ratio = total_bid_size / total_ask_size if total_ask_size > 0 else 10
+            if ratio > 2.0:
+                score += 15
+                reasons.append(f"✅ [掛單支撐] 買盤掛單量是賣盤的 {ratio:.1f} 倍，下方墊單積極。")
+            elif ratio > 1.5:
+                score += 5
+
+        # 3. 分價量表 (Volume Profile / POC)
+        vol_res = reststock.intraday.volumes(symbol=symbol)
+        data = vol_res.get('data', [])
+        if data:
+            poc_item = max(data, key=lambda x: x.get('volume', 0))
+            poc_price = poc_item.get('price')
+            curr_price = quote_res.get('closePrice') or quote_res.get('lastPrice', 0)
+            
+            if abs(curr_price - poc_price) / poc_price < 0.005: # Price at POC
+                net_buy_at_poc = poc_item.get('volumeAtAsk', 0) - poc_item.get('volumeAtBid', 0)
+                if net_buy_at_poc < 0: # 主動賣單多但價格撐住
+                    score += 20
+                    reasons.append(f"💎 [冰山單偵測] POC 價位 {poc_price} 出現大量主動賣單但價格未跌破，疑似有大戶吸收買盤。")
+                else:
+                    score += 10
+                    reasons.append(f"✅ [籌碼密集] 股價回到今日成交最密集的 POC 區 ({poc_price})，具備支撐。")
+
+        # 4. 成交明細效率 (Tick Efficiency)
+        trades_res = reststock.intraday.trades(symbol=symbol, limit=50)
+        t_data = trades_res.get('data', [])
+        if len(t_data) >= 20:
+            recent = t_data[:20]
+            p_change = abs(recent[0].get('price', 0) - recent[-1].get('price', 0))
+            v_total = sum([t.get('size', 0) for t in recent])
+            efficiency = p_change / v_total if v_total > 0 else 0
+            if efficiency < 0.001 and v_total > 50:
+                score += 15
+                reasons.append(f"✅ [賣壓衰竭] 近期成交 {v_total} 張，但價格波動極小 ({p_change})，賣方推動力道消失。")
+
+        # 總結
+        status = "🔴 賣壓仍重"
+        if score >= 70: status = "🔥 極度衰竭 (底部形成中)"
+        elif score >= 50: status = "🟢 賣盤衰竭 (分批佈局)"
+        elif score >= 30: status = "🟡 賣壓減緩"
+        
+        report = f"🕵️ 【{symbol} 賣盤衰竭偵測報告】\n"
+        report += f"📊 綜合評分: {score}/100 | 當前狀態: {status}\n"
+        report += "------------------------------------------\n"
+        report += "\n".join(reasons) if reasons else "⌛ 目前未偵測到明顯的賣盤衰竭信號。"
+        report += "\n\n💡 建議：此工具偵測的是「賣方賣不動」的瞬間，仍需觀察 5 分 K 是否站上均線確認轉折。"
+        
+        return report
+
+    except Exception as e:
+        return f"❌ 衰竭掃描失敗: {e}"
     

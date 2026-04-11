@@ -249,7 +249,7 @@ def get_us_realtime_insight(symbol: str) -> str:
     symbol = normalize_ticker(symbol)
     try:
         ticker = yf.Ticker(symbol)
-        full_df = ticker.history(period="1d", interval="5m")
+        full_df = ticker.history(period="2d", interval="5m")
         if full_df.empty: return f"❌ {symbol} 目前無盤中數據。"
         df = full_df.tail(10)
         info = ticker.info
@@ -452,8 +452,17 @@ def get_technical_analysis(symbol: str) -> str:
         dea = dif.ewm(span=9, adjust=False).mean()
         macd_hist = dif - dea
         
-        # 3. 計算布林通道 (20)
+        # 2.5 計算 KDJ (9, 3, 3)
+        low_9 = df['Low'].rolling(window=9).min()
+        high_9 = df['High'].rolling(window=9).max()
+        rsv = (close - low_9) / (high_9 - low_9) * 100
+        vk = rsv.ewm(alpha=1/3, adjust=False).mean() # 初始值預設 50 在 ewm 中自動處理
+        vd = vk.ewm(alpha=1/3, adjust=False).mean()
+        vj = 3 * vk - 2 * vd
+        
+        # 3. 計算布林通道 (20) 與 MA60
         ma20 = close.rolling(window=20).mean()
+        ma60 = close.rolling(window=60).mean()
         std20 = close.rolling(window=20).std()
         upper = ma20 + (std20 * 2)
         lower = ma20 - (std20 * 2)
@@ -466,12 +475,18 @@ def get_technical_analysis(symbol: str) -> str:
         
         report = f"🇺🇸 === {s} 美股全武裝分析 ===\n"
         report += f"● 現價: {curr:.2f} | 52週高: {h52:.2f} | 52週低: {l52:.2f}\n"
+        report += f"● 均線位階: MA20:{ma20.iloc[-1]:.2f} | MA60:{ma60.iloc[-1]:.2f}\n"
+        report += f"● KDJ(9,3,3): K:{vk.iloc[-1]:.1f} | D:{vd.iloc[-1]:.1f} | J:{vj.iloc[-1]:.1f}\n"
         report += f"● RSI(14): {rsi.iloc[-1]:.2f} ({'🔥超買' if rsi.iloc[-1]>70 else '❄️超跌' if rsi.iloc[-1]<30 else '⚖️中性'})\n"
         report += f"● MACD: DIF:{dif.iloc[-1]:.2f} | 柱狀體:{macd_hist.iloc[-1]:.2f} ({'📈多頭增強' if macd_hist.iloc[-1]>0 else '📉空頭衰退'})\n"
         report += f"● 布林通道: 上軌:{upper.iloc[-1]:.2f} | 下軌:{lower.iloc[-1]:.2f}\n"
         
-        # 戰術建議 (優化：結合 RSI 濾網)
+        # 戰術建議 (優化：結合 RSI, KDJ 與 MA 濾網)
         curr_rsi = rsi.iloc[-1]
+        curr_ma20 = ma20.iloc[-1]
+        curr_ma60 = ma60.iloc[-1]
+        curr_k, curr_d, curr_j = vk.iloc[-1], vd.iloc[-1], vj.iloc[-1]
+        
         if curr >= upper.iloc[-1]:
             if curr_rsi > 75:
                 report += f"⚠️ 戰略：觸及布林上軌且 RSI 極度過熱 ({curr_rsi:.2f})，短線噴發過頭，不建議追高。\n"
@@ -486,6 +501,16 @@ def get_technical_analysis(symbol: str) -> str:
                 report += f"⚠️ 戰略：沿下軌弱勢下跌中 ({curr_rsi:.2f})，切勿盲目抄底。\n"
             else:
                 report += "🎯 戰略：觸及布林下軌，具備反彈潛力。\n"
+        elif curr_k > curr_d and curr_k < 30:
+            report += f"🚀 戰略：KDJ 低檔金叉 (K:{curr_k:.1f})，轉折噴發信號！\n"
+        elif curr_k < curr_d and curr_k > 70:
+            report += f"🥀 戰略：KDJ 高檔死叉 (K:{curr_k:.1f})，波段見頂信號。\n"
+        elif curr_j > 100:
+            report += "🔥 戰略：J 線噴發過度，留意隨時拉回。\n"
+        elif curr_j < 0:
+            report += "❄️ 戰略：J 線極度耗竭，反彈將至。\n"
+        elif curr > curr_ma20 and curr > curr_ma60:
+            report += "📈 戰略：股價站上月線與季線，多頭排列建立，回檔即買點。\n"
         elif curr_rsi < 30:
             report += f"🔥 戰略：RSI 極度超跌 ({curr_rsi:.2f})，隨時可能暴力反彈。\n"
         else:

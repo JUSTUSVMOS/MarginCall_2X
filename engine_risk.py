@@ -411,7 +411,7 @@ def get_v_turn_confirmation() -> str:
         vix_df = yf.Ticker("^VIX").history(period="2d", interval="15m")
         vix3m_df = yf.Ticker("^VIX3M").history(period="2d", interval="15m")
         vvix_df = yf.Ticker("^VVIX").history(period="2d", interval="15m")
-        spy_5m = yf.Ticker("SPY").history(period="1d", interval="5m")
+        spy_5m = yf.Ticker("SPY").history(period="2d", interval="5m")
 
         if splg.empty or rsp.empty:
             return "❌ yfinance 數據下載失敗，請檢查網路連線。"
