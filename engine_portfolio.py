@@ -89,12 +89,11 @@ def normalize_ticker(symbol: str) -> str:
 
 def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
     """
-    更新持倉或現金。
-    action: 'buy' (買入), 'sell' (賣出), 'set' (校正)
-    price: 原幣單價
-    shares: 股數 (action='sell' 時代表賣出股數)
-    total_amount_twd: 選填，如果 AI 直接知道台幣總額可帶入
-    locked: 0 (解鎖), 1 (鎖定)。若不填則維持現狀。
+    Updates a portfolio position or cash balance.
+    action: 'buy', 'sell', or 'set' (manual adjustment).
+    price: unit price in original currency.
+    shares: quantity to change.
+    locked: 1 to lock position from AI trading, 0 to unlock.
     """
     symbol = normalize_ticker(symbol)
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
@@ -214,7 +213,10 @@ def get_symbol_name(symbol: str) -> str:
     return name
 
 def get_portfolio_raw_data() -> str:
-    """獲取倉位原始數據，並與富邦實體帳戶自動同步 (庫存 + 成本 + 銀行餘額)"""
+    """
+    Retrieves current portfolio positions and balances.
+    Synchronizes with Fubon Securities if the SDK is available.
+    """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
@@ -315,8 +317,8 @@ def get_portfolio_raw_data() -> str:
 
 def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
     """
-    【V5.3 徹底修正】計算標的損益。
-    確保公式: 現值 = 現價 * 股數 * 匯率 (扣匯損)
+    Calculates profit and loss (PNL) for a specific position.
+    Converts foreign values to TWD and accounts for estimated exchange fees.
     """
     # 識別市場
     is_uk_stock = symbol.endswith('.L') or symbol.endswith('.IL')

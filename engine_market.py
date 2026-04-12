@@ -176,8 +176,8 @@ def is_us_market_open() -> bool:
 
 def resolve_symbol_identity(symbol: str) -> str:
     """
-    【核心修復】專門解決機器人不認識新標的(如 009816)的問題。
-    在任何分析前，先呼叫此工具確認標的名與真實性。
+    Identifies and validates a ticker symbol. Returns the official name and asset type.
+    Use this to resolve unknown or new symbols before further analysis.
     """
     symbol = normalize_ticker(symbol).replace('.TW', '').replace('.TWO', '')
     is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol) <= 6)
@@ -202,6 +202,10 @@ def resolve_symbol_identity(symbol: str) -> str:
         return f"❌ 無法識別標的: {symbol}，請確認代號是否正確。"
 
 def get_live_price(symbol: str) -> str:
+    """
+    Fetches the real-time or most recent price for a given ticker symbol.
+    Supports US and Taiwan markets.
+    """
     symbol = normalize_ticker(symbol)
     clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
     if clean_symbol == "2454_ESOP": clean_symbol = "2454"
@@ -326,6 +330,10 @@ def get_us_realtime_insight(symbol: str) -> str:
     except Exception as e: return f"❌ 美股掃描失敗: {e}"
 
 def get_market_sentiment() -> str:
+    """
+    Analyzes global market sentiment by monitoring key indices, bonds, and commodities.
+    Provides a macro-level overview of capital flows and risk appetite.
+    """
     indicators = {
         "^TWII": "台股(加權)", "TSM": "台積ADR", "EWT": "台灣ETF",
         "^GSPC": "標普500(大盤)", "^IXIC": "那指(科技)", "^SOX": "費半(基石)", "^RUT": "羅素2000(水溫)",
@@ -382,6 +390,9 @@ def get_market_sentiment() -> str:
     return report
 
 def get_stock_news(symbol: str) -> str:
+    """
+    Retrieves the latest news headlines for a specific stock symbol.
+    """
     try:
         symbol = normalize_ticker(symbol)
         search_symbol = symbol.upper()
@@ -398,6 +409,9 @@ def get_stock_news(symbol: str) -> str:
     except Exception as e: return f"新聞異常: {e}"
 
 def get_fundamental_data(symbol: str) -> str:
+    """
+    Retrieves key fundamental metrics (EPS, P/E, P/B, Institutional Ownership) for a stock.
+    """
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
@@ -423,6 +437,10 @@ def get_fundamental_data(symbol: str) -> str:
         return f"基本面數據獲取失敗: {e}"
 
 def get_technical_analysis(symbol: str) -> str:
+    """
+    Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands).
+    Provides a strategic outlook based on indicator alignment.
+    """
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
@@ -515,15 +533,15 @@ def get_technical_analysis(symbol: str) -> str:
         elif curr_rsi < 30:
             report += f"🔥 戰略：RSI 極度超跌 ({curr_rsi:.2f})，隨時可能暴力反彈。\n"
         else:
-            report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
+            report += "🧘 戰略：目前位階中性，建議分批佈局過等待關鍵突破。\n"
         
         return report
     except Exception as e: return f"❌ 技術分析失敗: {e}"
 
 def get_market_movers() -> str:
     """
-    獲取市場領漲/領跌/最活躍榜單 (Market Movers)。
-    優先使用 FMP API，否則使用 YF 批量下載熱門股清單模擬。
+    Retrieves top gainers, losers, and most active stocks.
+    Uses FMP API as primary and YFinance as fallback.
     """
     report = "🚀 === 市場異動排行榜 (Movers) ===\n"
     
@@ -592,7 +610,9 @@ def get_market_movers() -> str:
     return report
 
 def get_market_history(symbol: str, days: int = 14) -> str:
-    """獲取個股歷史收盤價與成交量 (1個月內)"""
+    """
+    Fetches historical closing prices and volumes for a specific stock (up to 1 month).
+    """
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()

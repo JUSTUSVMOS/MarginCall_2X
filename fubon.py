@@ -219,6 +219,9 @@ def get_fubon_bank_remain():
 # 👇 給 AI 用的 Tool 函數
 # 👇 【深層戰術工具】抓取成交明細 (Intraday Trades)
 def get_market_trades(symbol: str, limit: int = 20) -> str:
+    """
+    Fetches the most recent intraday trade details (price and size) for a Taiwan stock.
+    """
     global fubon_sdk, fubon_ready
     if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
     symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
@@ -243,6 +246,10 @@ def get_market_trades(symbol: str, limit: int = 20) -> str:
 
 # 👇 【深層戰術工具】抓取分價量表 (Intraday Volumes)
 def get_price_volumes(symbol: str) -> str:
+    """
+    Retrieves the volume profile (intraday volumes at price) for a Taiwan stock.
+    Helps identify support and resistance levels based on volume concentration.
+    """
     global fubon_sdk, fubon_ready
     if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
     symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
@@ -269,6 +276,9 @@ def get_price_volumes(symbol: str) -> str:
 
 # 👇 【深層戰術工具】抓取 52 週高低價與基本資訊 (Historical Stats)
 def get_historical_stats(symbol: str) -> str:
+    """
+    Provides 52-week high/low prices and current percentile rank for a Taiwan stock.
+    """
     global fubon_sdk, fubon_ready
     if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
     symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
@@ -296,8 +306,8 @@ def get_historical_stats(symbol: str) -> str:
 # 👇 【TXO 期權戰術工具】抓取台指期權 (TXO) 戰報
 def get_txo_sentiment() -> str:
     """
-    【台股核心】抓取台指期權 (TXO) 的 P/C Ratio 與大戶未平倉量。
-    這是判斷台股大盤「多空趨勢」最硬核的指標。
+    Calculates the Put/Call Ratio and market sentiment from Taiwan Index Options (TXO).
+    A key indicator for detecting overall market direction and big player positioning.
     """
     global fubon_sdk, fubon_ready
     if not fubon_ready: return "⚠️ 富邦引擎未啟動，無法抓取 TXO 數據。"
@@ -352,8 +362,8 @@ def get_txo_sentiment() -> str:
 def get_quote_and_orderbook(symbol: str) -> str:
 
     """
-    【台股專用】獲取台股個股的即時五檔掛單 (Orderbook) 與買賣力道。
-    當用戶詢問「五檔」、「掛單」、「大戶墊單」、「買賣壓」時，必須呼叫此工具。
+    Fetches real-time bid/ask orderbook (Level 2) and recent price for a Taiwan stock.
+    Used to analyze immediate supply/demand pressure and large order positioning.
     """
     global fubon_sdk, fubon_ready
 
@@ -409,9 +419,8 @@ def get_quote_and_orderbook(symbol: str) -> str:
 
 def get_market_hot_stocks() -> str:
     """
-    【LLM 專用：台股資金熱點雷達】
-    抓取今天的「成交值排行榜 (大資金)」與「漲幅排行榜 (強勢股)」。
-    當用戶問「今天大盤在炒什麼」、「有什麼好標的」、「熱門股」、「換車」時呼叫。
+    Identifies Taiwan market heatspots by scanning for top stocks by trading value and percentage gain.
+    Helps detect where the "big money" is moving during the trading session.
     """
     global fubon_sdk, fubon_ready
 
@@ -462,8 +471,8 @@ def get_market_hot_stocks() -> str:
 
 def get_intraday_trend(symbol: str) -> str:
     """
-    【台股專用】獲取台股個股的 5 分鐘 K 線盤中趨勢與量價資料。
-    當用戶詢問「5分K」、「盤中趨勢」、「短線」、「今天走勢」時，必須呼叫此工具。
+    Fetches 5-minute K-line data for a Taiwan stock to analyze intraday price and volume trends.
+    Useful for short-term tactical decisions and monitoring momentum.
     """
     global fubon_sdk, fubon_ready
 

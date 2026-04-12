@@ -19,6 +19,7 @@ from config import PROJECT_ROOT, DB_FILE
 from engine_nlp import FinnhubNewsDownloader as Finnhub_Date_Range
 
 from dotenv import load_dotenv
+load_dotenv(os.path.join(str(PROJECT_ROOT), ".env"))
 from bs4 import BeautifulSoup
 import re
 
@@ -173,48 +174,38 @@ def extract_insight_parallel(text, symbol):
 
 # --- 3. 【語意 Reduce 階段】 ---
 def semantic_reduce(categorized_tags, symbol, company_name, sector):
-    
     # 確保標籤是乾淨的字串，避免傳入 None 或怪異型別
-    sec_insights = list(set([t for t in categorized_tags["SEC"] if isinstance(t, str) and t.strip()]))[:8]
-    macro_insights = list(set([t for t in categorized_tags["Macro"] if isinstance(t, str) and t.strip()]))[:8]
-    retail_insights = list(set([t for t in categorized_tags["Retail"] if isinstance(t, str) and t.strip()]))[:8]
+    sec_insights = list(set([t for t in categorized_tags["SEC"] if isinstance(t, str) and t.strip()]))[:10]
+    macro_insights = list(set([t for t in categorized_tags["Macro"] if isinstance(t, str) and t.strip()]))[:15]
+    retail_insights = list(set([t for t in categorized_tags["Retail"] if isinstance(t, str) and t.strip()]))[:15]
     
-    sec_tags = "\n".join([f"- {t[:80]}" for t in sec_insights])
-    macro_tags = "\n".join([f"- {t[:80]}" for t in macro_insights])
-    retail_tags = "\n".join([f"- {t[:80]}" for t in retail_insights])
+    sec_tags = "\n".join([f"- {t[:150]}" for t in sec_insights])
+    macro_tags = "\n".join([f"- {t[:150]}" for t in macro_insights])
+    retail_tags = "\n".join([f"- {t[:150]}" for t in retail_insights])
 
-    # 🚨 全英文 Prompt：降低模型語意轉換的負擔
+    # 🚨 採用更強硬、更具引導性的 Prompt
     prompt = f"""
-        You are a Senior Wall Street Analyst at a Top-Tier Hedge Fund.
-        Summarize the top 3 core investment focuses for {symbol} ({company_name}, Sector: {sector}).
+        [ROLE]
+        You are a Top-Tier Quant Researcher. Your job is to extract actionable intelligence for {symbol}.
         
-        DATA SOURCES:
-        ---
-        [OFFICIAL SEC FILINGS]:
-        {sec_tags if sec_tags else "None available."}
+        [DATA SOURCES]
+        Official SEC: {sec_tags if sec_tags else "EMPTY"}
+        Macro News: {macro_tags if macro_tags else "EMPTY"}
+        Retail Buzz: {retail_tags if retail_tags else "EMPTY"}
         
-        [MACRO/NEWS MEDIA]:
-        {macro_tags if macro_tags else "None available."}
+        [TASK]
+        Extract exactly 1 key insight for EACH category. 
+        - DO NOT say "No data provided" if there is text under the category.
+        - Even if news is generic, summarize the market's current focus or bias.
+        - Identify concrete numbers, project names, or legal wins/losses.
+        - If a category is literally marked "EMPTY", only then say "該維度目前無重大資訊".
         
-        [RETAIL SOCIAL MEDIA]:
-        {retail_tags if retail_tags else "None available."}
-        ---
-        
-        CRITICAL INSTRUCTIONS:
-        1. FAT-TAIL RISK OVERRIDE: If (and ONLY if) ANY insight mentions "DOJ", "Indictment", "Fraud", "Subpoena", "Investigation", or "Delist", make this the #1 bullet point and state the severe legal danger.
-        2. STRICT TEMPLATE: Unless overridden by Rule 1, you MUST strictly use the exact format provided in the OUTPUT FORMAT section below. Do NOT add any extra introductory sentences (e.g., "Here is the summary...").
-        3. COMPETITOR FILTER: Ignore news strictly about competitors.
-        4. ZERO HALLUCINATION (CRUCIAL): You are a strict synthesizer. You MUST ONLY use the facts provided in the DATA SOURCES above. Do NOT include any historical price ranges (e.g., "$50-$55"), geopolitical events (e.g., "China bans"), or competitor actions UNLESS they are explicitly written in the provided tags.
-        5.IGNORE BOILERPLATE: If the [SEC] tags only contain generic phrases like "correction of an error", "forward-looking statements", or "check mark", you MUST treat it as NO DATA and output "該維度目前無重大資訊。"
-        6. NO HALLUCINATION: If a category lacks concrete data, write "該維度目前無重大資訊".
-        7. NO DISCLAIMERS (STRICT): Stop generating text immediately after the 3rd bullet point.
-
-        OUTPUT FORMAT:
-                {{
-                    "sec_summary": "[Insert official SEC summary here]",
-                    "macro_summary": "[Insert macro/news summary here]",
-                    "retail_summary": "[Insert retail sentiment summary here]"
-                }}
+        [STRICT OUTPUT FORMAT - JSON ONLY]
+        {{
+            "sec": "Summary in Traditional Chinese (Taiwan)",
+            "macro": "Summary in Traditional Chinese (Taiwan)",
+            "retail": "Summary in Traditional Chinese (Taiwan)"
+        }}
         """
     
     try:
@@ -223,42 +214,24 @@ def semantic_reduce(categorized_tags, symbol, company_name, sector):
             "prompt": prompt, 
             "stream": False,
             "format": "json", 
-            "options": {
-                "temperature": 0.0, # 降到 0.0 追求最大穩定性
-                "num_predict": 300
-            }
+            "options": {"temperature": 0.1, "num_predict": 500}
         }, timeout=90)
 
-        if response.status_code != 200:
-            return f"⚠️ Ollama HTTP Error: {response.status_code} - {response.text[:100]}"
-            
         raw_res = response.json().get("response", "")
         clean_res = re.sub(r'^```json\s*|\s*```$', '', raw_res.strip(), flags=re.IGNORECASE|re.MULTILINE)
-        
-        # 嘗試解析 JSON
         data = json.loads(clean_res)
         
-        sec_text = data.get("sec_summary", "No significant information available.")
-        macro_text = data.get("macro_summary", "No significant information available.")
-        retail_text = data.get("retail_summary", "No significant information available.")
-
+        # 轉換回原本的報表格式
         final_report = textwrap.dedent(f"""
-                • **官方基本面**：{sec_text}
-                • **總經與新聞**：{macro_text}
-                • **散戶情緒**：{retail_text}
+                • **官方基本面**：{data.get('sec', '該維度目前無重大資訊')}
+                • **總經與新聞**：{data.get('macro', '該維度目前無重大資訊')}
+                • **散戶情緒**：{data.get('retail', '該維度目前無重大資訊')}
                 """).strip()
-
         return final_report
                 
-    except json.JSONDecodeError:
-        print(f"   [Debug] JSON 崩潰，原始回傳: {raw_res[:150]}")
-        return textwrap.dedent(f"""
-        • **官方基本面**：{sec_tags[:80] if sec_tags else "無"}
-        • **總經與新聞**：{macro_tags[:80] if macro_tags else "無"}
-        • **散戶情緒**：{retail_tags[:80] if retail_tags else "無"}
-        """).strip()
     except Exception as e:
-        return f"⚠️ Semantic Reduce Error: {str(e)}"
+        print(f"   [Debug] Reduce 異常: {e}")
+        return f"• **官方基本面**：分析中...\n• **總經與新聞**：分析中...\n• **散戶情緒**：分析中..."
 
 def extract_section(text, start_keyword, stop_keywords, max_len=5000):
     """從 start_keyword 開始，到 stop_keywords 任一出現就停"""
@@ -592,6 +565,11 @@ def _fetch_sec_data(stock, raw_texts):
 
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
+    """
+    Performs a deep NLP scan by aggregating sentiment and insights from Reddit, StockTwits, 
+    Finnhub news, and SEC filings. Uses LLM-based semantic reduction to generate 
+    a strategic "Trinity" report with quantified Alpha scores.
+    """
     # --- 0. Ollama 預檢 ---
     if not check_ollama():
         print("❌ Ollama 未啟動或無法連線，中止分析。")
@@ -663,9 +641,11 @@ def run_turbo_trinity_scout(stock="NVDA"):
         if not fh_key:
             print("   ⚠️ 未設定 FINNHUB_API_KEY，跳過新聞抓取。")
         else:
-            fh_downloader = Finnhub_Date_Range(fh_key) # 我們的新類別直接傳入 Token
+            fh_downloader = Finnhub_Date_Range(fh_key)
             fh_downloader.download_date_range_stock(stock=stock, start_date=start_date, end_date=end_date)
-            if fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
+            
+            # 只有在 downloader 存在且有資料時才處理
+            if hasattr(fh_downloader, 'dataframe') and fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
                 df_fh = fh_downloader.dataframe.head(15) 
                 for _, row in df_fh.iterrows():
                     source = row.get('source', 'News')
@@ -673,16 +653,8 @@ def run_turbo_trinity_scout(stock="NVDA"):
                     summary = row.get('summary', '')[:300]
                     raw_texts.append(f"Macro({source}): {headline} | {summary}")
                 print(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
-        if fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
-            df_fh = fh_downloader.dataframe.head(15) 
-            for _, row in df_fh.iterrows():
-                source = row.get('source', 'News')
-                headline = row.get('headline', '')
-                summary = row.get('summary', '')[:300]
-                raw_texts.append(f"Macro({source}): {headline} | {summary}")
-            print(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
     except Exception as e: 
-        print(f"   ⚠️ Finnhub 抓取失敗: {e}")
+        print(f"   ⚠️ Finnhub 流程異常: {e}")
 
     # D. SEC
     try:

@@ -21,3 +21,8 @@ debug_*.py
 test*.py
 fubon_textbook
 readme.md
+.gemini/
+gha-creds-*.json
+.cache/
+*.sqlite
+*.log

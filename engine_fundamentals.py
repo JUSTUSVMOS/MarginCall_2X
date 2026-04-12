@@ -296,6 +296,11 @@ class FundamentalEngine:
         return report
 
 def get_deep_fundamentals(symbol: str) -> str:
+    """
+    Retrieves a comprehensive fundamental analysis report for a stock.
+    Includes company profile, valuation metrics, financial statements (5-quarter trend),
+    earnings estimates, and insider trading activity.
+    """
     return FundamentalEngine(symbol).get_full_fundamental_report()
 
 if __name__ == "__main__":

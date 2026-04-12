@@ -379,6 +379,11 @@ def fetch_all_market_data():
 _risk_cache = {"report": "", "timestamp": 0, "expiry": 1200}
 
 def get_global_risk_radar() -> str:
+    """
+    Analyzes systemic risk by aggregating macro indicators (Yield Curve, Fed Funds), 
+    market technicals (SPX MA20/MA200), and volatility metrics (VIX, GEX, DIX).
+    Returns a risk score (0-100) and strategic summary.
+    """
     global _risk_cache
     current_time = time.time()
     if _risk_cache["report"] and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"]):
@@ -474,8 +479,8 @@ def get_global_risk_radar() -> str:
 
 def get_v_turn_confirmation() -> str:
     """
-    【終極 V 轉確認模組 V5 - 事務安全與 CLV 強化版】
-    網路 I/O 在 lock 外執行，只有 DB 讀寫才 acquire db_lock，避免阻塞其他 DB 操作。
+    Monitors market bottoming signals and "Follow-Through Day" (FTD) events.
+    Combines price action with internal breadth, VIX term structure, and credit spreads.
     """
     try:
         init_market_db()
@@ -584,9 +589,8 @@ def get_v_turn_confirmation() -> str:
 
 def get_capital_flow_matrix() -> str:
     """
-    【宏觀資金流向矩陣】
-    專門用於計算不同板塊、資產間的「比值 (Ratios)」與「量能」，來判斷資金的流向與避險情緒。
-    回傳一段結構化的文字戰報，提供給 AI 進行深度解讀。
+    Calculates ratios and volume dynamics between different sectors and asset classes.
+    Identifies capital migration between tech, utilities, bonds, and currencies.
     """
     try:
         symbols = ['^SOX', 'XLU', 'HG=F', 'GC=F', '^TNX', 'TLT', 'DX-Y.NYB', 'TWD=X', 'JPY=X', '^VIX']

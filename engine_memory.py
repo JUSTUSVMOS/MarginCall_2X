@@ -125,60 +125,57 @@ _global_brain = Brain()
 
 def get_frontal_lobe() -> str:
     """
-    讀取你在上一回合留下的「工作記憶 (Memory Space)」。
-
-    這是你的額葉 (Frontal Lobe)，你之前在這裡儲存了：
-    - 你對市場趨勢的看法 (多頭/空頭/不確定)
-    - 投資組合的健康狀況評估
-    - 對未來幾回合的關鍵預測或期望
-    - 給自己的重要提醒 (例如："注意 BTC 在 $95k 的支撐位")
-
-    請在每一回合分析「開始時」優先使用此工具，以保持你思考的連貫性。
-    回傳值：你之前的自我評估字串。
+    Retrieves the "Working Memory Space" left from the previous session.
+    
+    This is your Frontal Lobe, where you stored:
+    - Market trend outlook (bullish/bearish/uncertain)
+    - Portfolio health assessments
+    - Key predictions or expectations for upcoming rounds
+    - Critical reminders (e.g., "Watch BTC support at $95k")
+    
+    CALL THIS TOOL FIRST at the start of every analysis to maintain cognitive continuity.
+    Returns: Your previous self-assessment string.
     """
     return _global_brain.get_frontal_lobe()
 
 def update_frontal_lobe(content: str) -> str:
     """
-    使用你目前的自我評估來更新「額葉 (Frontal Lobe)」記憶空間。
-
-    請在每一回合分析「結束時」(執行完操作或產出報告後) 呼叫此工具，並記錄：
-    - 你目前對市場趨勢的看法
-    - 對現有投資組合的評估
-    - 接下來幾回合的關鍵預測
-    - 給未來的自己的提醒事項
-
-    這是你跨回合的「個人記憶」。請用清晰、簡潔的 2 到 5 句話寫下，確保未來的你能快速進入狀況。
-    範例輸入："Market is in strong uptrend, TSLA holding above 200MA. Will take partial profit if RSI hits 80. Watch for reversal below $180."
+    Updates your "Frontal Lobe" memory space with your current self-assessment.
+    
+    CALL THIS TOOL SILENTLY before ending a session if there are significant updates to:
+    - Current market trend view
+    - Portfolio evaluation
+    - Key predictions for next sessions
+    - Important self-reminders
+    
+    This is your persistent memory across rounds. Keep it clear and concise (2-5 sentences).
+    Example: "Market in strong uptrend, TSLA holding above 200MA. Watch for reversal below $180."
     """
     res = _global_brain.update_frontal_lobe(content)
     return res["message"]
 
 def get_emotion() -> str:
     """
-    獲取你當前的情緒狀態與最近的情緒變化紀錄。
-    使用此工具來理解你自己的情緒軌跡 (Sentiment Trajectory)。
+    Retrieves your current emotional state and recent sentiment trajectory.
+    Use this to understand your own cognitive bias.
     """
     return json.dumps(_global_brain.get_emotion(), ensure_ascii=False, indent=2)
 
 def update_emotion(emotion: str, reason: str) -> str:
     """
-    當你感受到市場情緒轉變或信心水準改變時，更新你的情緒狀態。
-    你必須記錄「為什麼 (reason)」情緒發生改變 —— 這會在你的大腦日誌中建立永久的 Commit。
-
-    常見情緒狀態 (emotion)：fearful (恐懼), cautious (謹慎), neutral (中立), confident (自信), euphoric (狂熱)
+    Updates your emotional state when market conditions or confidence levels shift.
+    You MUST provide a reason — this creates a permanent commit in your brain log.
     
-    範例參數：
-    - emotion: "cautious"
-    - reason: "BTC 在 $100k 壓力區遭拒絕，且上攻量能萎縮。"
+    Common states: fearful, cautious, neutral, confident, euphoric.
+    Example: emotion="cautious", reason="BTC rejected at $100k resistance with declining volume."
     """
     res = _global_brain.update_emotion(emotion, reason)
     return res["message"]
 
 def get_brain_log(limit: int = 10) -> str:
     """
-    查看你的大腦 Commit 歷史紀錄 (Brain Commit History)。
-    這是一條時間線，記錄了你所有認知狀態的改變 (包含額葉更新與情緒轉換)。
+    Views your Brain Commit History. 
+    A timeline of all cognitive state changes, including frontal lobe updates and emotional shifts.
     """
     return json.dumps(_global_brain.log(limit), ensure_ascii=False, indent=2)
 

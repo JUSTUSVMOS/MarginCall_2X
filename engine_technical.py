@@ -164,14 +164,14 @@ class IndicatorCalculator:
 # --- 註冊給 main.py 使用的工具介面 ---
 def calculate_indicator(formula: str) -> str:
     """
-    計算任何資產的技術指標 (使用公式表達式)。
+    Calculates technical indicators for any asset using formula expressions.
     
-    支援數據: CLOSE('AAPL', '1d'), OPEN, HIGH, LOW, VOLUME (週期支援: '1m', '1h', '1d', '1wk')
-    支援統計: SMA(data, period), EMA, MAX, MIN, STDEV
-    支援指標: RSI(data, 14), MACD(data, fast, slow, sig), ATR(highs, lows, closes, 14), BBANDS(data, 20, 2)
-    支援邏輯與切片: CLOSE('AAPL', '1d')[-1] > SMA(CLOSE('AAPL', '1d'), 50)[-1]
+    Data Primitives: CLOSE('AAPL', '1d'), OPEN, HIGH, LOW, VOLUME (Intervals: '1m', '1h', '1d', '1wk')
+    Statistics: SMA(data, period), EMA, MAX, MIN, STDEV
+    Indicators: RSI(data, 14), MACD(data, fast, slow, sig), ATR(highs, lows, closes, 14), BBANDS(data, 20, 2)
+    Logic & Slicing: Supports slicing [-1] and boolean logic (e.g., CLOSE(...) > SMA(...)).
     
-    範例公式: "RSI(CLOSE('TSLA', '1h'), 14)[-1]"
+    Example formula: "RSI(CLOSE('TSLA', '1h'), 14)[-1]"
     """
     calc = IndicatorCalculator()
     return calc.calculate(formula)
