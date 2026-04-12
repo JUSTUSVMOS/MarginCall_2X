@@ -114,6 +114,8 @@ ANALYTICS_TOOLS = [
     tool_wrapper(risk.get_capital_flow_matrix),
     tool_wrapper(memory.get_frontal_lobe), tool_wrapper(memory.update_frontal_lobe),
     tool_wrapper(memory.get_emotion), tool_wrapper(memory.update_emotion),
+    tool_wrapper(memory.get_market_regime), tool_wrapper(memory.update_market_regime),
+    tool_wrapper(memory.refresh_market_regime), tool_wrapper(memory.get_brain_snapshot),
     tool_wrapper(memory.get_brain_log)
 ]
 
@@ -250,6 +252,11 @@ def daily_nlp_scout():
         trigger_nlp_and_callback(stock)
         time.sleep(20)
 
+def macro_brain_heartbeat(force=False):
+    result = memory.sync_market_brain(force=force, max_age_minutes=180)
+    logger.info(f"🧠 [MacroHeartbeat] {result['message']}")
+    return result
+
 # --- 3. Telegram 雙重視角決策 ---
 @bot.message_handler(commands=['analyze', 'nlp'])
 def handle_deep_analysis(message):
@@ -299,12 +306,8 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
     strat_context = router.get_strat_context(user_text)
     
     # --- 🧠 記憶中樞注入 (Cognitive Recall) ---
-    frontal_lobe = memory.get_frontal_lobe()
-    emotion_data = memory._global_brain.get_emotion()
-    emotion = emotion_data.get("current", "neutral")
-    
-    brain_context = f"\n\n## Current Brain State\n- Emotion: {emotion}\n- Frontal Lobe: {frontal_lobe if frontal_lobe else '空白 (首次運行)'}\n"
-    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析「開始時」根據記憶保持思維連貫。在對話結束前，若有重要數據變化，請靜默呼叫 update_frontal_lobe 更新重點摘要，無需在回覆中重複「我已記住」等廢話，直接給出最精簡、最高信號的數據回饋即可。)"
+    brain_context = memory.build_cognitive_context(max_age_minutes=180)
+    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析開始時根據記憶保持思維連貫。若宏觀 regime 或你的交易結論有實質更新，請靜默呼叫 update_market_regime / update_frontal_lobe 寫回持久記憶，無需在回覆中重複「我已記住」等廢話，直接給出最精簡、最高信號的數據回饋即可。)"
     
     dynamic_prompt = (system_prompt_override or system_prompt) + time_context + strat_context + brain_context
     
@@ -441,7 +444,18 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"V-turn monitor failed: {e}")
 
+    try:
+        macro_brain_heartbeat(force=False)
+    except Exception as e:
+        logger.error(f"Initial macro heartbeat failed: {e}")
+
     scheduler.add_job(auto_v_turn_monitor, 'interval', hours=2)
+    scheduler.add_job(
+        macro_brain_heartbeat,
+        'interval',
+        hours=3,
+        next_run_time=datetime.now(pytz.timezone('Asia/Taipei'))
+    )
     scheduler.add_job(daily_nlp_scout, 'interval', hours=4)
     scheduler.start()
 

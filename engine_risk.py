@@ -1,4 +1,5 @@
 import io
+import math
 import time
 import sqlite3
 import requests
@@ -9,6 +10,7 @@ from yf_session import get_ticker, get_download
 import threading
 import logging
 import os
+from typing import Any, Dict
 # ... (保留原本的 import)
 from scipy import stats
 from datetime import datetime, timedelta
@@ -376,103 +378,166 @@ def fetch_all_market_data():
         logger.error(f"Fetch all market data failed: {e}")
         return pd.DataFrame()
 
-_risk_cache = {"report": "", "timestamp": 0, "expiry": 1200}
+_risk_cache = {"report": "", "snapshot": None, "timestamp": 0, "expiry": 1200}
 
-def get_global_risk_radar() -> str:
+def _safe_float(value, digits: int = 2):
+    try:
+        if value is None:
+            return None
+        return round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
+
+def _build_global_risk_summary(score: int, state: str, reasons) -> str:
+    if score >= 75:
+        lead = "系統風險進入高警戒，先以防守和流動性管理為優先。"
+    elif score >= 45:
+        lead = "市場進入警戒帶，偏向控槓桿、降追價、等確認。"
+    elif score >= 30:
+        lead = "市場處於整理盤，適合等待更清楚的方向再擴大部位。"
+    else:
+        lead = "市場仍維持偏多結構，但要留意短線波動升溫。"
+    top_reasons = "；".join(reasons[:3]) if reasons else "目前主要風險指標穩定。"
+    return f"{lead} 當前 regime：{state}，風險分數 {score}。核心觀察：{top_reasons}"
+
+def _build_global_risk_snapshot() -> Dict[str, Any]:
+    df = fetch_all_market_data()
+    if df.empty:
+        raise RuntimeError("雷達掃描失敗。")
+
+    latest = df.iloc[-1]
+    macro = MacroEngine().get_macro_dashboard()
+    rt_gex = get_realtime_spy_gex()
+    final_gex = rt_gex if rt_gex is not None else (latest.get('gex', 0) / 10**9)
+    sent_score, sent_label = get_market_sentiment_score()
+
+    risk_multiplier = 1.0
+    reasons = []
+
+    yc = macro.get("Yield_Curve_10Y2Y")
+    if yc is not None and yc < 0:
+        risk_multiplier *= 1.2
+        reasons.append(f"⚠️ 殖利率曲線倒掛 ({yc:.2f}) - 衰退隱憂")
+
+    ffr = macro.get("Fed_Funds_Rate")
+    if ffr is not None and ffr > 5.0:
+        risk_multiplier *= 1.1
+        reasons.append(f"🏦 高利率環境 ({ffr:.2f}%) - 估值壓力")
+
+    if latest.get('DXY_Z', 0) > 1.5 or latest.get('TNX_Z', 0) > 1.5:
+        risk_multiplier *= 1.5
+        reasons.append("🔴 資金緊縮 (美元/美債突波)")
+
+    if latest.get('VIX_Z', 0) > 2.0 or final_gex < 0:
+        risk_multiplier *= 1.6
+        reasons.append(f"🔴 波動率失控 / 負 Gamma ({final_gex:.2f}B)")
+
+    if latest.get('SKEW_PR', 0) > 0.90:
+        risk_multiplier *= 1.3
+        reasons.append("🟠 尾部風險升溫")
+
+    if latest.get('dix_PR', 0) > 0.85:
+        risk_multiplier *= 0.7
+        reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
+
+    if sent_score < -0.4:
+        risk_multiplier *= 1.2
+        reasons.append(f"📰 新聞極度偏空 ({sent_label})")
+
+    spx = latest.get('SPX', 0)
+    ma10 = latest.get('SPX_10MA', 0)
+    ma20 = latest.get('SPX_20MA', 0)
+    ma200 = latest.get('SPX_200MA', 0)
+
+    if ma200 > 0 and spx < ma200:
+        risk_multiplier *= 1.4
+        reasons.append("🚨 [Trigger] 熊市區間：跌破 200MA 均線！")
+    elif spx < ma20:
+        risk_multiplier *= 1.25
+        reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線！")
+    elif spx < ma10:
+        risk_multiplier *= 1.15
+        reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
+
+    if risk_multiplier <= 1.0:
+        score = 0
+    else:
+        raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
+        score = max(0, min(100, int(raw_score)))
+
+    state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
+    reasons = reasons or ["🟢 指標目前健康"]
+
+    return {
+        "generatedAt": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "riskScore": score,
+        "state": state,
+        "riskMultiplier": round(risk_multiplier, 4),
+        "summary": _build_global_risk_summary(score, state, reasons),
+        "reasons": reasons,
+        "signals": {
+            "yieldCurve10Y2Y": _safe_float(yc, 3),
+            "fedFundsRate": _safe_float(ffr, 2),
+            "dixPr": _safe_float(latest.get('dix_PR', 0), 2),
+            "gexBillions": _safe_float(final_gex, 2),
+            "sentimentScore": _safe_float(sent_score, 2),
+            "sentimentLabel": sent_label,
+            "spx": _safe_float(spx, 1),
+            "spx10Ma": _safe_float(ma10, 1),
+            "spx20Ma": _safe_float(ma20, 1),
+            "spx200Ma": _safe_float(ma200, 1),
+            "dxyZ": _safe_float(latest.get('DXY_Z', 0), 2),
+            "tnxZ": _safe_float(latest.get('TNX_Z', 0), 2),
+            "vixZ": _safe_float(latest.get('VIX_Z', 0), 2),
+            "skewPr": _safe_float(latest.get('SKEW_PR', 0), 2)
+        }
+    }
+
+def format_global_risk_snapshot(snapshot: Dict[str, Any]) -> str:
+    signals = snapshot.get("signals", {})
+    msg = f"📊 *【MarginCall_2X 全局雷達 (含宏觀)】*\n🔥 風險分數：{snapshot.get('riskScore', 'N/A')} ({snapshot.get('state', '未初始化')})\n"
+    msg += "\n".join(snapshot.get("reasons", [])) if snapshot.get("reasons") else "🟢 指標目前健康"
+    msg += f"\n\n- Yield Curve: {signals.get('yieldCurve10Y2Y', 'N/A') if signals.get('yieldCurve10Y2Y') is not None else 'N/A'}"
+    msg += f"\n- Fed Funds: {signals.get('fedFundsRate', 'N/A') if signals.get('fedFundsRate') is not None else 'N/A'}%"
+    msg += f"\n- DIX_PR: {signals.get('dixPr', 'N/A') if signals.get('dixPr') is not None else 'N/A'} | GEX: {signals.get('gexBillions', 'N/A') if signals.get('gexBillions') is not None else 'N/A'}B"
+    msg += f"\n- Sentiment: {signals.get('sentimentLabel', 'N/A')}({signals.get('sentimentScore', 'N/A') if signals.get('sentimentScore') is not None else 'N/A'})"
+    msg += f"\n- SPX: {signals.get('spx', 'N/A') if signals.get('spx') is not None else 'N/A'} (MA20:{signals.get('spx20Ma', 'N/A') if signals.get('spx20Ma') is not None else 'N/A'}, MA200:{signals.get('spx200Ma', 'N/A') if signals.get('spx200Ma') is not None else 'N/A'})"
+    return msg
+
+def get_global_risk_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
     """
-    Analyzes systemic risk by aggregating macro indicators (Yield Curve, Fed Funds), 
-    market technicals (SPX MA20/MA200), and volatility metrics (VIX, GEX, DIX).
-    Returns a risk score (0-100) and strategic summary.
+    Returns the structured risk radar snapshot so other modules can persist and
+    reason about the current macro regime without parsing markdown output.
     """
     global _risk_cache
     current_time = time.time()
-    if _risk_cache["report"] and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"]):
-        return _risk_cache["report"] + "\n(⚡ DB-Cached)"
+    if (
+        not force_refresh
+        and _risk_cache["snapshot"] is not None
+        and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"])
+    ):
+        return {**_risk_cache["snapshot"], "cached": True}
 
     try:
-        df = fetch_all_market_data()
-        if df.empty: return "❌ 雷達掃描失敗。"
-        latest = df.iloc[-1]
-        
-        # --- [新增] 宏觀引擎數據 ---
-        macro = MacroEngine().get_macro_dashboard()
-        
-        rt_gex = get_realtime_spy_gex()
-        final_gex = rt_gex if rt_gex is not None else (latest.get('gex', 0) / 10**9)
-        sent_score, sent_label = get_market_sentiment_score()
-        
-        risk_multiplier = 1.0
-        reasons = []
-
-        # 1. 宏觀風險 (Macro Factors)
-        yc = macro.get("Yield_Curve_10Y2Y")
-        if yc is not None and yc < 0:
-            risk_multiplier *= 1.2
-            reasons.append(f"⚠️ 殖利率曲線倒掛 ({yc:.2f}) - 衰退隱憂")
-            
-        ffr = macro.get("Fed_Funds_Rate")
-        if ffr is not None and ffr > 5.0:
-            risk_multiplier *= 1.1
-            reasons.append(f"🏦 高利率環境 ({ffr:.2f}%) - 估值壓力")
-
-        # 2. 環境與籌碼底分 (Multiplicative Factors)
-        if latest.get('DXY_Z', 0) > 1.5 or latest.get('TNX_Z', 0) > 1.5:
-            risk_multiplier *= 1.5    # 資金緊縮
-            reasons.append("🔴 資金緊縮 (美元/美債突波)")
-        
-        if latest.get('VIX_Z', 0) > 2.0 or final_gex < 0:
-            risk_multiplier *= 1.6    # 波動率失控
-            reasons.append(f"🔴 波動率失控 / 負 Gamma ({final_gex:.2f}B)")
-        
-        if latest.get('SKEW_PR', 0) > 0.90:
-            risk_multiplier *= 1.3    # 尾部風險
-            reasons.append("🟠 尾部風險升溫")
-            
-        # 滅火器：大戶吸籌
-        if latest.get('dix_PR', 0) > 0.85:
-            risk_multiplier *= 0.7
-            reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
-
-        # 整合新聞情緒
-        if sent_score < -0.4:
-            risk_multiplier *= 1.2
-            reasons.append(f"📰 新聞極度偏空 ({sent_label})")
-
-        # 3. 技術扳機
-        spx = latest.get('SPX', 0)
-        ma10 = latest.get('SPX_10MA', 0)
-        ma20 = latest.get('SPX_20MA', 0)
-        ma200 = latest.get('SPX_200MA', 0) 
-
-        if ma200 > 0 and spx < ma200:
-            risk_multiplier *= 1.4
-            reasons.append("🚨 [Trigger] 熊市區間：跌破 200MA 均線！")
-        elif spx < ma20:
-            risk_multiplier *= 1.25
-            reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線！")
-        elif spx < ma10:
-            risk_multiplier *= 1.15
-            reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
-
-        # 轉換成 0-100 分
-        if risk_multiplier <= 1.0:
-            score = 0
-        else:
-            raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
-            score = max(0, min(100, int(raw_score)))
-        state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
-        
-        msg = f"📊 *【MarginCall_2X 全局雷達 (含宏觀)】*\n🔥 風險分數：{score} ({state})\n"
-        msg += "\n".join(reasons) if reasons else "🟢 指標目前健康"
-        
-        msg += f"\n\n- Yield Curve: {yc if yc is not None else 'N/A'}\n- Fed Funds: {ffr if ffr is not None else 'N/A'}%"
-        msg += f"\n- DIX_PR: {latest.get('dix_PR', 0):.2f} | GEX: {final_gex:.2f}B"
-        msg += f"\n- Sentiment: {sent_label}({sent_score:.2f})"
-        msg += f"\n- SPX: {spx:.1f} (MA20:{ma20:.1f}, MA200:{ma200:.1f})"
-        
-        _risk_cache["report"] = msg
+        snapshot = _build_global_risk_snapshot()
+        _risk_cache["snapshot"] = snapshot
+        _risk_cache["report"] = format_global_risk_snapshot(snapshot)
         _risk_cache["timestamp"] = current_time
-        return msg
+        return {**snapshot, "cached": False}
+    except Exception as e:
+        logger.error(f"Risk snapshot analysis failed: {e}")
+        raise
+
+def get_global_risk_radar(force_refresh: bool = False) -> str:
+    """
+    Analyzes systemic risk by aggregating macro indicators (Yield Curve, Fed Funds),
+    market technicals (SPX MA20/MA200), and volatility metrics (VIX, GEX, DIX).
+    Returns a risk score (0-100) and strategic summary.
+    """
+    try:
+        snapshot = get_global_risk_snapshot(force_refresh=force_refresh)
+        report = _risk_cache["report"] or format_global_risk_snapshot(snapshot)
+        return report + ("\n(⚡ DB-Cached)" if snapshot.get("cached") else "")
     except Exception as e:
         logger.error(f"Risk radar analysis failed: {e}")
         return f"❌ 雷達異常: {e}"

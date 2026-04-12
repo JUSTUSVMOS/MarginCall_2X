@@ -19,6 +19,7 @@ log/
 # ==========================================
 debug_*.py
 test*.py
+!test_brain_memory.py
 fubon_textbook
 readme.md
 .gemini/
@@ -26,3 +27,8 @@ gha-creds-*.json
 .cache/
 *.sqlite
 *.log
+.brain/frontal-lobe.md
+.brain/emotion-log.json
+.brain/heartbeat.json
+.brain/market-regime.md
+.brain/snapshot.json
