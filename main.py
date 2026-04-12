@@ -91,6 +91,111 @@ def tool_wrapper(func):
             raise e
     return wrapper
 
+def get_frontal_lobe_tool() -> str:
+    """
+    Read the current Frontal Lobe before making a fresh judgment.
+
+    This memory is not a scratchpad. It is the latest professional trading note
+    the AI left for itself, structured as:
+    - Market View
+    - Core Levels
+    - Portfolio Health
+    - Next Round
+    """
+    return memory.get_frontal_lobe()
+
+get_frontal_lobe_tool.__name__ = memory.get_frontal_lobe.__name__
+
+def update_frontal_lobe_tool(content: str) -> str:
+    """
+    Persist a professional trader's Frontal Lobe note.
+
+    REQUIRED FORMAT:
+    Market View: Bullish / Bearish / Neutral + one-sentence thesis
+    Core Levels: key support / resistance / MA levels being watched
+    Portfolio Health: whether positions are healthy, over-risked, or underwater
+    Next Round: if A happens, I will do B
+
+    Quality bar:
+    - Be concrete and decision-oriented, not chatty
+    - Mention actual levels or triggers when possible
+    - Always state the planned reaction for the next round
+    - If your input is messy, the system will normalize it, but you should still aim to write it cleanly
+    """
+    return memory.update_frontal_lobe(content)
+
+update_frontal_lobe_tool.__name__ = memory.update_frontal_lobe.__name__
+
+def get_brain_log_tool(limit: int = 10) -> str:
+    """
+    Read the compact semantic Brain Log.
+
+    The log is optimized for AI recall: each entry is a one-line summary plus the
+    key market signals that mattered. Use it to understand the recent cognitive
+    and regime shifts quickly without rereading long state dumps.
+    """
+    return memory.get_brain_log(limit)
+
+get_brain_log_tool.__name__ = memory.get_brain_log.__name__
+
+def get_emotion_tool() -> str:
+    """
+    Retrieve your current emotional state and recent sentiment trajectory.
+    Use this to identify potential cognitive biases in your decision-making.
+    """
+    return memory.get_emotion()
+
+get_emotion_tool.__name__ = memory.get_emotion.__name__
+
+def update_emotion_tool(emotion: str, reason: str) -> str:
+    """
+    Update your emotional state when market conditions or confidence levels shift.
+    You MUST provide a clear reason — this creates a permanent commit in your brain log.
+    
+    Common states: fearful, cautious, neutral, confident, euphoric.
+    Example: emotion="cautious", reason="SPX rejected at 5250 resistance with declining volume."
+    """
+    return memory.update_emotion(emotion, reason)
+
+update_emotion_tool.__name__ = memory.update_emotion.__name__
+
+def get_market_regime_tool() -> str:
+    """
+    Retrieve the persistent macro / market regime snapshot.
+    This provides long-lived context on the current risk environment, 
+    including risk scores, macro signals, and critical watchpoints.
+    """
+    return memory.get_market_regime()
+
+get_market_regime_tool.__name__ = memory.get_market_regime.__name__
+
+def update_market_regime_tool(summary: str, regime: str = "", risk_score: int = -1) -> str:
+    """
+    Manually update the persistent market regime summary when macro conditions change.
+    Use this to lock in a new consensus about the market "tape" you are currently in.
+    """
+    return memory.update_market_regime(summary, regime, risk_score)
+
+update_market_regime_tool.__name__ = memory.update_market_regime.__name__
+
+def refresh_market_regime_tool(force: bool = False, max_age_minutes: int = 180) -> str:
+    """
+    Trigger a fresh macro heartbeat to pull the latest global risk radar data.
+    Use this when you suspect your market memory is stale or during high volatility.
+    """
+    return memory.refresh_market_regime(force, max_age_minutes)
+
+refresh_market_regime_tool.__name__ = memory.refresh_market_regime.__name__
+
+def get_brain_snapshot_tool() -> str:
+    """
+    Perform a deep cognitive reflection by retrieving your full persistent state.
+    Includes Frontal Lobe, Emotion, Market Regime, and recent commit history.
+    """
+    return memory.get_brain_snapshot()
+
+get_brain_snapshot_tool.__name__ = memory.get_brain_snapshot.__name__
+
 # --- AI 核心工具箱統一配置 (套用追蹤器) ---
 # 1. 記帳專用工具 (會修改資料庫)
 BOOKKEEPING_TOOLS = [tool_wrapper(portfolio.update_position)]
@@ -112,11 +217,11 @@ ANALYTICS_TOOLS = [
     tool_wrapper(fubon.get_txo_sentiment), 
     tool_wrapper(risk.get_global_risk_radar), tool_wrapper(risk.get_v_turn_confirmation),
     tool_wrapper(risk.get_capital_flow_matrix),
-    tool_wrapper(memory.get_frontal_lobe), tool_wrapper(memory.update_frontal_lobe),
-    tool_wrapper(memory.get_emotion), tool_wrapper(memory.update_emotion),
-    tool_wrapper(memory.get_market_regime), tool_wrapper(memory.update_market_regime),
-    tool_wrapper(memory.refresh_market_regime), tool_wrapper(memory.get_brain_snapshot),
-    tool_wrapper(memory.get_brain_log)
+    tool_wrapper(get_frontal_lobe_tool), tool_wrapper(update_frontal_lobe_tool),
+    tool_wrapper(get_emotion_tool), tool_wrapper(update_emotion_tool),
+    tool_wrapper(get_market_regime_tool), tool_wrapper(update_market_regime_tool),
+    tool_wrapper(refresh_market_regime_tool), tool_wrapper(get_brain_snapshot_tool),
+    tool_wrapper(get_brain_log_tool)
 ]
 
 # 全能工具箱 (用於 /trade)
@@ -307,7 +412,9 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
     
     # --- 🧠 記憶中樞注入 (Cognitive Recall) ---
     brain_context = memory.build_cognitive_context(max_age_minutes=180)
-    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析開始時根據記憶保持思維連貫。若宏觀 regime 或你的交易結論有實質更新，請靜默呼叫 update_market_regime / update_frontal_lobe 寫回持久記憶，無需在回覆中重複「我已記住」等廢話，直接給出最精簡、最高信號的數據回饋即可。)"
+    brain_context += "\n\n## Frontal Lobe Write Contract\n"
+    brain_context += memory.get_frontal_lobe_write_guide()
+    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析開始時根據記憶保持思維連貫。若宏觀 regime 或你的交易結論有實質更新，請靜默呼叫 update_market_regime / update_frontal_lobe 寫回持久記憶。呼叫 update_frontal_lobe 時，必須遵守上面的四段式專業交易筆記格式；無需在回覆中重複「我已記住」等廢話，直接給出最精簡、最高信號的數據回饋即可。)"
     
     dynamic_prompt = (system_prompt_override or system_prompt) + time_context + strat_context + brain_context
     
