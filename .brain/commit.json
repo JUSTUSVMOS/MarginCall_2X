@@ -1,0 +1,108 @@
+{
+  "state": {
+    "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
+    "emotion": "confident"
+  },
+  "commits": [
+    {
+      "hash": "f69922ea",
+      "parentHash": null,
+      "timestamp": "2026-04-12 14:17:42",
+      "type": "frontal_lobe",
+      "message": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+      "stateAfter": {
+        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+        "emotion": "neutral"
+      }
+    },
+    {
+      "hash": "028f87e4",
+      "parentHash": "f69922ea",
+      "timestamp": "2026-04-12 14:17:42",
+      "type": "emotion",
+      "message": "非農數據強勁，擔心聯準會延後降息，市場波動加劇。",
+      "stateAfter": {
+        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "f85eae09",
+      "parentHash": "028f87e4",
+      "timestamp": "2026-04-12 16:44:05",
+      "type": "frontal_lobe",
+      "message": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+      "stateAfter": {
+        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "1fbb319f",
+      "parentHash": "f85eae09",
+      "timestamp": "2026-04-12 16:44:05",
+      "type": "emotion",
+      "message": "非農數據強勁，擔心聯準會延後降息，市場波動加劇。",
+      "stateAfter": {
+        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "0d11005d",
+      "parentHash": "1fbb319f",
+      "timestamp": "2026-04-12 18:11:44",
+      "type": "frontal_lobe",
+      "message": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不透明，需持續觀察。",
+      "stateAfter": {
+        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不透明，需持續觀察。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "0e2f1d9f",
+      "parentHash": "0d11005d",
+      "timestamp": "2026-04-12 18:13:46",
+      "type": "frontal_lobe",
+      "message": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
+      "stateAfter": {
+        "frontalLobe": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "a4b76a5a",
+      "parentHash": "0e2f1d9f",
+      "timestamp": "2026-04-12 18:19:04",
+      "type": "frontal_lobe",
+      "message": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
+      "stateAfter": {
+        "frontalLobe": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "bd36f70b",
+      "parentHash": "a4b76a5a",
+      "timestamp": "2026-04-12 18:24:35",
+      "type": "frontal_lobe",
+      "message": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖...",
+      "stateAfter": {
+        "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
+        "emotion": "cautious"
+      }
+    },
+    {
+      "hash": "8af127ed",
+      "parentHash": "bd36f70b",
+      "timestamp": "2026-04-12 18:24:35",
+      "type": "emotion",
+      "message": "INTC 18A 量產成功，並獲得主要雲端巨頭與 NVIDIA 投資，顯示結構性轉機。",
+      "stateAfter": {
+        "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
+        "emotion": "confident"
+      }
+    }
+  ],
+  "head": "8af127ed"
+}

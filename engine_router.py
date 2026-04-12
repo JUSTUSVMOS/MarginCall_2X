@@ -3,12 +3,14 @@ import telebot
 import logging
 import datetime
 import yfinance as yf
+from yf_session import get_ticker, get_download
 import json
 import sqlite3
 import re  # 補回此行
 from google import genai
 import engine_market as market
 import engine_risk as risk
+import engine_fundamentals as fundamentals
 from config import DB_FILE
 
 # 設定日誌
@@ -164,8 +166,8 @@ def get_relative_move(symbol):
     """比較個股 vs 大盤，區分系統性和個股風險"""
     try:
         # 抓取 2 天數據以計算最新一日漲跌幅 (今天 vs 昨天收盤)
-        stock = yf.Ticker(symbol).history(period="2d")
-        spy = yf.Ticker("SPY").history(period="2d")
+        stock = get_ticker(symbol).history(period="2d")
+        spy = get_ticker("SPY").history(period="2d")
         
         if len(stock) < 2 or len(spy) < 2:
             return "UNKNOWN", 0.0
@@ -233,7 +235,7 @@ def fetch_strat_data(symbol: str) -> dict:
 
         if asset_type == 'Tech_Momentum':
             # 抓取 5分K CVD
-            ticker = yf.Ticker(symbol)
+            ticker = get_ticker(symbol, cache_level="live")
             df_5m = ticker.history(period="1d", interval="5m")
             cvd = risk.calculate_buying_pressure(df_5m)
             
@@ -274,8 +276,8 @@ def fetch_strat_data(symbol: str) -> dict:
                         logger.info(f"Leading Indicator Correction: {symbol} P/C {pc_ratio} -> Alpha +0.1")
 
         elif asset_type == 'Value_Holding':
-            # 抓取基本面 (P/B, EPS 等)
-            fundamental_report = market.get_fundamental_data(symbol)
+            # 抓取深度基本面 (趨勢、ROE、債務)
+            fundamental_report = fundamentals.get_deep_fundamentals(symbol)
             data["metrics"] = {
                 "fundamental_analysis": fundamental_report,
                 "news": market.get_stock_news(symbol)

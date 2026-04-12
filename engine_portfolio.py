@@ -19,7 +19,7 @@ def get_exchange_rate() -> float:
     if current_time - _fx_cache["timestamp"] < 600:
         return _fx_cache["rate"]
     try:
-        ticker = yf.Ticker("TWD=X")
+        ticker = get_ticker("TWD=X")
         rate = ticker.fast_info.get('last_price') or ticker.history(period="1d")['Close'].iloc[-1]
         _fx_cache["rate"] = round(float(rate), 2)
         _fx_cache["timestamp"] = current_time
@@ -201,7 +201,7 @@ def get_symbol_name(symbol: str) -> str:
         else:
             # 美股嘗試 yfinance
             import yfinance as yf
-            ticker = yf.Ticker(clean_sym)
+            ticker = get_ticker(clean_sym, cache_level="daily")
             name = ticker.info.get('shortName') or ticker.info.get('longName') or clean_sym
     except:
         pass

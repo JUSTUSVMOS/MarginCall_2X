@@ -5,14 +5,18 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from yf_session import get_ticker, get_download
 import threading
 import logging
 import os
-import math
+# ... (保留原本的 import)
 from scipy import stats
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from google import genai
+
+# 新增 FRED 相關 import
+import json
 
 # 設定日誌
 logger = logging.getLogger(__name__)
@@ -20,9 +24,74 @@ logger = logging.getLogger(__name__)
 # 載入環境變數
 load_dotenv()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+FRED_API_KEY = os.getenv("FRED_API_KEY") # 建議使用者在 .env 加入，若無則使用備援邏輯
 genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 from config import DB_FILE
+
+# --- [新增] FRED 宏觀引擎 (The Macro Sentinel) ---
+class MacroEngine:
+    """
+    專門對接 FRED (聯準會) 的宏觀數據引擎。
+    涵蓋：利率、通膨、就業、貨幣供給、殖利率曲線。
+    """
+    def __init__(self, api_key=None):
+        self.api_key = api_key or FRED_API_KEY
+        self.base_url = "https://api.stlouisfed.org/fred/series/observations"
+
+    def _fetch_fred(self, series_id):
+        """核心請求邏輯 (帶有備援機制)"""
+        if not self.api_key:
+            # 如果沒有 API Key，嘗試透過 yfinance 模擬部分宏觀指標 (如利率/殖利率)
+            return self._fetch_fallback(series_id)
+
+        params = {
+            "series_id": series_id,
+            "api_key": self.api_key,
+            "file_type": "json",
+            "sort_order": "desc",
+            "limit": 5
+        }
+        try:
+            r = requests.get(self.base_url, params=params, timeout=10)
+            data = r.json()
+            if 'observations' in data:
+                return float(data['observations'][0]['value'])
+        except Exception as e:
+            logger.error(f"FRED Fetch Error ({series_id}): {e}")
+        return self._fetch_fallback(series_id)
+
+    def _fetch_fallback(self, series_id):
+        """當 FRED API 失效或無 Key 時的備援 (利用 yfinance 趨勢模擬)"""
+        mapping = {
+            'T10Y2Y': '^TNX', # 粗略代替，實際上需要 10Y - 2Y
+            'FEDFUNDS': '^IRX', # 13周國庫券作為利率基準
+        }
+        if series_id in mapping:
+            try:
+                val = get_ticker(mapping[series_id]).history(period="1d")['Close'].iloc[-1]
+                return val if series_id != 'T10Y2Y' else val - 4.0 # 假定 2Y 在 4%
+            except: pass
+        return None
+
+    def get_macro_dashboard(self):
+        """獲取所有核心宏觀指標"""
+        indicators = {
+            "Yield_Curve_10Y2Y": "T10Y2Y",
+            "Fed_Funds_Rate": "FEDFUNDS",
+            "CPI_Inflation": "CPIAUCSL",
+            "Non_Farm_Payrolls": "PAYEMS",
+            "M2_Money_Supply": "M2SL",
+            "Recession_Prob": "RECPROUSM156N"
+        }
+        results = {}
+        for name, sid in indicators.items():
+            val = self._fetch_fred(sid)
+            results[name] = val
+        return results
+
+# ... (保留原本的 init_market_db, get_db_connection 等函數)
+
 
 db_lock = threading.Lock() # 【V4 加固】資料庫互斥鎖
 
@@ -143,7 +212,7 @@ def update_market_db():
     yf_dfs = []
     for name, ticker in tickers.items():
         try:
-            hist = yf.Ticker(ticker).history(period=period)
+            hist = get_ticker(ticker).history(period=period)
             if not hist.empty:
                 s = hist['Close'].rename(name)
                 s.index = s.index.tz_localize(None).strftime('%Y-%m-%d')
@@ -203,12 +272,12 @@ def calculate_gamma(S, K, T, r, sigma):
 def get_realtime_spy_gex():
     """計算 SPY GEX (單位: Billions)"""
     try:
-        spy = yf.Ticker("SPY")
+        spy = get_ticker("SPY")
         spot = spy.history(period="1d")["Close"].iloc[-1]
         
         # 動態無風險利率 (TNX)
         try:
-            r = yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100.0
+            r = get_ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100.0
         except:
             r = 0.04 # Fallback
 
@@ -236,7 +305,7 @@ def get_realtime_spy_gex():
 def get_market_sentiment_score():
     """整合新聞情緒分析 (LLM 優先，關鍵字備援)"""
     try:
-        news = yf.Ticker("SPY").news[:10]
+        news = get_ticker("SPY").news[:10]
         if not news: return 0.0, "無數據"
         
         titles = [(item.get('title') or "") for item in news]
@@ -320,15 +389,28 @@ def get_global_risk_radar() -> str:
         if df.empty: return "❌ 雷達掃描失敗。"
         latest = df.iloc[-1]
         
+        # --- [新增] 宏觀引擎數據 ---
+        macro = MacroEngine().get_macro_dashboard()
+        
         rt_gex = get_realtime_spy_gex()
         final_gex = rt_gex if rt_gex is not None else (latest.get('gex', 0) / 10**9)
         sent_score, sent_label = get_market_sentiment_score()
         
-        # --- 移植自 test.py 的核心計分邏輯 ---
         risk_multiplier = 1.0
         reasons = []
 
-        # 1. 環境與籌碼底分 (Multiplicative Factors)
+        # 1. 宏觀風險 (Macro Factors)
+        yc = macro.get("Yield_Curve_10Y2Y")
+        if yc is not None and yc < 0:
+            risk_multiplier *= 1.2
+            reasons.append(f"⚠️ 殖利率曲線倒掛 ({yc:.2f}) - 衰退隱憂")
+            
+        ffr = macro.get("Fed_Funds_Rate")
+        if ffr is not None and ffr > 5.0:
+            risk_multiplier *= 1.1
+            reasons.append(f"🏦 高利率環境 ({ffr:.2f}%) - 估值壓力")
+
+        # 2. 環境與籌碼底分 (Multiplicative Factors)
         if latest.get('DXY_Z', 0) > 1.5 or latest.get('TNX_Z', 0) > 1.5:
             risk_multiplier *= 1.5    # 資金緊縮
             reasons.append("🔴 資金緊縮 (美元/美債突波)")
@@ -341,17 +423,17 @@ def get_global_risk_radar() -> str:
             risk_multiplier *= 1.3    # 尾部風險
             reasons.append("🟠 尾部風險升溫")
             
-        # 滅火器：大戶吸籌 (打折但不清零)
+        # 滅火器：大戶吸籌
         if latest.get('dix_PR', 0) > 0.85:
             risk_multiplier *= 0.7
             reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
 
-        # 整合新聞情緒 (乘法因子)
+        # 整合新聞情緒
         if sent_score < -0.4:
             risk_multiplier *= 1.2
             reasons.append(f"📰 新聞極度偏空 ({sent_label})")
 
-        # 2. 技術扳機 (動態權重，改為乘法)
+        # 3. 技術扳機
         spx = latest.get('SPX', 0)
         ma10 = latest.get('SPX_10MA', 0)
         ma20 = latest.get('SPX_20MA', 0)
@@ -367,21 +449,21 @@ def get_global_risk_radar() -> str:
             risk_multiplier *= 1.15
             reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
 
-        # 轉換成 0-100 分 (優化：對數映射)
-        # 1.0 = 0分 (無風險)，3.0+ = 100分 (極端風險)
+        # 轉換成 0-100 分
         if risk_multiplier <= 1.0:
             score = 0
         else:
-            # 使用 log 讓前期的風險疊加更快反映到分數上
             raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
             score = max(0, min(100, int(raw_score)))
         state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
         
-        msg = f"📊 *【MarginCall_2X 全局雷達】*\n🔥 風險分數：{score} ({state})\n"
+        msg = f"📊 *【MarginCall_2X 全局雷達 (含宏觀)】*\n🔥 風險分數：{score} ({state})\n"
         msg += "\n".join(reasons) if reasons else "🟢 指標目前健康"
         
-        msg += f"\n\n- DIX_PR: {latest.get('dix_PR', 0):.2f}\n- GEX: {final_gex:.2f}B\n- Sentiment: {sent_label}({sent_score:.2f})"
-        msg += f"\n- SPX: {spx:.1f} (10MA:{ma10:.1f}, 20MA:{ma20:.1f}, 200MA:{ma200:.1f})"
+        msg += f"\n\n- Yield Curve: {yc if yc is not None else 'N/A'}\n- Fed Funds: {ffr if ffr is not None else 'N/A'}%"
+        msg += f"\n- DIX_PR: {latest.get('dix_PR', 0):.2f} | GEX: {final_gex:.2f}B"
+        msg += f"\n- Sentiment: {sent_label}({sent_score:.2f})"
+        msg += f"\n- SPX: {spx:.1f} (MA20:{ma20:.1f}, MA200:{ma200:.1f})"
         
         _risk_cache["report"] = msg
         _risk_cache["timestamp"] = current_time
@@ -400,7 +482,7 @@ def get_v_turn_confirmation() -> str:
 
         # === 階段一：網路 I/O ( 不持鎖 ) ===
         symbols = ["SPLG", "RSP", "HYG", "LQD", "CL=F"]
-        hist_data = yf.download(symbols, period="60d", group_by='ticker', progress=False)
+        hist_data = get_download(symbols, period="60d", group_by='ticker', progress=False)
 
         splg = hist_data['SPLG'].dropna()
         rsp = hist_data['RSP'].dropna()
@@ -408,10 +490,10 @@ def get_v_turn_confirmation() -> str:
         lqd = hist_data['LQD'].dropna()
         oil = hist_data['CL=F'].dropna()
 
-        vix_df = yf.Ticker("^VIX").history(period="2d", interval="15m")
-        vix3m_df = yf.Ticker("^VIX3M").history(period="2d", interval="15m")
-        vvix_df = yf.Ticker("^VVIX").history(period="2d", interval="15m")
-        spy_5m = yf.Ticker("SPY").history(period="2d", interval="5m")
+        vix_df = get_ticker("^VIX").history(period="2d", interval="15m")
+        vix3m_df = get_ticker("^VIX3M").history(period="2d", interval="15m")
+        vvix_df = get_ticker("^VVIX").history(period="2d", interval="15m")
+        spy_5m = get_ticker("SPY").history(period="2d", interval="5m")
 
         if splg.empty or rsp.empty:
             return "❌ yfinance 數據下載失敗，請檢查網路連線。"
@@ -457,8 +539,8 @@ def get_v_turn_confirmation() -> str:
         breadth_val = rsp_5d - splg_5d
         breadth_safe = (breadth_val > -0.005)
 
-        vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
-        vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else yf.Ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
+        vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else get_ticker("^VIX").history(period="5d")['Close'].iloc[-1]
+        vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else get_ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
         vix_term = vix_p / vix3m_p
         vix_term_safe = (vix_term < 0.93)
 
@@ -467,7 +549,7 @@ def get_v_turn_confirmation() -> str:
         tick_emoji = '🔥' if bp_ratio > 0.3 else '🟢' if tick_safe else '⚪'
         tick_msg = f"{bp_ratio:+.1%}"
 
-        vvix_val = vvix_df['Close'].iloc[-1] if not vvix_df.empty else yf.Ticker("^VVIX").history(period="5d")['Close'].iloc[-1]
+        vvix_val = vvix_df['Close'].iloc[-1] if not vvix_df.empty else get_ticker("^VVIX").history(period="5d")['Close'].iloc[-1]
         vvix_safe = (vvix_val < 110)
         credit_ratio = (hyg['Close'] / lqd['Close']).iloc[-1]
         credit_ma = (hyg['Close'] / lqd['Close']).rolling(20).mean().iloc[-1]
@@ -508,7 +590,7 @@ def get_capital_flow_matrix() -> str:
     """
     try:
         symbols = ['^SOX', 'XLU', 'HG=F', 'GC=F', '^TNX', 'TLT', 'DX-Y.NYB', 'TWD=X', 'JPY=X', '^VIX']
-        hist_data = yf.download(symbols, period="1mo", group_by='ticker', progress=False)
+        hist_data = get_download(symbols, period="1mo", group_by='ticker', progress=False)
         
         def get_chg_5d(ticker_data):
             if ticker_data is None or ticker_data.empty: return None
@@ -581,3 +663,25 @@ def get_capital_flow_matrix() -> str:
     except Exception as e:
         logger.error(f"Capital Flow Matrix calculation failed: {e}")
         return f"❌ 資金流向矩陣計算失敗: {e}\n"
+
+if __name__ == "__main__":
+    print("🚀 === MarginCall_2X 引擎自檢測試 ===")
+    
+    # 1. 測試宏觀引擎
+    print("\n[1] 正在抓取 FRED 宏觀數據...")
+    macro_eng = MacroEngine()
+    dashboard = macro_eng.get_macro_dashboard()
+    for k, v in dashboard.items():
+        print(f"  - {k}: {v}")
+
+    # 2. 測試資金流向
+    print("\n[2] 正在計算資金流向矩陣...")
+    print(get_capital_flow_matrix())
+
+    # 3. 測試全局雷達 (含整合分數)
+    print("\n[3] 正在生成全局風險雷達...")
+    print(get_global_risk_radar())
+
+    # 4. 測試 V 轉監測
+    print("\n[4] 正在執行 V 轉確認偵測...")
+    print(get_v_turn_confirmation())

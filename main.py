@@ -41,6 +41,9 @@ import engine_portfolio as portfolio
 import engine_market as market
 import engine_risk as risk
 import engine_router as router
+import engine_fundamentals as fundamentals
+import engine_technical as technical
+import engine_memory as memory
 
 # --- 初始化區 ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -61,9 +64,9 @@ v_turn_active = True  # V 轉監控預設開啟
 
 # AI 模型清單 (暫時將 Flash 移至第一位，避開 Pro 的 429 延遲)
 AVAILABLE_MODELS = [
-    'gemini-3.1-flash-lite-preview',
-    'gemini-3.1-pro-preview',
-    'gemini-2.5-pro',
+    # 'gemini-3.1-flash-lite-preview',
+    # 'gemini-3.1-pro-preview',
+    # 'gemini-2.5-pro',
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
     'gemma-4-31b-it',
@@ -100,13 +103,18 @@ ANALYTICS_TOOLS = [
     tool_wrapper(market.resolve_symbol_identity), 
     tool_wrapper(market.get_market_sentiment), tool_wrapper(market.get_stock_news),
     tool_wrapper(market.get_fundamental_data), tool_wrapper(market.get_market_history),
+    tool_wrapper(market.get_market_movers), # 新增：市場異動工具
     tool_wrapper(market.get_technical_analysis), 
+    tool_wrapper(fundamentals.get_deep_fundamentals), # 注入深度基本面工具
     tool_wrapper(fubon.get_market_hot_stocks), tool_wrapper(fubon.get_intraday_trend),
     tool_wrapper(fubon.get_market_trades), tool_wrapper(fubon.get_price_volumes),
     tool_wrapper(fubon.get_quote_and_orderbook), tool_wrapper(fubon.get_historical_stats), 
     tool_wrapper(fubon.get_txo_sentiment), 
     tool_wrapper(risk.get_global_risk_radar), tool_wrapper(risk.get_v_turn_confirmation),
-    tool_wrapper(risk.get_capital_flow_matrix)
+    tool_wrapper(risk.get_capital_flow_matrix),
+    tool_wrapper(memory.get_frontal_lobe), tool_wrapper(memory.update_frontal_lobe),
+    tool_wrapper(memory.get_emotion), tool_wrapper(memory.update_emotion),
+    tool_wrapper(memory.get_brain_log)
 ]
 
 # 全能工具箱 (用於 /trade)
@@ -289,7 +297,16 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
     
     time_context = f"\n【🕒 當前時間環境】\n- 台北: {now_tw} ({tw_status})\n- 美東: {now_us} ({us_status})\n"
     strat_context = router.get_strat_context(user_text)
-    dynamic_prompt = (system_prompt_override or system_prompt) + time_context + strat_context
+    
+    # --- 🧠 記憶中樞注入 (Cognitive Recall) ---
+    frontal_lobe = memory.get_frontal_lobe()
+    emotion_data = memory._global_brain.get_emotion()
+    emotion = emotion_data.get("current", "neutral")
+    
+    brain_context = f"\n\n## Current Brain State\n- Emotion: {emotion}\n- Frontal Lobe: {frontal_lobe if frontal_lobe else '空白 (首次運行)'}\n"
+    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析「開始時」根據記憶保持思維連貫。在對話結束前，若有重要數據變化，請靜默呼叫 update_frontal_lobe 更新重點摘要，無需在回覆中重複「我已記住」等廢話，直接給出最精簡、最高信號的數據回饋即可。)"
+    
+    dynamic_prompt = (system_prompt_override or system_prompt) + time_context + strat_context + brain_context
     
     now = time.time()
     current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]

@@ -11,19 +11,14 @@ from datetime import datetime, timedelta
 from collections import Counter
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import yfinance as yf
+from yf_session import get_ticker, get_download
 import cloudscraper  # ⚠️ 新增：用於打穿 Cloudflare 防護
 from config import PROJECT_ROOT, DB_FILE
 
-# --- 0. Ubuntu 路徑配置與全局 SEC 偽裝 ---
-FINNLP_PATH = os.path.join(str(PROJECT_ROOT), "FinNLP-main", "FinNLP-main")
-if os.path.exists(FINNLP_PATH):
-    sys.path.append(FINNLP_PATH)
+# --- 0. 引用自建輕量版 NLP 引擎 ---
+from engine_nlp import FinnhubNewsDownloader as Finnhub_Date_Range
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(str(PROJECT_ROOT), ".env"))
-FINNHUB_KEY = os.getenv("FINNHUB_API_KEY")
-
-from finnlp.data_sources.news.finnhub_date_range import Finnhub_Date_Range
 from bs4 import BeautifulSoup
 import re
 
@@ -604,7 +599,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
 
     # --- 0. 動態獲取公司背景 ---
     try:
-        ticker_info = yf.Ticker(stock).info
+        ticker_info = get_ticker(stock, cache_level="daily").info
         company_name = ticker_info.get('longName', stock)
         sector = ticker_info.get('sector', 'Unknown Sector')
         industry = ticker_info.get('industry', 'Unknown Industry')
@@ -662,8 +657,22 @@ def run_turbo_trinity_scout(stock="NVDA"):
     try:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-        fh_downloader = Finnhub_Date_Range({"token": FINNHUB_KEY})
-        fh_downloader.download_date_range_stock(stock=stock, start_date=start_date, end_date=end_date)
+        
+        # 確保抓到 KEY
+        fh_key = os.getenv("FINNHUB_API_KEY")
+        if not fh_key:
+            print("   ⚠️ 未設定 FINNHUB_API_KEY，跳過新聞抓取。")
+        else:
+            fh_downloader = Finnhub_Date_Range(fh_key) # 我們的新類別直接傳入 Token
+            fh_downloader.download_date_range_stock(stock=stock, start_date=start_date, end_date=end_date)
+            if fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
+                df_fh = fh_downloader.dataframe.head(15) 
+                for _, row in df_fh.iterrows():
+                    source = row.get('source', 'News')
+                    headline = row.get('headline', '')
+                    summary = row.get('summary', '')[:300]
+                    raw_texts.append(f"Macro({source}): {headline} | {summary}")
+                print(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
         if fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
             df_fh = fh_downloader.dataframe.head(15) 
             for _, row in df_fh.iterrows():

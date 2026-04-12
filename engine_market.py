@@ -5,6 +5,7 @@ import time
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from yf_session import get_ticker, get_download
 import fubon  # 引用現有的 fubon.py
 import sqlite3
 from google import genai
@@ -84,13 +85,13 @@ def get_asset_profile(symbol: str) -> dict:
     if symbol in overrides:
         asset_type = overrides[symbol]
         try:
-            info = yf.Ticker(symbol).info
+            info = get_ticker(symbol).info
             sector = info.get('sector', 'Unknown')
             industry = info.get('industry', 'Unknown')
         except: pass
     else:
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = get_ticker(symbol)
             info = ticker.info
             sector = info.get('sector', 'Unknown')
             industry = info.get('industry', 'Unknown')
@@ -192,7 +193,7 @@ def resolve_symbol_identity(symbol: str) -> str:
         
     try:
         s = f"{symbol}.TW" if is_taiwan and not symbol.endswith('.TW') else symbol
-        ticker = yf.Ticker(s)
+        ticker = get_ticker(s)
         info = ticker.info
         name = info.get('longName') or info.get('shortName') or "未知標的"
         return f"🔍 識別結果: {symbol} ({name}) | 類型: {info.get('quoteType', '未知')}"
@@ -233,7 +234,7 @@ def get_live_price(symbol: str) -> str:
     search_list = [symbol, f"{symbol}.TW", f"{symbol}.TWO"] if is_taiwan_stock else [symbol]
     for s in search_list:
         try:
-            ticker = yf.Ticker(s)
+            ticker = get_ticker(s, cache_level="daily")
             info = ticker.info
             price = info.get('currentPrice') or info.get('regularMarketPrice')
             if not price:
@@ -248,7 +249,7 @@ def get_live_price(symbol: str) -> str:
 def get_us_realtime_insight(symbol: str) -> str:
     symbol = normalize_ticker(symbol)
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = get_ticker(symbol)
         full_df = ticker.history(period="2d", interval="5m")
         if full_df.empty: return f"❌ {symbol} 目前無盤中數據。"
         df = full_df.tail(10)
@@ -337,7 +338,7 @@ def get_market_sentiment() -> str:
     report = "【🌐 全球宏觀資金流向雷達】\n"
     for symbol, name in indicators.items():
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = get_ticker(symbol)
             hist = ticker.history(period="10d")
             if not hist.empty:
                 curr = hist['Close'].iloc[-1]
@@ -385,7 +386,7 @@ def get_stock_news(symbol: str) -> str:
         symbol = normalize_ticker(symbol)
         search_symbol = symbol.upper()
         if search_symbol.isdigit(): search_symbol += ".TW"
-        ticker = yf.Ticker(search_symbol)
+        ticker = get_ticker(search_symbol)
         news_list = ticker.news[:10]
         if not news_list: return "無新聞數據。"
         report = f"【📰 {symbol} 最新情報】\n"
@@ -401,7 +402,7 @@ def get_fundamental_data(symbol: str) -> str:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
         if s.isdigit(): s += ".TW"
-        ticker = yf.Ticker(s)
+        ticker = get_ticker(s)
         info = ticker.info
         
         # 提取更多關鍵指標
@@ -433,7 +434,7 @@ def get_technical_analysis(symbol: str) -> str:
             return fubon.get_fubon_technical(clean_symbol)
             
         # --- 美股使用 yfinance + pandas 自行計算 ---
-        ticker = yf.Ticker(s)
+        ticker = get_ticker(s)
         df = ticker.history(period="6mo")
         if df.empty: return f"❌ {s} 無法取得歷史數據。"
         
@@ -519,16 +520,133 @@ def get_technical_analysis(symbol: str) -> str:
         return report
     except Exception as e: return f"❌ 技術分析失敗: {e}"
 
-def get_market_history(symbol: str, days: int) -> str:
+def get_market_movers() -> str:
+    """
+    獲取市場領漲/領跌/最活躍榜單 (Market Movers)。
+    優先使用 FMP API，否則使用 YF 批量下載熱門股清單模擬。
+    """
+    report = "🚀 === 市場異動排行榜 (Movers) ===\n"
+    
+    if FMP_KEY:
+        try:
+            # 獲取漲幅榜
+            gainers = requests.get(f"https://financialmodelingprep.com/api/v3/stock_market/gainers?apikey={FMP_KEY}", timeout=5).json()
+            # 獲取跌幅榜
+            losers = requests.get(f"https://financialmodelingprep.com/api/v3/stock_market/losers?apikey={FMP_KEY}", timeout=5).json()
+            
+            report += "【📈 領漲榜】\n"
+            for s in gainers[:5]:
+                report += f"  - {s['symbol']}: {s['price']} ({s['changesPercentage']}%)\n"
+            
+            report += "\n【📉 領跌榜】\n"
+            for s in losers[:5]:
+                report += f"  - {s['symbol']}: {s['price']} ({s['changesPercentage']}%)\n"
+            return report
+        except Exception as e:
+            logger.warning(f"FMP Movers failed: {e}")
+
+    # Fallback: YF 模擬 (批量掃描 S&P500/Nasdaq100 核心權值股 + 熱門股)
+    report += "(數據來源: YF 大盤權值股批量掃描)\n"
+    # 擴大監控池 (包含科技巨頭、半導體、金融、傳產、加密貨幣概念等)
+    watch_list = [
+        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'BRK-B', 'LLY', 'AVGO',
+        'V', 'JPM', 'UNH', 'MA', 'PG', 'JNJ', 'HD', 'HD', 'CVX', 'MRK', 'ABBV', 'COST',
+        'AMD', 'NFLX', 'CRM', 'PEP', 'TMO', 'WMT', 'KO', 'DIS', 'CSCO', 'INTC', 'IBM',
+        'COIN', 'MARA', 'MSTR', 'PLTR', 'SMCI', 'ARM', 'UBER', 'RST', 'QCOM', 'TXN'
+    ]
+    
+    try:
+        # 使用批量下載以提升效能
+        data = get_download(watch_list, period="2d", group_by="ticker", progress=False)
+        results = []
+        
+        # yf.download 回傳的欄位結構會依據 ticker 數量變化
+        if len(watch_list) > 1:
+            for s in watch_list:
+                try:
+                    if s in data.columns.levels[0]:
+                        close_series = data[s]['Close']
+                        if len(close_series) >= 2:
+                            prev_close = close_series.iloc[-2]
+                            curr_close = close_series.iloc[-1]
+                            if pd.notna(prev_close) and pd.notna(curr_close) and prev_close > 0:
+                                chg = ((curr_close / prev_close) - 1) * 100
+                                results.append({'s': s, 'p': curr_close, 'c': chg})
+                except: continue
+                
+        # 排序
+        sorted_gainers = sorted(results, key=lambda x: x['c'], reverse=True)
+        sorted_losers = sorted(results, key=lambda x: x['c'])
+        
+        report += "【📈 領漲榜】\n"
+        for r in sorted_gainers[:5]:
+            report += f"  - {r['s']}: {r['p']:.2f} ({r['c']:+.2f}%)\n"
+            
+        report += "\n【📉 領跌榜】\n"
+        for r in sorted_losers[:5]:
+            report += f"  - {r['s']}: {r['p']:.2f} ({r['c']:+.2f}%)\n"
+            
+    except Exception as e:
+        report += f"掃描失敗: {e}\n"
+        
+    return report
+
+def get_market_history(symbol: str, days: int = 14) -> str:
+    """獲取個股歷史收盤價與成交量 (1個月內)"""
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
         if s.isdigit() and not s.endswith('.TW'): s += '.TW'
-        hist = yf.Ticker(s).history(period="1mo").tail(days)
-        report = f"【📅 {symbol} 歷史走勢】\n"
-        for date, row in hist.iterrows():
+        hist = get_ticker(s).history(period="1mo").tail(days)
+        if hist.empty: return f"❌ {symbol} 無法取得歷史數據。"
+        
+        report = f"【📅 {symbol} 最近 {len(hist)} 日歷史走勢】\n"
+        # 反轉順序，由新到舊顯示
+        for date, row in hist.iloc[::-1].iterrows():
             report += f"[{date.strftime('%m/%d')}] 收:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
         return report
     except Exception as e:
-        logger.error(f"Market history fetch failed for {symbol}: {e}")
-        return "歷史數據獲取失敗。"
+        return f"❌ 歷史數據獲取失敗: {e}"
+
+def get_market_calendar() -> str:
+    """
+    獲取市場日曆 (財報、重要經濟事件)。
+    """
+    report = "📅 === 市場關鍵日曆 (未來 7 天) ===\n"
+    
+    # 1. 重要財報 (Earnings)
+    # yfinance 沒辦法直接查全市場日曆，我們用一個聰明的方法：
+    # 查詢熱門股的 earnings_dates
+    hot_tickers = ['NVDA', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'GOOG', 'META']
+    events = []
+    now = datetime.datetime.now()
+    end_date = now + datetime.timedelta(days=7)
+    
+    for s in hot_tickers:
+        try:
+            t = get_ticker(s)
+            dates = t.earnings_dates
+            if dates is not None and not dates.empty:
+                dates.index = dates.index.tz_localize(None)
+                upcoming = dates[(dates.index >= now) & (dates.index <= end_date)]
+                for d, _ in upcoming.iterrows():
+                    events.append(f"  - {d.strftime('%m/%d')} | {s} 財報發布")
+        except: continue
+
+    if events:
+        report += "【📣 重點財報】\n" + "\n".join(events) + "\n"
+    else:
+        report += "【📣 重點財報】近期無巨頭財報。\n"
+
+    # 2. 宏觀日曆預留 (未來可對接 FRED 或 News)
+    report += "\n【💡 提示】建議關注週五非農就業數據 (NFP) 或 CPI 發布。"
+    
+    return report
+
+if __name__ == "__main__":
+    # 自檢測試
+    print(get_market_sentiment())
+    print("\n")
+    print(get_market_movers())
+    print("\n")
+    print(get_market_calendar())
