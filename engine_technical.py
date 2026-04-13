@@ -1,4 +1,5 @@
 import ast
+import re
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import pandas as pd
@@ -41,6 +42,8 @@ ALLOWED_FORMULA_NODES = (
     ast.Or,
     ast.keyword,
 )
+
+ALLOWED_FORMULA_PATTERN = re.compile(r"^[\w\s\(\)\[\]\{\}\.',:\+\-\*/%=<>!]+$")
 
 if hasattr(ast, "Index"):
     ALLOWED_FORMULA_NODES = ALLOWED_FORMULA_NODES + (ast.Index,)
@@ -196,6 +199,9 @@ class IndicatorCalculator:
         供 AI 呼叫的入口。
         支援陣列切片語法，例如: "CLOSE('AAPL', '1d')[-1] > SMA(CLOSE('AAPL', '1d'), 50)[-1]"
         """
+        if not ALLOWED_FORMULA_PATTERN.fullmatch(formula):
+            return "❌ 公式包含非法字元"
+
         # 建立安全的執行環境 (Safe Environment)
         safe_env = {
             'CLOSE': self.CLOSE, 'OPEN': self.OPEN, 'HIGH': self.HIGH,

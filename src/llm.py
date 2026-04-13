@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 AVAILABLE_MODELS = [
-    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
     "gemma-4-31b-it",
-    "gemini-2.0-flash-exp",
+    "gemini-flash-latest",
 ]
 
 TEMPORARY_ERROR_MARKERS = (
@@ -98,11 +99,8 @@ def quick_call(
                 logger.warning(f"[LLM] {model_name} temp failure: {exc}")
                 mark_dead(model_name)
                 continue
-            
-            # 致命錯誤也嘗試切換下一個模型，但標記冷卻時間更長 (10分鐘)
-            logger.error(f"[LLM] {model_name} fatal error: {exc}")
-            mark_dead(model_name, cooldown_seconds=600)
-            continue
+            logger.error(f"[LLM] {model_name} fatal: {exc}")
+            return None
 
     return None
 

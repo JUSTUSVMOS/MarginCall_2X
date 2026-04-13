@@ -6,38 +6,38 @@
       "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
       "state": "🟢 多頭",
       "riskScore": 0,
-      "updatedAt": "2026-04-13T14:12:15Z",
+      "updatedAt": "2026-04-13T17:40:08Z",
       "source": "macro_heartbeat",
       "watchpoints": [
-        "殖利率曲線 10Y-2Y: 0.313",
+        "殖利率曲線 10Y-2Y: 0.317",
         "GEX: 5.11B",
-        "市場情緒: 分析失敗 (0.0)",
-        "SPX: 6815.4 / MA20 6605.5 / MA200 6669.0",
+        "市場情緒: 中性 (0.0)",
+        "SPX: 6816.9 / MA20 6602.2 / MA200 6663.6",
         "🟢 暗池吸籌，大戶提供下檔支撐"
       ],
       "reasons": [
         "🟢 暗池吸籌，大戶提供下檔支撐"
       ],
       "signals": {
-        "yieldCurve10Y2Y": 0.313,
-        "fedFundsRate": 3.6,
-        "dixPr": 0.88,
+        "yieldCurve10Y2Y": 0.317,
+        "fedFundsRate": 3.59,
+        "dixPr": 0.89,
         "gexBillions": 5.11,
         "sentimentScore": 0.0,
-        "sentimentLabel": "分析失敗",
-        "spx": 6815.4,
-        "spx10Ma": 6673.8,
-        "spx20Ma": 6605.5,
-        "spx200Ma": 6669.0,
+        "sentimentLabel": "中性",
+        "spx": 6816.9,
+        "spx10Ma": 6605.2,
+        "spx20Ma": 6602.2,
+        "spx200Ma": 6663.6,
         "dxyZ": NaN,
         "tnxZ": NaN,
         "vixZ": NaN,
-        "skewPr": 0.44
+        "skewPr": 0.43
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-13T14:12:15Z",
-      "lastMacroChangeAt": "2026-04-13T14:12:15Z",
+      "lastMacroSyncAt": "2026-04-13T17:40:08Z",
+      "lastMacroChangeAt": "2026-04-13T17:40:08Z",
       "lastSyncStatus": "updated",
       "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
     }
@@ -180,15 +180,32 @@
       "summary": "🟢 多頭 RISK INIT: N/A -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
       "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.88, SPX=6815.40",
       "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": null,
         "risk_score_to": 0,
         "state_from": "未初始化",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "5d1b7e63",
+      "parent_hash": "697d6c50",
+      "timestamp": "2026-04-14 01:40:08",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
       },
       "source": "macro_heartbeat"
     }
   ],
-  "head": "697d6c50"
+  "head": "5d1b7e63"
 }
