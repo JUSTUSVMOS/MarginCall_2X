@@ -1,31 +1,23 @@
 import os
-import telebot
 import logging
 import datetime
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import json
-import sqlite3
 import re  # 補回此行
-from google import genai
 import engine_market as market
 import engine_risk as risk
 import engine_fundamentals as fundamentals
-from config import DB_FILE
+from src.database import db_lock, get_connection
 
 # 設定日誌
 logger = logging.getLogger(__name__)
-
-# --- 0. 資料庫路徑與初始化 ---
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 def get_my_user_id():
     val = os.getenv("TELEGRAM_USER_ID")
     return int(val) if val else 0
 
 bot = None # 改為延後初始化或從外部注入
-genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 def set_bot(external_bot):
     global bot
@@ -43,6 +35,7 @@ TICKER_ALIASES = {
     'PALANTIR': 'PLTR',
     'TELEDYNE': 'TDY',
     'BERKSHIRE': 'BRK-B', '波克夏': 'BRK-B',
+    'COREWEAVE': 'COREWEAVE',
     
     # 台股口語 (直接轉好 .TW)
     '台積電': '2330.TW', '神山': '2330.TW',
@@ -74,21 +67,18 @@ def detect_symbols(text: str) -> list:
     if symbols:
         return symbols
 
-    if not genai_client:
-        return []
-
     try:
-        prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如：TSLA, 2330.TW, BRK-B) 。只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字：{text}"
-        response = genai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        res_text = response.text.strip()
-        if res_text and res_text != "None":
-            symbols = [s.strip().upper() for s in res_text.split(',') if s.strip()]
-            if symbols:
-                logger.info(f"LLM detected symbols: {symbols}")
-                return list(set(symbols))
+        from src.llm import quick_call
+
+        prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如：TSLA, 2330.TW, BRK-B)。\n只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字: {text}"
+        res_text = quick_call(prompt)
+        if res_text:
+            res_text = res_text.strip()
+            if res_text != "None":
+                symbols = [s.strip().upper() for s in res_text.split(',') if s.strip()]
+                if symbols:
+                    logger.info(f"LLM detected symbols: {symbols}")
+                    return list(set(symbols))
     except Exception as e:
         logger.warning(f"LLM symbol detection failed: {e}")
 
@@ -129,17 +119,19 @@ def fetch_nlp_alpha(symbol: str) -> dict:
     增加時間檢查：若資料超過 10 分鐘則視為過期。
     """
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        # 抓取該標的最新的紀錄，包含時間戳
-        cursor.execute("""
-            SELECT nlp_alpha, alpha_retail, alpha_macro, alpha_official, summary_text, timestamp 
-            FROM nlp_insights 
-            WHERE symbol = ? 
-            ORDER BY timestamp DESC LIMIT 1
-        """, (symbol,))
-        row = cursor.fetchone()
-        conn.close()
+        with db_lock:
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT nlp_alpha, alpha_retail, alpha_macro, alpha_official, summary_text, timestamp 
+                    FROM nlp_insights 
+                    WHERE symbol = ? 
+                    ORDER BY timestamp DESC LIMIT 1
+                """, (symbol,))
+                row = cursor.fetchone()
+            finally:
+                conn.close()
         
         if row:
             # 檢查時間新鮮度 (10 分鐘內)
