@@ -80,20 +80,26 @@ def normalize_ticker(symbol: str) -> str:
     """
     symbol = symbol.upper().strip()
     is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
-    if not is_taiwan:
-        # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
-        suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
-        if "." in symbol and not symbol.endswith(suffixes):
-            return symbol.replace(".", "-")
+    if is_taiwan:
+        return symbol.replace('.TW', '').replace('.TWO', '')
+        
+    # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
+    suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
+    if "." in symbol and not symbol.endswith(suffixes):
+        return symbol.replace(".", "-")
     return symbol
 
 def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
     """
-    Updates a portfolio position or cash balance.
-    action: 'buy', 'sell', or 'set' (manual adjustment).
-    price: unit price in original currency.
-    shares: quantity to change.
-    locked: 1 to lock position from AI trading, 0 to unlock.
+    Updates a portfolio position or cash balance in the database.
+    
+    CRITICAL PARAMETER RULES:
+    1. symbol: The ticker (e.g., '2330', 'TSLA'). NEVER pass the quantity (like '1000') here.
+    2. price: The purchase/sale price PER SHARE (unit price).
+    3. shares: The QUANTITY of shares (e.g., 1000). 
+    4. action: 'buy' (deduct cash), 'sell' (add cash), or 'set' (manual sync).
+    
+    Validation: If you are unsure if a number is a symbol or a share count, call resolve_symbol_identity first.
     """
     symbol = normalize_ticker(symbol)
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')

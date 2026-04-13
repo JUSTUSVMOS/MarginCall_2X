@@ -53,6 +53,16 @@ class CachedTicker:
         """info 無法有效緩存，直接透傳"""
         return self._ticker.info
 
+    @property
+    def options(self):
+        """透傳 options 到 yf.Ticker"""
+        return self._ticker.options
+
+    @property
+    def news(self):
+        """透傳 news 到 yf.Ticker"""
+        return self._ticker.news
+
     def history(self, period="1y", interval="1d", **kwargs):
         """
         攔截歷史數據請求。

@@ -39,14 +39,22 @@ def normalize_ticker(symbol: str) -> str:
     特別處理美股中帶點的代號 (如 BRK.B -> BRK-B)
     """
     symbol = symbol.upper().strip()
+    
+    # 【防禦機制】排除常見的股數/整數，避免 AI 誤認 (例如 1000 股的 1000)
+    # 台股代號雖然有 4 碼，但如果剛好是 100, 1000, 2000 等，且沒有帶點或後綴，優先視為數字而非標的
+    if symbol in ["100", "500", "1000", "2000", "5000"]:
+         return symbol
+
     # 如果不是台股 (不含數字且長度不符合台股規則)
     is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
     
-    if not is_taiwan:
-        # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
-        suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
-        if "." in symbol and not symbol.endswith(suffixes):
-            return symbol.replace(".", "-")
+    if is_taiwan:
+        return symbol.replace('.TW', '').replace('.TWO', '')
+        
+    # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
+    suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
+    if "." in symbol and not symbol.endswith(suffixes):
+        return symbol.replace(".", "-")
     return symbol
 
 def get_asset_profile(symbol: str) -> dict:
@@ -112,8 +120,8 @@ def get_asset_profile(symbol: str) -> dict:
     # Stage 2: LLM Fallback (支援多模型降級)
     if asset_type == "Unknown" and genai_client:
         logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
-        # 這裡借用 main.py 的邏輯，但為了不循環引用，我們簡單列出
-        fallback_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+        # 與 main.py 保持同步，拒絕 404 舊型號
+        fallback_models = ["gemini-2.0-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
         prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。僅回傳分類名稱。"
         
         for model_name in fallback_models:

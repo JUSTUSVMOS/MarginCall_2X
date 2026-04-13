@@ -1,108 +1,291 @@
 {
   "state": {
-    "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
-    "emotion": "confident"
+    "frontalLobe": "Market View: Neutral - Executed a sell order for 009816.TW at 11.42.\nCore Levels: N/A\nPortfolio Health: Healthy\nNext Round: Monitor market for new opportunities.",
+    "emotion": "confident",
+    "marketRegime": {
+      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
+      "state": "🟢 多頭",
+      "riskScore": 0,
+      "updatedAt": "2026-04-13T10:13:50Z",
+      "source": "macro_heartbeat",
+      "watchpoints": [
+        "殖利率曲線 10Y-2Y: 0.317",
+        "GEX: 5.11B",
+        "市場情緒: 分析失敗 (0.0)",
+        "SPX: 6816.9 / MA20 6602.2 / MA200 6663.6",
+        "🟢 暗池吸籌，大戶提供下檔支撐"
+      ],
+      "reasons": [
+        "🟢 暗池吸籌，大戶提供下檔支撐"
+      ],
+      "signals": {
+        "yieldCurve10Y2Y": 0.317,
+        "fedFundsRate": 3.59,
+        "dixPr": 0.89,
+        "gexBillions": 5.11,
+        "sentimentScore": 0.0,
+        "sentimentLabel": "分析失敗",
+        "spx": 6816.9,
+        "spx10Ma": 6605.2,
+        "spx20Ma": 6602.2,
+        "spx200Ma": 6663.6,
+        "dxyZ": NaN,
+        "tnxZ": NaN,
+        "vixZ": NaN,
+        "skewPr": 0.43
+      }
+    },
+    "heartbeat": {
+      "lastMacroSyncAt": "2026-04-13T10:13:50Z",
+      "lastMacroChangeAt": "2026-04-13T10:13:50Z",
+      "lastSyncStatus": "updated",
+      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+    }
   },
   "commits": [
     {
       "hash": "f69922ea",
-      "parentHash": null,
+      "parent_hash": null,
       "timestamp": "2026-04-12 14:17:42",
       "type": "frontal_lobe",
-      "message": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
-      "stateAfter": {
-        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
-        "emotion": "neutral"
+      "summary": "🧠 NOTE: Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。 | No critical support / resistance level was explicitly sta...",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。 | Next: If the thesis weakens, reduce risk first and wait for confirmation before re-...",
+      "delta": {
+        "market_view": "Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+        "core_levels": "No critical support / resistance level was explicitly stated.",
+        "portfolio_health": "Portfolio health / sizing was not explicitly stated; re-check exposure before adding risk.",
+        "next_round": "If the thesis weakens, reduce risk first and wait for confirmation before re-entering."
       }
     },
     {
       "hash": "028f87e4",
-      "parentHash": "f69922ea",
+      "parent_hash": "f69922ea",
       "timestamp": "2026-04-12 14:17:42",
       "type": "emotion",
-      "message": "非農數據強勁，擔心聯準會延後降息，市場波動加劇。",
-      "stateAfter": {
-        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
-        "emotion": "cautious"
+      "summary": "🧠 EMOTION: cautious | 非農數據強勁，擔心聯準會延後降息，市場波動加劇。",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+      "delta": {
+        "to": "cautious",
+        "reason": "非農數據強勁，擔心聯準會延後降息，市場波動加劇。"
       }
     },
     {
       "hash": "f85eae09",
-      "parentHash": "028f87e4",
+      "parent_hash": "028f87e4",
       "timestamp": "2026-04-12 16:44:05",
       "type": "frontal_lobe",
-      "message": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
-      "stateAfter": {
-        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
-        "emotion": "cautious"
+      "summary": "🧠 NOTE: Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。 | No critical support / resistance level was explicitly sta...",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。 | Next: If the thesis weakens, reduce risk first and wait for confirmation before re-...",
+      "delta": {
+        "market_view": "Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+        "core_levels": "No critical support / resistance level was explicitly stated.",
+        "portfolio_health": "Portfolio health / sizing was not explicitly stated; re-check exposure before adding risk.",
+        "next_round": "If the thesis weakens, reduce risk first and wait for confirmation before re-entering."
       }
     },
     {
       "hash": "1fbb319f",
-      "parentHash": "f85eae09",
+      "parent_hash": "f85eae09",
       "timestamp": "2026-04-12 16:44:05",
       "type": "emotion",
-      "message": "非農數據強勁，擔心聯準會延後降息，市場波動加劇。",
-      "stateAfter": {
-        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
-        "emotion": "cautious"
+      "summary": "🧠 EMOTION: cautious | 非農數據強勁，擔心聯準會延後降息，市場波動加劇。",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。",
+      "delta": {
+        "to": "cautious",
+        "reason": "非農數據強勁，擔心聯準會延後降息，市場波動加劇。"
       }
     },
     {
       "hash": "0d11005d",
-      "parentHash": "1fbb319f",
+      "parent_hash": "1fbb319f",
       "timestamp": "2026-04-12 18:11:44",
       "type": "frontal_lobe",
-      "message": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不透明，需持續觀察。",
-      "stateAfter": {
-        "frontalLobe": "市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不透明，需持續觀察。",
-        "emotion": "cautious"
+      "summary": "🧠 NOTE: Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不... | No critical support / resistance level was explicitly sta...",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不... | Next: If the thesis weakens, reduce risk first and wait for confirmation before re-...",
+      "delta": {
+        "market_view": "Neutral - 市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。INTC 的毛利率波動較大，內部人交易資訊不透明，需持續觀察。",
+        "core_levels": "No critical support / resistance level was explicitly stated.",
+        "portfolio_health": "Portfolio health / sizing was not explicitly stated; re-check exposure before adding risk.",
+        "next_round": "If the thesis weakens, reduce risk first and wait for confirmation before re-entering."
       }
     },
     {
       "hash": "0e2f1d9f",
-      "parentHash": "0d11005d",
+      "parent_hash": "0d11005d",
       "timestamp": "2026-04-12 18:13:46",
       "type": "frontal_lobe",
-      "message": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
-      "stateAfter": {
-        "frontalLobe": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
-        "emotion": "cautious"
+      "summary": "🧠 NOTE: Neutral - INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫... | No critical support / resistance level was explicitly sta...",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "Neutral - INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫... | Next: If the thesis weakens, reduce risk first and wait for confirmation before re-...",
+      "delta": {
+        "market_view": "Neutral - INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
+        "core_levels": "No critical support / resistance level was explicitly stated.",
+        "portfolio_health": "Portfolio health / sizing was not explicitly stated; re-check exposure before adding risk.",
+        "next_round": "If the thesis weakens, reduce risk first and wait for confirmation before re-entering."
       }
     },
     {
       "hash": "a4b76a5a",
-      "parentHash": "0e2f1d9f",
+      "parent_hash": "0e2f1d9f",
       "timestamp": "2026-04-12 18:19:04",
       "type": "frontal_lobe",
-      "message": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
-      "stateAfter": {
-        "frontalLobe": "INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
-        "emotion": "cautious"
+      "summary": "🧠 NOTE: Neutral - INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫... | No critical support / resistance level was explicitly sta...",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "Neutral - INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫... | Next: If the thesis weakens, reduce risk first and wait for confirmation before re-...",
+      "delta": {
+        "market_view": "Neutral - INTC 毛利率波動劇烈，內部人交易動向不明，需持續觀察。市場在非農數據後震盪，等待 CPI 數據釐清方向。對 INTC 保持謹慎，暫不追高。",
+        "core_levels": "No critical support / resistance level was explicitly stated.",
+        "portfolio_health": "Portfolio health / sizing was not explicitly stated; re-check exposure before adding risk.",
+        "next_round": "If the thesis weakens, reduce risk first and wait for confirmation before re-entering."
       }
     },
     {
       "hash": "bd36f70b",
-      "parentHash": "a4b76a5a",
+      "parent_hash": "a4b76a5a",
       "timestamp": "2026-04-12 18:24:35",
       "type": "frontal_lobe",
-      "message": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖...",
-      "stateAfter": {
-        "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
-        "emotion": "cautious"
+      "summary": "🧠 NOTE: Neutral - INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft... | INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA...",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "Neutral - INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft... | Next: If the thesis weakens, reduce risk first and wait for confirmation before re-...",
+      "delta": {
+        "market_view": "Neutral - INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
+        "core_levels": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
+        "portfolio_health": "Portfolio health / sizing was not explicitly stated; re-check exposure before adding risk.",
+        "next_round": "If the thesis weakens, reduce risk first and wait for confirmation before re-entering."
       }
     },
     {
       "hash": "8af127ed",
-      "parentHash": "bd36f70b",
+      "parent_hash": "bd36f70b",
       "timestamp": "2026-04-12 18:24:35",
       "type": "emotion",
-      "message": "INTC 18A 量產成功，並獲得主要雲端巨頭與 NVIDIA 投資，顯示結構性轉機。",
-      "stateAfter": {
-        "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
-        "emotion": "confident"
+      "summary": "🧠 EMOTION: confident | INTC 18A 量產成功，並獲得主要雲端巨頭與 NVIDIA 投資，顯示結構性轉機。",
+      "key_signals": "REGIME=未初始化",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "delta": {
+        "to": "confident",
+        "reason": "INTC 18A 量產成功，並獲得主要雲端巨頭與 NVIDIA 投資，顯示結構性轉機。"
       }
+    },
+    {
+      "hash": "dd6d4cfb",
+      "parent_hash": "8af127ed",
+      "timestamp": "2026-04-13 02:34:03",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK INIT: N/A -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "delta": {
+        "risk_score_to": 0,
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "37df3a44",
+      "parent_hash": "dd6d4cfb",
+      "timestamp": "2026-04-13 06:12:23",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "c6f06970",
+      "parent_hash": "37df3a44",
+      "timestamp": "2026-04-13 12:12:23",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "76774c01",
+      "parent_hash": "c6f06970",
+      "timestamp": "2026-04-13 15:13:35",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "2d0e54c3",
+      "parent_hash": "76774c01",
+      "timestamp": "2026-04-13 18:13:50",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "f406407e",
+      "parent_hash": "2d0e54c3",
+      "timestamp": "2026-04-13 20:52:59",
+      "type": "frontal_lobe",
+      "summary": "🧠 NOTE: Bullish - AI and semi-conductors are leading with strong dark pool support (D... | SPX 6600 (MA20) support; TAIEX 35000 support; TSMC 2000 p...",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89",
+      "frontal_lobe_ref": "Bullish - AI and semi-conductors are leading with strong dark pool support (D... | Next: If SPX breaks below 6600 or oil stays above $105, I will hedge. Otherwise, st...",
+      "source": "frontal_lobe_write",
+      "delta": {
+        "market_view": "Bullish - AI and semi-conductors are leading with strong dark pool support (DIX 0.89), but the 8.6% oil spike is a major macro risk.",
+        "core_levels": "SPX 6600 (MA20) support; TAIEX 35000 support; TSMC 2000 psychological resistance.",
+        "portfolio_health": "Healthy, driven by tech strength.",
+        "next_round": "If SPX breaks below 6600 or oil stays above $105, I will hedge. Otherwise, stay long on AI leaders."
+      }
+    },
+    {
+      "hash": "532c4bd3",
+      "parent_hash": "f406407e",
+      "timestamp": "2026-04-13 21:00:15",
+      "type": "frontal_lobe",
+      "summary": "🧠 NOTE: Neutral - Executed a sell order for 009816.TW at 11.42. | N/A",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89",
+      "frontal_lobe_ref": "Neutral - Executed a sell order for 009816.TW at 11.42. | Next: Monitor market for new opportunities.",
+      "delta": {
+        "market_view": "Neutral - Executed a sell order for 009816.TW at 11.42.",
+        "core_levels": "N/A",
+        "portfolio_health": "Healthy",
+        "next_round": "Monitor market for new opportunities."
+      },
+      "source": "frontal_lobe_write"
     }
   ],
-  "head": "8af127ed"
+  "head": "532c4bd3"
 }

@@ -62,15 +62,16 @@ client = genai.Client(api_key=GEMINI_KEY)
 # --- 全局狀態開關 ---
 v_turn_active = True  # V 轉監控預設開啟
 
-# AI 模型清單 (暫時將 Flash 移至第一位，避開 Pro 的 429 延遲)
+# AI 模型清單 (實測可用型號清單)
 AVAILABLE_MODELS = [
     # 'gemini-3.1-flash-lite-preview',
     # 'gemini-3.1-pro-preview',
-    # 'gemini-2.5-pro',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemma-4-31b-it',
-    'gemini-flash-latest'
+    # 'gemini-2.5-pro',                                                                                  
+    # 'gemini-2.5-flash',                                                                                    
+    # 'gemini-2.0-flash',
+    'gemini-2.5-flash-lite',                                            
+    'gemini-flash-latest',
+    'gemma-4-31b-it'                                                                               
 ]
 
 # --- 工具呼叫追蹤器 (用於 Debug 卡住問題) ---
@@ -432,7 +433,8 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
                 config=types.GenerateContentConfig(
                     system_instruction=dynamic_prompt,
                     tools=tools,
-                    temperature=0.3, 
+                    temperature=0.3,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=5)
                 ),
                 history=chat_history
             )
