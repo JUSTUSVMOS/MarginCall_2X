@@ -25,25 +25,20 @@ def set_bot(external_bot):
 
 # --- 0. 全域 Regex 配置 (預編譯提高效能) ---
 
+def load_aliases():
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), 'config', 'aliases.json')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load aliases.json: {e}")
+        return {}
+
 # 俗稱與中文對照表 (Lookup Table)：將口語直接對應 yfinance 標準代號
-TICKER_ALIASES = {
-    # 科技巨頭 & 常見標的
-    'APPLE': 'AAPL', '蘋果': 'AAPL',
-    'TESLA': 'TSLA', '特斯拉': 'TSLA',
-    'NVIDIA': 'NVDA', '輝達': 'NVDA', 'NV': 'NVDA',
-    'BROADCOM': 'AVGO', '博通': 'AVGO',
-    'PALANTIR': 'PLTR',
-    'TELEDYNE': 'TDY',
-    'BERKSHIRE': 'BRK-B', '波克夏': 'BRK-B',
-    'COREWEAVE': 'COREWEAVE',
-    
-    # 台股口語 (直接轉好 .TW)
-    '台積電': '2330.TW', '神山': '2330.TW',
-    '聯發科': '2454.TW', '發哥': '2454.TW'
-}
+TICKER_ALIASES = load_aliases()
 
 # 提取對照表的 keys，組成 Regex 條件 (例如：APPLE|蘋果|TESLA...)
-alias_pattern = '|'.join(map(re.escape, TICKER_ALIASES.keys()))
+alias_pattern = '|'.join(map(re.escape, TICKER_ALIASES.keys())) if TICKER_ALIASES else '(?!)'
 
 # 支援：1.自訂中英俗稱 2.純英文字母(1-6碼，可帶點) 3.台股數字/ETF(4-6碼數字，可帶字母)
 # 使用 Lookaround (?<!...) (?!) 確保不會被中文字黏住而抓不到
@@ -70,15 +65,29 @@ def detect_symbols(text: str) -> list:
     try:
         from src.llm import quick_call
 
-        prompt = f"請從以下文字中提取提到的股票代號或公司名稱，並轉換成 yfinance 格式的代號 (例如：TSLA, 2330.TW, BRK-B)。\n只需回傳代號並以逗號分隔，若無則回傳 'None'。\n文字: {text}"
+        prompt = f"""Extract stock symbols or company names mentioned in the text and convert them to yfinance compatible ticker formats (e.g., TSLA, 2330.TW, BRK-B).
+Return ONLY a valid JSON object in this exact format, with no markdown formatting or extra text:
+{{"symbols": ["AAPL", "TSLA"]}}
+If no symbols are found, return {{"symbols": []}}.
+
+Text: {text}"""
+        
         res_text = quick_call(prompt)
         if res_text:
-            res_text = res_text.strip()
-            if res_text != "None":
-                symbols = [s.strip().upper() for s in res_text.split(',') if s.strip()]
-                if symbols:
-                    logger.info(f"LLM detected symbols: {symbols}")
-                    return list(set(symbols))
+            # Clean markdown code blocks if AI wrapped the JSON
+            cleaned_json = re.sub(r'^```(?:json)?\s*(.*?)\s*```$', r'\1', res_text.strip(), flags=re.DOTALL)
+            
+            try:
+                data = json.loads(cleaned_json)
+                extracted = data.get("symbols", [])
+                if extracted:
+                    symbols = [str(s).strip().upper() for s in extracted if str(s).strip()]
+                    if symbols:
+                        logger.info(f"LLM detected symbols via JSON: {symbols}")
+                        return list(set(symbols))
+            except json.JSONDecodeError as je:
+                logger.error(f"Failed to parse LLM JSON response: {res_text} - Error: {je}")
+                
     except Exception as e:
         logger.warning(f"LLM symbol detection failed: {e}")
 
