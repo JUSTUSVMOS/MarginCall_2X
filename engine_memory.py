@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from src.tools import tool
 
 logger = logging.getLogger(__name__)
 
@@ -777,6 +778,7 @@ def get_frontal_lobe_write_guide() -> str:
 # 全域唯一的 Brain 實例
 _global_brain = Brain()
 
+@tool()
 def get_frontal_lobe() -> str:
     """
     Retrieves the "Working Memory Space" left from the previous session.
@@ -792,6 +794,7 @@ def get_frontal_lobe() -> str:
     """
     return _global_brain.get_frontal_lobe()
 
+@tool(mode="write")
 def update_frontal_lobe(content: str) -> str:
     """
     Updates your "Frontal Lobe" memory space with a disciplined professional trading note.
@@ -812,6 +815,7 @@ def update_frontal_lobe(content: str) -> str:
     res = _global_brain.update_frontal_lobe(content)
     return res["message"]
 
+@tool()
 def get_emotion() -> str:
     """
     Retrieves your current emotional state and recent sentiment trajectory.
@@ -819,6 +823,7 @@ def get_emotion() -> str:
     """
     return json.dumps(_global_brain.get_emotion(), ensure_ascii=False, indent=2)
 
+@tool(mode="write")
 def update_emotion(emotion: str, reason: str) -> str:
     """
     Updates your emotional state when market conditions or confidence levels shift.
@@ -830,6 +835,7 @@ def update_emotion(emotion: str, reason: str) -> str:
     res = _global_brain.update_emotion(emotion, reason)
     return res["message"]
 
+@tool()
 def get_market_regime() -> str:
     """
     Retrieves the persistent macro / market regime snapshot carried across restarts.
@@ -842,6 +848,7 @@ def get_market_regime() -> str:
     """
     return json.dumps(_global_brain.get_market_regime(), ensure_ascii=False, indent=2)
 
+@tool(mode="write")
 def update_market_regime(summary: str, regime: str = "", risk_score: int = -1) -> str:
     """
     Updates the persistent market regime summary when the macro backdrop materially changes.
@@ -856,6 +863,7 @@ def update_market_regime(summary: str, regime: str = "", risk_score: int = -1) -
     )
     return res["message"]
 
+@tool()
 def refresh_market_regime(force: bool = False, max_age_minutes: int = 180) -> str:
     """
     Pulls the latest global risk snapshot and syncs it into the persistent brain.
@@ -864,6 +872,7 @@ def refresh_market_regime(force: bool = False, max_age_minutes: int = 180) -> st
     result = sync_market_brain(force=force, max_age_minutes=max_age_minutes)
     return result["message"]
 
+@tool()
 def get_brain_snapshot() -> str:
     """
     Returns the full persistent cognitive snapshot, including frontal lobe, emotion,
@@ -871,6 +880,7 @@ def get_brain_snapshot() -> str:
     """
     return json.dumps(_global_brain.get_brain_snapshot(), ensure_ascii=False, indent=2)
 
+@tool()
 def get_brain_log(limit: int = 10) -> str:
     """
     Views your Brain Commit History as compact semantic deltas optimized for AI recall.

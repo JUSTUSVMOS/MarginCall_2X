@@ -4,6 +4,7 @@ import json
 import pandas as pd
 from fubon_neo.sdk import FubonSDK
 from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
+from src.tools import tool
 
 # 把實體化延後，避免 import 時就連線失敗崩潰
 fubon_sdk = None
@@ -218,6 +219,7 @@ def get_fubon_bank_remain():
 
 # 👇 給 AI 用的 Tool 函數
 # 👇 【深層戰術工具】抓取成交明細 (Intraday Trades)
+@tool()
 def get_market_trades(symbol: str, limit: int = 20) -> str:
     """
     Fetches the most recent intraday trade details (price and size) for a Taiwan stock.
@@ -245,6 +247,7 @@ def get_market_trades(symbol: str, limit: int = 20) -> str:
         return f"❌ 明細抓取異常: {e}"
 
 # 👇 【深層戰術工具】抓取分價量表 (Intraday Volumes)
+@tool()
 def get_price_volumes(symbol: str) -> str:
     """
     Retrieves the volume profile (intraday volumes at price) for a Taiwan stock.
@@ -275,6 +278,7 @@ def get_price_volumes(symbol: str) -> str:
         return f"❌ 分價量表異常: {e}"
 
 # 👇 【深層戰術工具】抓取 52 週高低價與基本資訊 (Historical Stats)
+@tool()
 def get_historical_stats(symbol: str) -> str:
     """
     Provides 52-week high/low prices and current percentile rank for a Taiwan stock.
@@ -304,6 +308,7 @@ def get_historical_stats(symbol: str) -> str:
         return f"❌ 52週數據異常: {e}"
 
 # 👇 【TXO 期權戰術工具】抓取台指期權 (TXO) 戰報
+@tool()
 def get_txo_sentiment() -> str:
     """
     Calculates the Put/Call Ratio and market sentiment from Taiwan Index Options (TXO).
@@ -359,6 +364,7 @@ def get_txo_sentiment() -> str:
         return f"❌ TXO 數據抓取失敗: {e} (請確認帳號具備期貨權限)"
 
 # 把舊的 get_quote_and_orderbook 增強，加入更多總量資訊
+@tool()
 def get_quote_and_orderbook(symbol: str) -> str:
 
     """
@@ -417,6 +423,7 @@ def get_quote_and_orderbook(symbol: str) -> str:
     except Exception as e:
         return f"❌ 五檔解析異常: {e}"
 
+@tool()
 def get_market_hot_stocks() -> str:
     """
     Identifies Taiwan market heatspots by scanning for top stocks by trading value and percentage gain.
@@ -469,6 +476,7 @@ def get_market_hot_stocks() -> str:
         return f"❌ 熱點雷達解析異常: {e}"
 
 
+@tool()
 def get_intraday_trend(symbol: str) -> str:
     """
     Fetches 5-minute K-line data for a Taiwan stock to analyze intraday price and volume trends.

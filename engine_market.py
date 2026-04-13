@@ -7,14 +7,11 @@ import numpy as np
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import fubon  # 引用現有的 fubon.py
-import sqlite3
-from google import genai
-from google.genai import types
 
 import logging
-
-# 引入共用鎖與連線
-from engine_risk import db_lock, get_db_connection
+from src.database import db_lock, get_connection
+from src.symbols import normalize_ticker
+from src.tools import tool
 
 # 設定基礎日誌
 logging.basicConfig(
@@ -28,34 +25,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 FMP_KEY = os.getenv("FMP_API_KEY")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-
-# 初始化 Gemini 客戶端 (用於 Stage 2)
-genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-
-def normalize_ticker(symbol: str) -> str:
-    """
-    將使用者輸入的代號正規化。
-    特別處理美股中帶點的代號 (如 BRK.B -> BRK-B)
-    """
-    symbol = symbol.upper().strip()
-    
-    # 【防禦機制】排除常見的股數/整數，避免 AI 誤認 (例如 1000 股的 1000)
-    # 台股代號雖然有 4 碼，但如果剛好是 100, 1000, 2000 等，且沒有帶點或後綴，優先視為數字而非標的
-    if symbol in ["100", "500", "1000", "2000", "5000"]:
-         return symbol
-
-    # 如果不是台股 (不含數字且長度不符合台股規則)
-    is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
-    
-    if is_taiwan:
-        return symbol.replace('.TW', '').replace('.TWO', '')
-        
-    # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
-    suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
-    if "." in symbol and not symbol.endswith(suffixes):
-        return symbol.replace(".", "-")
-    return symbol
 
 def get_asset_profile(symbol: str) -> dict:
     """
@@ -65,7 +34,7 @@ def get_asset_profile(symbol: str) -> dict:
     
     # 1. 檢查 SQLite 快取
     with db_lock:
-        conn = get_db_connection()
+        conn = get_connection()
         try:
             df = pd.read_sql("SELECT * FROM asset_profile_cache WHERE symbol = ?", conn, params=(symbol,))
             if not df.empty:
@@ -117,31 +86,24 @@ def get_asset_profile(symbol: str) -> dict:
         except Exception as e:
             logger.warning(f"Stage 1 fetching failed for {symbol}: {e}")
 
-    # Stage 2: LLM Fallback (支援多模型降級)
-    if asset_type == "Unknown" and genai_client:
+    # Stage 2: LLM Fallback (透過統一管理器)
+    if asset_type == "Unknown":
         logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
-        # 與 main.py 保持同步，拒絕 404 舊型號
-        fallback_models = ["gemini-2.0-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
-        prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。僅回傳分類名稱。"
-        
-        for model_name in fallback_models:
-            try:
-                response = genai_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt
-                )
-                if response.text:
-                    llm_type = response.text.strip()
-                    if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
-                        asset_type = llm_type
-                        break
-            except Exception as e:
-                logger.warning(f"Stage 2 LLM classification failed with {model_name}: {e}")
-                continue
+        try:
+            from src.llm import quick_call
+
+            prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。\n僅回傳分類名稱。"
+            result = quick_call(prompt)
+            if result:
+                llm_type = result.strip()
+                if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
+                    asset_type = llm_type
+        except Exception as e:
+            logger.warning(f"Stage 2 LLM classification failed: {e}")
 
     # 3. 持久化到 SQLite
     with db_lock:
-        conn = get_db_connection()
+        conn = get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute("""
@@ -182,6 +144,7 @@ def is_us_market_open() -> bool:
     end = now.replace(hour=16, minute=0, second=0, microsecond=0)
     return start <= now <= end
 
+@tool()
 def resolve_symbol_identity(symbol: str) -> str:
     """
     Identifies and validates a ticker symbol. Returns the official name and asset type.
@@ -209,6 +172,7 @@ def resolve_symbol_identity(symbol: str) -> str:
         logger.error(f"Failed to resolve symbol identity for {symbol}: {e}")
         return f"❌ 無法識別標的: {symbol}，請確認代號是否正確。"
 
+@tool()
 def get_live_price(symbol: str) -> str:
     """
     Fetches the real-time or most recent price for a given ticker symbol.
@@ -258,6 +222,7 @@ def get_live_price(symbol: str) -> str:
             continue
     return "無法取得報價"
 
+@tool()
 def get_us_realtime_insight(symbol: str) -> str:
     symbol = normalize_ticker(symbol)
     try:
@@ -337,6 +302,7 @@ def get_us_realtime_insight(symbol: str) -> str:
         return report
     except Exception as e: return f"❌ 美股掃描失敗: {e}"
 
+@tool()
 def get_market_sentiment() -> str:
     """
     Analyzes global market sentiment by monitoring key indices, bonds, and commodities.
@@ -397,6 +363,7 @@ def get_market_sentiment() -> str:
             logger.debug(f"Market sentiment fetch failed for {symbol}: {e}")
     return report
 
+@tool()
 def get_stock_news(symbol: str) -> str:
     """
     Retrieves the latest news headlines for a specific stock symbol.
@@ -416,6 +383,7 @@ def get_stock_news(symbol: str) -> str:
         return report
     except Exception as e: return f"新聞異常: {e}"
 
+@tool()
 def get_fundamental_data(symbol: str) -> str:
     """
     Retrieves key fundamental metrics (EPS, P/E, P/B, Institutional Ownership) for a stock.
@@ -444,6 +412,7 @@ def get_fundamental_data(symbol: str) -> str:
     except Exception as e:
         return f"基本面數據獲取失敗: {e}"
 
+@tool()
 def get_technical_analysis(symbol: str) -> str:
     """
     Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands).
@@ -546,6 +515,7 @@ def get_technical_analysis(symbol: str) -> str:
         return report
     except Exception as e: return f"❌ 技術分析失敗: {e}"
 
+@tool()
 def get_market_movers() -> str:
     """
     Retrieves top gainers, losers, and most active stocks.
@@ -617,6 +587,7 @@ def get_market_movers() -> str:
         
     return report
 
+@tool()
 def get_market_history(symbol: str, days: int = 14) -> str:
     """
     Fetches historical closing prices and volumes for a specific stock (up to 1 month).

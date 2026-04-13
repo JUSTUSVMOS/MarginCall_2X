@@ -43,10 +43,9 @@ This project is a highly personalized, AI-powered Telegram trading companion bot
     ```
 
 3.  **Install Dependencies**:
-    This project does not yet provide a `requirements.txt` file. Please install the necessary packages manually based on the `import` statements in `main.py`:
+    Install the pinned runtime dependencies from `requirements.txt`:
     ```bash
-    pip install python-dotenv pytelegrambotapi google-generativeai
-    # ...and any SDKs required for Fubon Securities integration.
+    pip install -r requirements.txt
     ```
 
 4.  **Set Up Environment Variables**:
@@ -68,6 +67,25 @@ Once everything is set up, run the main script to start the bot:
 python main.py
 ```
 You can then start chatting with your "Bankruptcy Booster" on Telegram.
+
+## Refactor Execution Guide
+
+The current shared runtime is organized under `src/`:
+
+* `src/llm.py`: shared Gemini client, shared cooldown table, `quick_call()` and `chat_with_tools()`
+* `src/database.py`: shared SQLite lock plus WAL-enabled connection helpers
+* `src/symbols.py`: shared ticker normalization
+* `src/tools.py`: tool logging wrapper plus grouped tool registration
+
+Useful commands:
+
+```bash
+# Run the focused unit tests
+python -m unittest test_brain_memory.py test_refactor_runtime.py
+
+# Start the Telegram bot
+python main.py
+```
 
 ---
 

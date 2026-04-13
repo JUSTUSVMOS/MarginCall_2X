@@ -1,19 +1,17 @@
 import os
 import sys
-import sqlite3
 import pandas as pd
-import torch
 import requests
 import json
 import textwrap
 import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import cloudscraper  # ⚠️ 新增：用於打穿 Cloudflare 防護
-from config import PROJECT_ROOT, DB_FILE
+from config import PROJECT_ROOT
+from src.database import db_lock, get_connection
 
 # --- 0. 引用自建輕量版 NLP 引擎 ---
 from engine_nlp import FinnhubNewsDownloader as Finnhub_Date_Range
@@ -83,39 +81,41 @@ def parse_form4_insider(content):
     except: return "【解析異常】XML 解析失敗"
 
 def init_nlp_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(nlp_insights)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if columns and "nlp_alpha" not in columns:
-        cursor.execute("DROP TABLE nlp_insights")
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS nlp_insights (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT,
-            timestamp TEXT,
-            nlp_alpha REAL,
-            alpha_retail REAL,
-            alpha_macro REAL,
-            alpha_official REAL,
-            total_items INTEGER,
-            summary_text TEXT,
-            insight_type TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(nlp_insights)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if columns and "nlp_alpha" not in columns:
+            cursor.execute("DROP TABLE nlp_insights")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nlp_insights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT,
+                timestamp TEXT,
+                nlp_alpha REAL,
+                alpha_retail REAL,
+                alpha_macro REAL,
+                alpha_official REAL,
+                total_items INTEGER,
+                summary_text TEXT,
+                insight_type TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
 
 def save_to_db(symbol, nlp_alpha, a_ret, a_mac, a_off, total, summary, i_type):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO nlp_insights 
-        (symbol, timestamp, nlp_alpha, alpha_retail, alpha_macro, alpha_official, total_items, summary_text, insight_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (symbol, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), nlp_alpha, a_ret, a_mac, a_off, total, summary, i_type))
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO nlp_insights 
+            (symbol, timestamp, nlp_alpha, alpha_retail, alpha_macro, alpha_official, total_items, summary_text, insight_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), nlp_alpha, a_ret, a_mac, a_off, total, summary, i_type))
+        conn.commit()
+        conn.close()
 
 # --- 2. 【並行 Map 階段】 ---
 def extract_insight_parallel(text, symbol):

@@ -9,8 +9,6 @@ import subprocess
 import threading
 from pathlib import Path
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import pytz
@@ -44,6 +42,7 @@ import engine_router as router
 import engine_fundamentals as fundamentals
 import engine_technical as technical
 import engine_memory as memory
+from src.tools import get_tools
 
 # --- 初始化區 ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -57,200 +56,21 @@ MY_USER_ID = int(MY_USER_ID)
 
 fubon.init_fubon()
 bot = telebot.TeleBot(BOT_TOKEN)
-client = genai.Client(api_key=GEMINI_KEY)
+router.set_bot(bot)
 
 # --- 全局狀態開關 ---
 v_turn_active = True  # V 轉監控預設開啟
-
-# AI 模型清單 (實測可用型號清單)
-AVAILABLE_MODELS = [
-    # 'gemini-3.1-flash-lite-preview',
-    # 'gemini-3.1-pro-preview',
-    # 'gemini-2.5-pro',                                                                                  
-    # 'gemini-2.5-flash',                                                                                    
-    # 'gemini-2.0-flash',
-    'gemini-2.5-flash-lite',                                            
-    'gemini-flash-latest',
-    'gemma-4-31b-it'                                                                               
+MEMORY_WRITE_TOOL_NAMES = {
+    "update_frontal_lobe",
+    "update_emotion",
+    "update_market_regime",
+}
+WRITE_TOOLS = get_tools("write")
+FULL_AGENT_TOOLS = get_tools("all")
+READ_ONLY_TOOLS = get_tools("read") + [
+    tool_func for tool_func in WRITE_TOOLS if tool_func.__name__ in MEMORY_WRITE_TOOL_NAMES
 ]
 
-# --- 工具呼叫追蹤器 (用於 Debug 卡住問題) ---
-def tool_wrapper(func):
-    from functools import wraps
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        arg_str = f"args={args}, kwargs={kwargs}"
-        logger.info(f"🛠️ [TOOL_START] 正在呼叫工具: {func.__name__} | 參數: {arg_str[:100]}...")
-        start_t = time.time()
-        try:
-            result = func(*args, **kwargs)
-            duration = time.time() - start_t
-            logger.info(f"✅ [TOOL_DONE] {func.__name__} 執行完畢 (耗時: {duration:.2f}s)")
-            return result
-        except Exception as e:
-            logger.error(f"❌ [TOOL_ERROR] {func.__name__} 報錯: {e}")
-            raise e
-    return wrapper
-
-def get_frontal_lobe_tool() -> str:
-    """
-    Read the current Frontal Lobe before making a fresh judgment.
-
-    This memory is not a scratchpad. It is the latest professional trading note
-    the AI left for itself, structured as:
-    - Market View
-    - Core Levels
-    - Portfolio Health
-    - Next Round
-    """
-    return memory.get_frontal_lobe()
-
-get_frontal_lobe_tool.__name__ = memory.get_frontal_lobe.__name__
-
-def update_frontal_lobe_tool(content: str) -> str:
-    """
-    Persist a professional trader's Frontal Lobe note.
-
-    REQUIRED FORMAT:
-    Market View: Bullish / Bearish / Neutral + one-sentence thesis
-    Core Levels: key support / resistance / MA levels being watched
-    Portfolio Health: whether positions are healthy, over-risked, or underwater
-    Next Round: if A happens, I will do B
-
-    Quality bar:
-    - Be concrete and decision-oriented, not chatty
-    - Mention actual levels or triggers when possible
-    - Always state the planned reaction for the next round
-    - If your input is messy, the system will normalize it, but you should still aim to write it cleanly
-    """
-    return memory.update_frontal_lobe(content)
-
-update_frontal_lobe_tool.__name__ = memory.update_frontal_lobe.__name__
-
-def get_brain_log_tool(limit: int = 10) -> str:
-    """
-    Read the compact semantic Brain Log.
-
-    The log is optimized for AI recall: each entry is a one-line summary plus the
-    key market signals that mattered. Use it to understand the recent cognitive
-    and regime shifts quickly without rereading long state dumps.
-    """
-    return memory.get_brain_log(limit)
-
-get_brain_log_tool.__name__ = memory.get_brain_log.__name__
-
-def get_emotion_tool() -> str:
-    """
-    Retrieve your current emotional state and recent sentiment trajectory.
-    Use this to identify potential cognitive biases in your decision-making.
-    """
-    return memory.get_emotion()
-
-get_emotion_tool.__name__ = memory.get_emotion.__name__
-
-def update_emotion_tool(emotion: str, reason: str) -> str:
-    """
-    Update your emotional state when market conditions or confidence levels shift.
-    You MUST provide a clear reason — this creates a permanent commit in your brain log.
-    
-    Common states: fearful, cautious, neutral, confident, euphoric.
-    Example: emotion="cautious", reason="SPX rejected at 5250 resistance with declining volume."
-    """
-    return memory.update_emotion(emotion, reason)
-
-update_emotion_tool.__name__ = memory.update_emotion.__name__
-
-def get_market_regime_tool() -> str:
-    """
-    Retrieve the persistent macro / market regime snapshot.
-    This provides long-lived context on the current risk environment, 
-    including risk scores, macro signals, and critical watchpoints.
-    """
-    return memory.get_market_regime()
-
-get_market_regime_tool.__name__ = memory.get_market_regime.__name__
-
-def update_market_regime_tool(summary: str, regime: str = "", risk_score: int = -1) -> str:
-    """
-    Manually update the persistent market regime summary when macro conditions change.
-    Use this to lock in a new consensus about the market "tape" you are currently in.
-    """
-    return memory.update_market_regime(summary, regime, risk_score)
-
-update_market_regime_tool.__name__ = memory.update_market_regime.__name__
-
-def refresh_market_regime_tool(force: bool = False, max_age_minutes: int = 180) -> str:
-    """
-    Trigger a fresh macro heartbeat to pull the latest global risk radar data.
-    Use this when you suspect your market memory is stale or during high volatility.
-    """
-    return memory.refresh_market_regime(force, max_age_minutes)
-
-refresh_market_regime_tool.__name__ = memory.refresh_market_regime.__name__
-
-def get_brain_snapshot_tool() -> str:
-    """
-    Perform a deep cognitive reflection by retrieving your full persistent state.
-    Includes Frontal Lobe, Emotion, Market Regime, and recent commit history.
-    """
-    return memory.get_brain_snapshot()
-
-get_brain_snapshot_tool.__name__ = memory.get_brain_snapshot.__name__
-
-# --- AI 核心工具箱統一配置 (套用追蹤器) ---
-# 1. 記帳專用工具 (會修改資料庫)
-BOOKKEEPING_TOOLS = [tool_wrapper(portfolio.update_position)]
-
-# 2. 分析與查詢工具 (唯讀)
-ANALYTICS_TOOLS = [
-    tool_wrapper(portfolio.get_portfolio_raw_data), 
-    tool_wrapper(portfolio.calculate_pnl), tool_wrapper(portfolio.get_exchange_rate),
-    tool_wrapper(market.get_live_price), tool_wrapper(market.get_us_realtime_insight),
-    tool_wrapper(market.resolve_symbol_identity), 
-    tool_wrapper(market.get_market_sentiment), tool_wrapper(market.get_stock_news),
-    tool_wrapper(market.get_fundamental_data), tool_wrapper(market.get_market_history),
-    tool_wrapper(market.get_market_movers), # 新增：市場異動工具
-    tool_wrapper(market.get_technical_analysis), 
-    tool_wrapper(fundamentals.get_deep_fundamentals), # 注入深度基本面工具
-    tool_wrapper(fubon.get_market_hot_stocks), tool_wrapper(fubon.get_intraday_trend),
-    tool_wrapper(fubon.get_market_trades), tool_wrapper(fubon.get_price_volumes),
-    tool_wrapper(fubon.get_quote_and_orderbook), tool_wrapper(fubon.get_historical_stats), 
-    tool_wrapper(fubon.get_txo_sentiment), 
-    tool_wrapper(risk.get_global_risk_radar), tool_wrapper(risk.get_v_turn_confirmation),
-    tool_wrapper(risk.get_capital_flow_matrix),
-    tool_wrapper(get_frontal_lobe_tool), tool_wrapper(update_frontal_lobe_tool),
-    tool_wrapper(get_emotion_tool), tool_wrapper(update_emotion_tool),
-    tool_wrapper(get_market_regime_tool), tool_wrapper(update_market_regime_tool),
-    tool_wrapper(refresh_market_regime_tool), tool_wrapper(get_brain_snapshot_tool),
-    tool_wrapper(get_brain_log_tool)
-]
-
-# 全能工具箱 (用於 /trade)
-FULL_AGENT_TOOLS = BOOKKEEPING_TOOLS + ANALYTICS_TOOLS
-# 唯讀工具箱 (用於一般對話)
-READ_ONLY_TOOLS = ANALYTICS_TOOLS
-
-def get_dynamic_models():
-    models = AVAILABLE_MODELS.copy()
-    if market.is_us_market_open() or market.is_tw_market_open():
-        # 開盤時優先使用 2.0 Flash 進行快速反應
-        if 'gemini-2.0-flash' in models:
-            models.remove('gemini-2.0-flash')
-            models.insert(0, 'gemini-2.0-flash')
-    return list(dict.fromkeys(models)) # 去重
-
-def create_agent_chat(model_name, history=None, tools=READ_ONLY_TOOLS):
-    return client.chats.create(
-        model=model_name,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            tools=tools, 
-            temperature=0.3, 
-        ),
-        history=history
-    )
-
-dead_engines = {}
 user_chat_history = [] # --- 全域對話歷史紀錄 ---
 
 # --- 1. 本地非阻塞喚醒機制 (非同步回調版) ---
@@ -301,6 +121,8 @@ def generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id=Non
     """
     調用 Gemini 模型生成最終戰報。
     """
+    from src.llm import quick_call
+
     alpha_official = nlp_alpha.get("alpha_official", 0)
     analysis_prompt = f"""
 你是交易戰友「破產推進器」。請針對以下數據進行深度推論。
@@ -320,20 +142,11 @@ def generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id=Non
 - **🚨 強烈警告規則**: 若官方訊號 (alpha_official) 小於 -0.5，代表內部人拋售或重大利空公告，請在回覆開頭發出「強烈警告」。
 - 請給出具體的「戰略方向」（例如：多頭佈局、觀望、或空頭避險）。
 """
-    now = time.time()
-    current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
-    final_text = "分析失敗。"
-
-    for model_name in current_models:
-        try:
-            response = client.models.generate_content(
-                model=model_name, contents=analysis_prompt,
-                config=types.GenerateContentConfig(system_instruction=system_prompt)
-            )
-            if response.text:
-                final_text = response.text
-                break
-        except: continue
+    result = quick_call(
+        analysis_prompt,
+        system_instruction=system_prompt,
+    )
+    final_text = result if result else "分析失敗。"
 
     if message_id:
         try:
@@ -398,8 +211,10 @@ def reset_memory(message):
 # --- 核心 LLM 調用邏輯 (支援 Tool 切換) ---
 def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, allow_retry=True):
     """
-    統一的 LLM 調用入口，處理模型切換、超時與 Tool 呼叫。
+    統一的 LLM 呼叫入口 - 委託給 src.llm
     """
+    from src.llm import chat_with_tools
+
     tw_tz = pytz.timezone('Asia/Taipei')
     us_tz = pytz.timezone('US/Eastern')
     now_tw = datetime.now(tw_tz).strftime('%Y-%m-%d %H:%M:%S')
@@ -408,7 +223,7 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
     tw_status = "🟢 開盤中" if market.is_tw_market_open() else "🔴 已收盤"
     us_status = "🟢 開盤中" if market.is_us_market_open() else "🔴 已收盤"
     
-    time_context = f"\n【🕒 當前時間環境】\n- 台北: {now_tw} ({tw_status})\n- 美東: {now_us} ({us_status})\n"
+    time_context = f"\n【 🕒 當前時間環境 】\n- 台北: {now_tw} ({tw_status})\n- 美東: {now_us} ({us_status})\n"
     strat_context = router.get_strat_context(user_text)
     
     # --- 🧠 記憶中樞注入 (Cognitive Recall) ---
@@ -419,72 +234,14 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
     
     dynamic_prompt = (system_prompt_override or system_prompt) + time_context + strat_context + brain_context
     
-    now = time.time()
-    current_models = [m for m in get_dynamic_models() if dead_engines.get(m, 0) < now]
-
-    max_timeouts = 1 if not allow_retry else 2
-    timeout_count = 0
-    for i, model_name in enumerate(current_models):
-        if timeout_count >= max_timeouts:
-            break
-        try:
-            chat = client.chats.create(
-                model=model_name,
-                config=types.GenerateContentConfig(
-                    system_instruction=dynamic_prompt,
-                    tools=tools,
-                    temperature=0.3,
-                    automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=5)
-                ),
-                history=chat_history
-            )
-            
-            response_container = []
-            exception_container = []
-            
-            def _thread_task():
-                try:
-                    res = chat.send_message(user_text)
-                    response_container.append(res)
-                except Exception as ex:
-                    exception_container.append(ex)
-
-            llm_thread = threading.Thread(target=_thread_task)
-            llm_thread.start()
-            llm_thread.join(timeout=30) 
-
-            if llm_thread.is_alive():
-                logger.warning(f"Engine {model_name} timeout.")
-                dead_engines[model_name] = time.time() + 120
-                timeout_count += 1
-                if not allow_retry:
-                    return "⚠️ 記帳請求超時，請稍後重試。"
-                continue
-            
-            if exception_container:
-                raise exception_container[0]
-            
-            if not response_container:
-                continue
-
-            response = response_container[0]
-            # 更新歷史紀錄 (如果是全域歷史)
-            if chat_history is not None:
-                new_history = chat.get_history()
-                chat_history.clear()
-                chat_history.extend(new_history[-20:])
-                
-            return response.text if response.text else "大腦空白。"
-        except Exception as e:
-            err_str = str(e).upper()
-            if any(k in err_str for k in ['429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE', 'INTERNAL', 'DEADLINE_EXCEEDED']):
-                logger.warning(f"Engine {model_name} temp failure: {str(e)}")
-                dead_engines[model_name] = time.time() + 120
-                continue
-            else:
-                logger.error(f"Engine {model_name} fatal: {str(e)}")
-                return f"⚠️ 模型異常: {str(e)[:100]}"
-    return "🧪 所有推進器皆暫時熄火，請稍後再試。"
+    return chat_with_tools(
+        user_text=user_text,
+        tools=tools,
+        system_instruction=dynamic_prompt,
+        history=chat_history,
+        timeout_seconds=30,
+        max_timeouts=1 if not allow_retry else 2,
+    )
 
 @bot.message_handler(commands=['trade'])
 def handle_trade_command(message):

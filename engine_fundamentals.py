@@ -3,6 +3,7 @@ from yf_session import get_ticker, get_download
 import pandas as pd
 import logging
 from typing import Dict, Any, Optional
+from src.tools import tool
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,7 @@ class FundamentalEngine:
         
         return report
 
+@tool()
 def get_deep_fundamentals(symbol: str) -> str:
     """
     Retrieves a comprehensive fundamental analysis report for a stock.

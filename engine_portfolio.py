@@ -1,4 +1,3 @@
-import sqlite3
 import json
 import time
 import os
@@ -6,13 +5,17 @@ import csv
 import yfinance as yf
 import fubon
 from typing import Dict, List
-from config import DB_FILE
+from yf_session import get_ticker
+from src.database import db_lock, get_connection
+from src.symbols import normalize_ticker
+from src.tools import tool
 
 CSV_BACKUP = "my_portfolio.csv"
 
 # --- 匯率快取 ---
 _fx_cache = {"rate": 32.0, "timestamp": 0}
 
+@tool()
 def get_exchange_rate() -> float:
     global _fx_cache
     current_time = time.time()
@@ -29,77 +32,59 @@ def get_exchange_rate() -> float:
 
 # --- 資料庫初始化與遷移 ---
 def init_db():
-    conn = sqlite3.connect(str(DB_FILE))
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS portfolio (
-            symbol TEXT PRIMARY KEY,
-            cost REAL,
-            shares REAL,
-            twd_cost REAL,
-            locked INTEGER DEFAULT 0
-        )
-    """)
-    # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
-    try:
-        cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
-    except:
-        pass
-    conn.commit()
-
-    # 檢查是否需要從 CSV 遷移
-    if os.path.exists(CSV_BACKUP):
-        print(f"📦 偵測到舊帳本 {CSV_BACKUP}，正在執行自動遷移...")
+    with db_lock:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio (
+                symbol TEXT PRIMARY KEY,
+                cost REAL,
+                shares REAL,
+                twd_cost REAL,
+                locked INTEGER DEFAULT 0
+            )
+        """)
+        # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
         try:
-            with open(CSV_BACKUP, mode='r', encoding='utf-8-sig') as f:
-                reader = csv.reader(f)
-                next(reader, None) # 跳過標頭
-                for row in reader:
-                    if len(row) >= 3:
-                        sym = row[0].upper()
-                        cost = float(row[1])
-                        shares = float(row[2])
-                        twd_c = float(row[3]) if len(row) >= 4 else (cost * shares * (get_exchange_rate() if ".TW" not in sym and "CASH" not in sym else 1.0))
-                        locked = int(row[4]) if len(row) >= 5 else 0
-                        cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (sym, cost, shares, twd_c, locked))
-            conn.commit()
-            # 遷移完成後將舊檔改名備份
-            os.rename(CSV_BACKUP, f"{CSV_BACKUP}.migrated_{int(time.time())}")
-            print("✅ 遷移完成，舊檔已備份。")
-        except Exception as e:
-            print(f"⚠️ 遷移失敗: {e}")
-    conn.close()
+            cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
+        except:
+            pass
+        conn.commit()
+
+        # 檢查是否需要從 CSV 遷移
+        if os.path.exists(CSV_BACKUP):
+            print(f"📦 偵測到舊帳本 {CSV_BACKUP}，正在執行自動遷移...")
+            try:
+                with open(CSV_BACKUP, mode='r', encoding='utf-8-sig') as f:
+                    reader = csv.reader(f)
+                    next(reader, None) # 跳過標頭
+                    for row in reader:
+                        if len(row) >= 3:
+                            sym = row[0].upper()
+                            cost = float(row[1])
+                            shares = float(row[2])
+                            twd_c = float(row[3]) if len(row) >= 4 else (cost * shares * (get_exchange_rate() if ".TW" not in sym and "CASH" not in sym else 1.0))
+                            locked = int(row[4]) if len(row) >= 5 else 0
+                            cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (sym, cost, shares, twd_c, locked))
+                conn.commit()
+                # 遷移完成後將舊檔改名備份
+                os.rename(CSV_BACKUP, f"{CSV_BACKUP}.migrated_{int(time.time())}")
+                print("✅ 遷移完成，舊檔已備份。")
+            except Exception as e:
+                print(f"⚠️ 遷移失敗: {e}")
+        conn.close()
 
 # 啟動時自動初始化
 init_db()
 
-def normalize_ticker(symbol: str) -> str:
-    """
-    將使用者輸入的代號正規化。
-    特別處理美股中帶點的代號 (如 BRK.B -> BRK-B)
-    """
-    symbol = symbol.upper().strip()
-    is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol.replace('.TW','').replace('.TWO','')) <= 6)
-    if is_taiwan:
-        return symbol.replace('.TW', '').replace('.TWO', '')
-        
-    # 排除常見的交易所後綴，其餘的點 (如 BRK.B) 轉換為橫槓 (BRK-B)
-    suffixes = (".TW", ".TWO", ".HK", ".SS", ".SZ", ".L", ".DE", ".AS", ".AX", ".T", ".PA", ".MI", ".TO", ".V")
-    if "." in symbol and not symbol.endswith(suffixes):
-        return symbol.replace(".", "-")
-    return symbol
-
+@tool(mode="write")
 def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
     """
-    Updates a portfolio position or cash balance in the database.
-    
-    CRITICAL PARAMETER RULES:
-    1. symbol: The ticker (e.g., '2330', 'TSLA'). NEVER pass the quantity (like '1000') here.
-    2. price: The purchase/sale price PER SHARE (unit price).
-    3. shares: The QUANTITY of shares (e.g., 1000). 
-    4. action: 'buy' (deduct cash), 'sell' (add cash), or 'set' (manual sync).
-    
-    Validation: If you are unsure if a number is a symbol or a share count, call resolve_symbol_identity first.
+    Updates a portfolio position or cash balance.
+    action: 'buy', 'sell', or 'set' (manual adjustment).
+    price: unit price in original currency.
+    shares: quantity to change.
+    locked: 1 to lock position from AI trading, 0 to unlock.
     """
     symbol = normalize_ticker(symbol)
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
@@ -118,56 +103,57 @@ def update_position(symbol: str, price: float, shares: float, action: str = 'set
     # 美股扣款原幣，台股扣款台幣
     settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
 
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    try:
-        # 取得標的與現金池現況
-        cursor.execute("SELECT cost, shares, twd_cost, locked FROM portfolio WHERE symbol = ?", (symbol,))
-        old_pos = cursor.fetchone() or (0.0, 0.0, 0.0, 0)
+    with db_lock:
+        conn = get_connection()
+        cursor = conn.cursor()
         
-        # 覆寫鎖定狀態
-        current_locked = locked if locked is not None else old_pos[3]
+        try:
+            # 取得標的與現金池現況
+            cursor.execute("SELECT cost, shares, twd_cost, locked FROM portfolio WHERE symbol = ?", (symbol,))
+            old_pos = cursor.fetchone() or (0.0, 0.0, 0.0, 0)
+            
+            # 覆寫鎖定狀態
+            current_locked = locked if locked is not None else old_pos[3]
 
-        cursor.execute("SELECT cost, shares, twd_cost FROM portfolio WHERE symbol = ?", (settle_currency,))
-        cash_pos = cursor.fetchone() or (1.0 if 'TWD' in settle_currency else fx_rate, 0.0, 0.0)
+            cursor.execute("SELECT cost, shares, twd_cost FROM portfolio WHERE symbol = ?", (settle_currency,))
+            cash_pos = cursor.fetchone() or (1.0 if 'TWD' in settle_currency else fx_rate, 0.0, 0.0)
 
-        if action == 'buy':
-            if cash_pos[1] < settle_amount:
-                return f"❌ 買進失敗：{settle_currency} 餘額不足！(剩 {cash_pos[1]:.2f})"
-            new_shares = old_pos[1] + shares
-            new_twd_cost = old_pos[2] + actual_twd_total
-            new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
-            cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, new_cost, new_shares, new_twd_cost, current_locked))
-            cursor.execute("UPDATE portfolio SET shares = shares - ?, twd_cost = twd_cost - ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
-            msg = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
-        
-        elif action == 'sell':
-            if old_pos[3] == 1:
-                return f"❌ 賣出失敗：標的 {symbol} 被鎖定 (福利信託/長期持有)，禁止機器人操作。請手動解除鎖定後再試。"
-            if old_pos[1] < shares:
-                return f"❌ 賣出失敗：持股不足 (只有 {old_pos[1]})"
-            cost_ratio = shares / old_pos[1]
-            realized_twd_cost = old_pos[2] * cost_ratio
-            realized_pnl = actual_twd_total - realized_twd_cost
-            new_shares = old_pos[1] - shares
-            if new_shares > 0:
-                cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
-            else:
-                cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
-            cursor.execute("UPDATE portfolio SET shares = shares + ?, twd_cost = twd_cost + ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
-            msg = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
-        
-        elif action == 'set':
-            cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, actual_unit_price, shares, actual_twd_total, current_locked))
-            msg = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
+            if action == 'buy':
+                if cash_pos[1] < settle_amount:
+                    return f"❌ 買進失敗：{settle_currency} 餘額不足！(剩 {cash_pos[1]:.2f})"
+                new_shares = old_pos[1] + shares
+                new_twd_cost = old_pos[2] + actual_twd_total
+                new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
+                cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, new_cost, new_shares, new_twd_cost, current_locked))
+                cursor.execute("UPDATE portfolio SET shares = shares - ?, twd_cost = twd_cost - ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+                msg = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
+            
+            elif action == 'sell':
+                if old_pos[3] == 1:
+                    return f"❌ 賣出失敗：標的 {symbol} 被鎖定 (福利信託/長期持有)，禁止機器人操作。請手動解除鎖定後再試。"
+                if old_pos[1] < shares:
+                    return f"❌ 賣出失敗：持股不足 (只有 {old_pos[1]})"
+                cost_ratio = shares / old_pos[1]
+                realized_twd_cost = old_pos[2] * cost_ratio
+                realized_pnl = actual_twd_total - realized_twd_cost
+                new_shares = old_pos[1] - shares
+                if new_shares > 0:
+                    cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
+                else:
+                    cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
+                cursor.execute("UPDATE portfolio SET shares = shares + ?, twd_cost = twd_cost + ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+                msg = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
+            
+            elif action == 'set':
+                cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, actual_unit_price, shares, actual_twd_total, current_locked))
+                msg = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
 
-        conn.commit()
-        return msg
-    except Exception as e:
-        return f"❌ 記帳異常: {e}"
-    finally:
-        conn.close()
+            conn.commit()
+            return msg
+        except Exception as e:
+            return f"❌ 記帳異常: {e}"
+        finally:
+            conn.close()
 
 # --- 標的名對應表 (手動維護優先，其餘自動偵測) ---
 SYMBOL_NAME_MAP = {
@@ -218,29 +204,31 @@ def get_symbol_name(symbol: str) -> str:
     _AUTO_NAME_CACHE[symbol] = name
     return name
 
+@tool()
 def get_portfolio_raw_data() -> str:
     """
     Retrieves current portfolio positions and balances.
     Synchronizes with Fubon Securities if the SDK is available.
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    # 1. 取得富邦實體數據 (包含股數與買進成本)
-    # if fubon.fubon_ready:
-    #     fubon_inv = fubon.get_fubon_inventories()
-    #     fubon_cash = fubon.get_fubon_bank_remain()
-    # else:
-    #     fubon_inv = {}
-    #     fubon_cash = None
-    fubon_inv = {}
-    fubon_cash = None
-    
-    try:
-        # 2. 取得資料庫目前的倉位
-        cursor.execute("SELECT symbol, cost, shares, twd_cost, locked FROM portfolio")
-        db_rows = cursor.fetchall()
-        db_dict = {r[0]: list(r) for r in db_rows}
+    with db_lock:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # 1. 取得富邦實體數據 (包含股數與買進成本)
+        # if fubon.fubon_ready:
+        #     fubon_inv = fubon.get_fubon_inventories()
+        #     fubon_cash = fubon.get_fubon_bank_remain()
+        # else:
+        #     fubon_inv = {}
+        #     fubon_cash = None
+        fubon_inv = {}
+        fubon_cash = None
+        
+        try:
+            # 2. 取得資料庫目前的倉位
+            cursor.execute("SELECT symbol, cost, shares, twd_cost, locked FROM portfolio")
+            db_rows = cursor.fetchall()
+            db_dict = {r[0]: list(r) for r in db_rows}
 
         # if fubon.fubon_ready:
         #     # 3. 智能合併與清洗
@@ -288,39 +276,40 @@ def get_portfolio_raw_data() -> str:
         #         # 更新 db_dict 讓回傳的 JSON 也有資料
         #         db_dict['CASH_TWD'] = ['CASH_TWD', 1.0, float(fubon_cash), float(fubon_cash), 0]
         
-        conn.commit()
+            conn.commit()
 
-        # 4. 組裝回傳資料
-        records = []
-        for sym, data in db_dict.items():
-            # 【V5.4 強化】精準市場分類邏輯
-            if sym.startswith('CASH'):
-                market_type = "CASH"
-            elif sym.endswith('.L') or sym.endswith('.IL'):
-                market_type = "UK"
-            elif (sym.replace('.TW','').replace('.TWO','').replace('_TRUST','').replace('_ESOP','').isdigit()) or \
-                 (any(c.isdigit() for c in sym[:4]) and len(sym.split('.')[0]) <= 6):
-                # 規則：純數字、或前四碼含數字且長度<=6 (涵蓋 00981A, 2330.TW 等)
-                market_type = "TW"
-            else:
-                market_type = "US"
+            # 4. 組裝回傳資料
+            records = []
+            for sym, data in db_dict.items():
+                # 【V5.4 強化】精準市場分類邏輯
+                if sym.startswith('CASH'):
+                    market_type = "CASH"
+                elif sym.endswith('.L') or sym.endswith('.IL'):
+                    market_type = "UK"
+                elif (sym.replace('.TW','').replace('.TWO','').replace('_TRUST','').replace('_ESOP','').isdigit()) or \
+                     (any(c.isdigit() for c in sym[:4]) and len(sym.split('.')[0]) <= 6):
+                    # 規則：純數字、或前四碼含數字且長度<=6 (涵蓋 00981A, 2330.TW 等)
+                    market_type = "TW"
+                else:
+                    market_type = "US"
 
-            records.append({
-                "symbol": sym,
-                "name": get_symbol_name(sym),
-                "cost": data[1],
-                "shares": data[2],
-                "twd_cost": data[3],
-                "locked": bool(data[4]),
-                "market": market_type
-            })
-        return json.dumps(records)
-    except Exception as e:
-        print(f"❌ 帳務同步異常: {e}")
-        return "[]"
-    finally:
-        conn.close()
+                records.append({
+                    "symbol": sym,
+                    "name": get_symbol_name(sym),
+                    "cost": data[1],
+                    "shares": data[2],
+                    "twd_cost": data[3],
+                    "locked": bool(data[4]),
+                    "market": market_type
+                })
+            return json.dumps(records)
+        except Exception as e:
+            print(f"❌ 帳務同步異常: {e}")
+            return "[]"
+        finally:
+            conn.close()
 
+@tool()
 def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
     """
     Calculates profit and loss (PNL) for a specific position.

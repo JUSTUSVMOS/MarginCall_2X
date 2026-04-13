@@ -1,3 +1,4 @@
+import ast
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import pandas as pd
@@ -6,6 +7,74 @@ import logging
 from typing import List, Union, Dict, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+ALLOWED_FORMULA_NODES = (
+    ast.Expression,
+    ast.Call,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.Subscript,
+    ast.Slice,
+    ast.Tuple,
+    ast.List,
+    ast.UnaryOp,
+    ast.UAdd,
+    ast.USub,
+    ast.BinOp,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Mod,
+    ast.Pow,
+    ast.Compare,
+    ast.Eq,
+    ast.NotEq,
+    ast.Gt,
+    ast.GtE,
+    ast.Lt,
+    ast.LtE,
+    ast.BoolOp,
+    ast.And,
+    ast.Or,
+    ast.keyword,
+)
+
+if hasattr(ast, "Index"):
+    ALLOWED_FORMULA_NODES = ALLOWED_FORMULA_NODES + (ast.Index,)
+if hasattr(ast, "NameConstant"):
+    ALLOWED_FORMULA_NODES = ALLOWED_FORMULA_NODES + (ast.NameConstant,)
+
+
+class SafeFormulaValidator(ast.NodeVisitor):
+    def __init__(self, allowed_names):
+        self.allowed_names = set(allowed_names)
+
+    def generic_visit(self, node):
+        if not isinstance(node, ALLOWED_FORMULA_NODES):
+            raise ValueError(f"不允許的語法: {node.__class__.__name__}")
+        super().generic_visit(node)
+
+    def visit_Name(self, node):
+        if node.id not in self.allowed_names:
+            raise ValueError(f"不允許的名稱: {node.id}")
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node):
+        raise ValueError("禁止屬性存取")
+
+    def visit_Call(self, node):
+        if not isinstance(node.func, ast.Name):
+            raise ValueError("只允許直接呼叫已註冊指標函式")
+        self.generic_visit(node)
+
+
+def validate_formula_ast(formula: str, allowed_names):
+    tree = ast.parse(formula, mode='eval')
+    SafeFormulaValidator(allowed_names).visit(tree)
+    return tree
 
 class IndicatorCalculator:
     """
@@ -133,12 +202,15 @@ class IndicatorCalculator:
             'LOW': self.LOW, 'VOLUME': self.VOLUME,
             'SMA': self.SMA, 'EMA': self.EMA, 'MAX': self.MAX, 'MIN': self.MIN, 'STDEV': self.STDEV,
             'RSI': self.RSI, 'MACD': self.MACD, 'ATR': self.ATR, 'BBANDS': self.BBANDS,
-            'np': np, 'pd': pd
         }
 
         try:
-            # 執行 AI 傳入的公式
-            result = eval(formula, {"__builtins__": {}}, safe_env)
+            compiled = compile(
+                validate_formula_ast(formula, safe_env.keys()),
+                "<indicator-formula>",
+                "eval",
+            )
+            result = eval(compiled, {"__builtins__": {}}, safe_env)
             
             # 格式化輸出
             if isinstance(result, (np.ndarray, pd.Series)):

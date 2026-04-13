@@ -1,13 +1,11 @@
 import io
 import math
 import time
-import sqlite3
 import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from yf_session import get_ticker, get_download
-import threading
 import logging
 import os
 from typing import Any, Dict
@@ -15,21 +13,18 @@ from typing import Any, Dict
 from scipy import stats
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from google import genai
 
 # 新增 FRED 相關 import
 import json
+from src.database import db_lock, get_connection
+from src.tools import tool
 
 # 設定日誌
 logger = logging.getLogger(__name__)
 
 # 載入環境變數
 load_dotenv()
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 FRED_API_KEY = os.getenv("FRED_API_KEY") # 建議使用者在 .env 加入，若無則使用備援邏輯
-genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-
-from config import DB_FILE
 
 # --- [新增] FRED 宏觀引擎 (The Macro Sentinel) ---
 class MacroEngine:
@@ -92,14 +87,11 @@ class MacroEngine:
             results[name] = val
         return results
 
-# ... (保留原本的 init_market_db, get_db_connection 等函數)
-
-
-db_lock = threading.Lock() # 【V4 加固】資料庫互斥鎖
+# ... (保留原本的 init_market_db 等函數)
 
 def init_market_db():
     with db_lock:
-        conn = sqlite3.connect(str(DB_FILE))
+        conn = get_connection()
         cursor = conn.cursor()
         # 【V5 終極加固】WAL 模式啟動指令
         cursor.execute("PRAGMA journal_mode=WAL;")
@@ -142,15 +134,9 @@ def init_market_db():
         conn.commit()
         conn.close()
 
-def get_db_connection():
-    """取得開啟 WAL 模式的資料庫連線"""
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
-
 def get_v_turn_state():
     with db_lock:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_connection()
         try:
             df = pd.read_sql("SELECT * FROM v_turn_state WHERE id = 1", conn)
             return df.iloc[0] if not df.empty else None
@@ -161,7 +147,7 @@ def get_v_turn_state():
 
 def save_v_turn_state(is_confirmed, day1_date, day1_price, ftd_date):
     with db_lock:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute("""
@@ -195,7 +181,7 @@ def update_market_db():
 
     # 階段 1：短 DB 讀 (持鎖)
     with db_lock:
-        conn = get_db_connection()
+        conn = get_connection()
         try:
             last_date_df = pd.read_sql(
                 "SELECT MAX(date) as last_date FROM market_history", conn)
@@ -243,7 +229,7 @@ def update_market_db():
 
     # 階段 3：短 DB 寫 (持鎖)
     with db_lock:
-        conn = get_db_connection()
+        conn = get_connection()
         try:
             cursor = conn.cursor()
             for date, row in final_new_df.iterrows():
@@ -313,23 +299,21 @@ def get_market_sentiment_score():
         titles = [(item.get('title') or "") for item in news]
         all_titles = "\n".join([f"- {t}" for t in titles])
 
-        # 優先嘗試 LLM (Gemini)
-        if genai_client:
-            try:
-                prompt = f"""請分析以下美股新聞標題的綜合市場情緒：
+        # 優先嘗試 LLM (透過統一管理器)
+        try:
+            from src.llm import quick_call
+
+            prompt = f"""請分析以下美股新聞標題的綜合市場情緒：
 {all_titles}
 請僅回傳一個浮點數，範圍從 -1.0 (極度悲觀/利空) 到 1.0 (極度樂觀/利多)。不要回傳任何其他文字。"""
-                response = genai_client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt
-                )
-                if response.text:
-                    normalized_score = float(response.text.strip())
-                    normalized_score = max(-1.0, min(1.0, normalized_score))
-                    summary = "偏多" if normalized_score > 0.2 else "偏空" if normalized_score < -0.2 else "中性"
-                    return normalized_score, summary
-            except Exception as e:
-                logger.warning(f"LLM sentiment analysis failed, falling back to keywords: {e}")
+            result = quick_call(prompt)
+            if result:
+                normalized_score = float(result.strip())
+                normalized_score = max(-1.0, min(1.0, normalized_score))
+                summary = "偏多" if normalized_score > 0.2 else "偏空" if normalized_score < -0.2 else "中性"
+                return normalized_score, summary
+        except Exception as e:
+            logger.warning(f"LLM sentiment analysis failed, falling back to keywords: {e}")
 
         # 備援：關鍵字計分
         bear_keywords = ['drop', 'fall', 'recession', 'lower', 'fear', 'warn', 'weak', 'risk', 'inflation', 'sell', 'plunge', 'crisis']
@@ -365,9 +349,12 @@ def add_dynamic_metrics(df, column_name, window=120):
 def fetch_all_market_data():
     try:
         update_market_db()
-        conn = sqlite3.connect(DB_FILE)
-        df = pd.read_sql("SELECT * FROM market_history ORDER BY date ASC", conn)
-        conn.close()
+        with db_lock:
+            conn = get_connection()
+            try:
+                df = pd.read_sql("SELECT * FROM market_history ORDER BY date ASC", conn)
+            finally:
+                conn.close()
         if df.empty: return df
         df.set_index('date', inplace=True)
         for col in ['SPX', 'VIX', 'DXY', 'TNX', 'GOLD', 'SKEW', 'dix', 'gex']:
@@ -528,6 +515,7 @@ def get_global_risk_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
         logger.error(f"Risk snapshot analysis failed: {e}")
         raise
 
+@tool()
 def get_global_risk_radar(force_refresh: bool = False) -> str:
     """
     Analyzes systemic risk by aggregating macro indicators (Yield Curve, Fed Funds),
@@ -542,6 +530,7 @@ def get_global_risk_radar(force_refresh: bool = False) -> str:
         logger.error(f"Risk radar analysis failed: {e}")
         return f"❌ 雷達異常: {e}"
 
+@tool()
 def get_v_turn_confirmation() -> str:
     """
     Monitors market bottoming signals and "Follow-Through Day" (FTD) events.
@@ -575,7 +564,7 @@ def get_v_turn_confirmation() -> str:
         current_low_date = current_low_idx.strftime('%Y-%m-%d')
 
         with db_lock:
-            conn = sqlite3.connect(str(DB_FILE))
+            conn = get_connection()
             try:
                 cursor = conn.cursor()
                 state_df = pd.read_sql("SELECT * FROM v_turn_state WHERE id = 1", conn)
@@ -652,6 +641,7 @@ def get_v_turn_confirmation() -> str:
         logger.error(f"V-turn confirmation failed: {e}")
         return f"❌ V 轉監測失敗: {e}"
 
+@tool()
 def get_capital_flow_matrix() -> str:
     """
     Calculates ratios and volume dynamics between different sectors and asset classes.

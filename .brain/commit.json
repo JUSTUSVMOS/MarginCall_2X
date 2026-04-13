@@ -1,43 +1,43 @@
 {
   "state": {
-    "frontalLobe": "Market View: Neutral - Executed a sell order for 009816.TW at 11.42.\nCore Levels: N/A\nPortfolio Health: Healthy\nNext Round: Monitor market for new opportunities.",
+    "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
     "emotion": "confident",
     "marketRegime": {
       "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
       "state": "🟢 多頭",
       "riskScore": 0,
-      "updatedAt": "2026-04-13T10:13:50Z",
+      "updatedAt": "2026-04-13T14:12:15Z",
       "source": "macro_heartbeat",
       "watchpoints": [
-        "殖利率曲線 10Y-2Y: 0.317",
+        "殖利率曲線 10Y-2Y: 0.313",
         "GEX: 5.11B",
         "市場情緒: 分析失敗 (0.0)",
-        "SPX: 6816.9 / MA20 6602.2 / MA200 6663.6",
+        "SPX: 6815.4 / MA20 6605.5 / MA200 6669.0",
         "🟢 暗池吸籌，大戶提供下檔支撐"
       ],
       "reasons": [
         "🟢 暗池吸籌，大戶提供下檔支撐"
       ],
       "signals": {
-        "yieldCurve10Y2Y": 0.317,
-        "fedFundsRate": 3.59,
-        "dixPr": 0.89,
+        "yieldCurve10Y2Y": 0.313,
+        "fedFundsRate": 3.6,
+        "dixPr": 0.88,
         "gexBillions": 5.11,
         "sentimentScore": 0.0,
         "sentimentLabel": "分析失敗",
-        "spx": 6816.9,
-        "spx10Ma": 6605.2,
-        "spx20Ma": 6602.2,
-        "spx200Ma": 6663.6,
+        "spx": 6815.4,
+        "spx10Ma": 6673.8,
+        "spx20Ma": 6605.5,
+        "spx200Ma": 6669.0,
         "dxyZ": NaN,
         "tnxZ": NaN,
         "vixZ": NaN,
-        "skewPr": 0.43
+        "skewPr": 0.44
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-13T10:13:50Z",
-      "lastMacroChangeAt": "2026-04-13T10:13:50Z",
+      "lastMacroSyncAt": "2026-04-13T14:12:15Z",
+      "lastMacroChangeAt": "2026-04-13T14:12:15Z",
       "lastSyncStatus": "updated",
       "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
     }
@@ -173,119 +173,22 @@
       }
     },
     {
-      "hash": "dd6d4cfb",
+      "hash": "697d6c50",
       "parent_hash": "8af127ed",
-      "timestamp": "2026-04-13 02:34:03",
+      "timestamp": "2026-04-13 22:12:15",
       "type": "market_regime",
       "summary": "🟢 多頭 RISK INIT: N/A -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
-      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.88, SPX=6815.40",
       "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
       "delta": {
+        "risk_score_from": null,
         "risk_score_to": 0,
+        "state_from": "未初始化",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      }
-    },
-    {
-      "hash": "37df3a44",
-      "parent_hash": "dd6d4cfb",
-      "timestamp": "2026-04-13 06:12:23",
-      "type": "market_regime",
-      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
-      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
-      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
-      "source": "macro_heartbeat",
-      "delta": {
-        "risk_score_from": 0,
-        "risk_score_to": 0,
-        "state_from": "🟢 多頭",
-        "state_to": "🟢 多頭",
-        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      }
-    },
-    {
-      "hash": "c6f06970",
-      "parent_hash": "37df3a44",
-      "timestamp": "2026-04-13 12:12:23",
-      "type": "market_regime",
-      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
-      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
-      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
-      "source": "macro_heartbeat",
-      "delta": {
-        "risk_score_from": 0,
-        "risk_score_to": 0,
-        "state_from": "🟢 多頭",
-        "state_to": "🟢 多頭",
-        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      }
-    },
-    {
-      "hash": "76774c01",
-      "parent_hash": "c6f06970",
-      "timestamp": "2026-04-13 15:13:35",
-      "type": "market_regime",
-      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
-      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
-      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
-      "source": "macro_heartbeat",
-      "delta": {
-        "risk_score_from": 0,
-        "risk_score_to": 0,
-        "state_from": "🟢 多頭",
-        "state_to": "🟢 多頭",
-        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      }
-    },
-    {
-      "hash": "2d0e54c3",
-      "parent_hash": "76774c01",
-      "timestamp": "2026-04-13 18:13:50",
-      "type": "market_regime",
-      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
-      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
-      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
-      "source": "macro_heartbeat",
-      "delta": {
-        "risk_score_from": 0,
-        "risk_score_to": 0,
-        "state_from": "🟢 多頭",
-        "state_to": "🟢 多頭",
-        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      }
-    },
-    {
-      "hash": "f406407e",
-      "parent_hash": "2d0e54c3",
-      "timestamp": "2026-04-13 20:52:59",
-      "type": "frontal_lobe",
-      "summary": "🧠 NOTE: Bullish - AI and semi-conductors are leading with strong dark pool support (D... | SPX 6600 (MA20) support; TAIEX 35000 support; TSMC 2000 p...",
-      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89",
-      "frontal_lobe_ref": "Bullish - AI and semi-conductors are leading with strong dark pool support (D... | Next: If SPX breaks below 6600 or oil stays above $105, I will hedge. Otherwise, st...",
-      "source": "frontal_lobe_write",
-      "delta": {
-        "market_view": "Bullish - AI and semi-conductors are leading with strong dark pool support (DIX 0.89), but the 8.6% oil spike is a major macro risk.",
-        "core_levels": "SPX 6600 (MA20) support; TAIEX 35000 support; TSMC 2000 psychological resistance.",
-        "portfolio_health": "Healthy, driven by tech strength.",
-        "next_round": "If SPX breaks below 6600 or oil stays above $105, I will hedge. Otherwise, stay long on AI leaders."
-      }
-    },
-    {
-      "hash": "532c4bd3",
-      "parent_hash": "f406407e",
-      "timestamp": "2026-04-13 21:00:15",
-      "type": "frontal_lobe",
-      "summary": "🧠 NOTE: Neutral - Executed a sell order for 009816.TW at 11.42. | N/A",
-      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89",
-      "frontal_lobe_ref": "Neutral - Executed a sell order for 009816.TW at 11.42. | Next: Monitor market for new opportunities.",
-      "delta": {
-        "market_view": "Neutral - Executed a sell order for 009816.TW at 11.42.",
-        "core_levels": "N/A",
-        "portfolio_health": "Healthy",
-        "next_round": "Monitor market for new opportunities."
       },
-      "source": "frontal_lobe_write"
+      "source": "macro_heartbeat"
     }
   ],
-  "head": "532c4bd3"
+  "head": "697d6c50"
 }
