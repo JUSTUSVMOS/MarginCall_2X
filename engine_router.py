@@ -324,4 +324,4 @@ def get_strat_context(user_text: str) -> str:
         }
         context += json.dumps(combined_metrics, ensure_ascii=False, separators=(',', ':'))
 
-        return context
+    return context
