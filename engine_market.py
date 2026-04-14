@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from yf_session import get_ticker, get_download
-import fubon  # 引用現有的 fubon.py
 
 import logging
 from src.database import db_lock, get_connection
@@ -25,6 +24,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 FMP_KEY = os.getenv("FMP_API_KEY")
+
+_fubon_provider = None
+
+def set_fubon_provider(provider):
+    global _fubon_provider
+    _fubon_provider = provider
 
 def get_asset_profile(symbol: str) -> dict:
     """

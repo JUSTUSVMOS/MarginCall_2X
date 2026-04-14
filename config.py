@@ -7,6 +7,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DB_FILE = PROJECT_ROOT / "portfolio.db"
 LOG_FILE = PROJECT_ROOT / "bot.log"
 
+# 排程觀察清單
+WATCH_LIST = ["NVDA", "TSLA", "AAPL", "MSFT", "ARM"]
+
 # 根據心情分類的垃圾話 (保持中文，因為這是直接給用戶看的)
 WDT_MESSAGES = {
     "normal": [

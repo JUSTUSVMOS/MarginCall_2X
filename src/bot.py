@@ -63,6 +63,7 @@ def initialize_bot_runtime():
         return
 
     fubon.init_fubon()
+    market.set_fubon_provider(fubon)
     router.set_bot(bot)
     _runtime_initialized = True
 

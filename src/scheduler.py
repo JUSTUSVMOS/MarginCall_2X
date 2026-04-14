@@ -1,6 +1,7 @@
 import logging
 import time
 from datetime import datetime
+from typing import Callable, Optional
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8,19 +9,30 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import engine_market as market
 import engine_memory as memory
 import engine_risk as risk
-from src.bot import AUTHORIZED_USER_ID, bot, is_v_turn_active, trigger_nlp_and_callback
-
+from config import WATCH_LIST
 
 logger = logging.getLogger(__name__)
 
-
-WATCH_LIST = ["NVDA", "TSLA", "AAPL", "MSFT", "ARM"]
 _scheduler = None
+_bot_instance = None
+_user_id: Optional[int] = None
+_trigger_nlp_cb: Optional[Callable] = None
+_is_v_turn_active_cb: Optional[Callable] = None
+
+
+def setup_dependencies(bot_instance, user_id: int, trigger_cb: Callable, is_v_turn_active_cb: Callable):
+    global _bot_instance, _user_id, _trigger_nlp_cb, _is_v_turn_active_cb
+    _bot_instance = bot_instance
+    _user_id = user_id
+    _trigger_nlp_cb = trigger_cb
+    _is_v_turn_active_cb = is_v_turn_active_cb
 
 
 def daily_nlp_scout():
+    if not _trigger_nlp_cb:
+        return
     for stock in WATCH_LIST:
-        trigger_nlp_and_callback(stock)
+        _trigger_nlp_cb(stock)
         time.sleep(20)
 
 
@@ -32,7 +44,7 @@ def macro_brain_heartbeat(force=False):
 
 def auto_v_turn_monitor():
     try:
-        if not is_v_turn_active():
+        if _is_v_turn_active_cb and not _is_v_turn_active_cb():
             return
 
         now_et = datetime.now(pytz.timezone("US/Eastern"))
@@ -43,7 +55,8 @@ def auto_v_turn_monitor():
 
         report = risk.get_v_turn_confirmation()
         if any(keyword in report for keyword in ["✅ 觸發", "偵測", "📈", "📉"]):
-            bot.send_message(AUTHORIZED_USER_ID, report, parse_mode="Markdown")
+            if _bot_instance and _user_id:
+                _bot_instance.send_message(_user_id, report, parse_mode="Markdown")
     except Exception as exc:
         logger.error(f"V-turn monitor failed: {exc}")
 

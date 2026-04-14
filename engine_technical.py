@@ -240,6 +240,9 @@ class IndicatorCalculator:
             return f"❌ 公式計算錯誤: {e}\n請檢查語法，例如是否忘記加上 [-1] 獲取最新值？"
 
 # --- 註冊給 main.py 使用的工具介面 ---
+from src.tools import tool
+
+@tool()
 def calculate_indicator(formula: str) -> str:
     """
     Calculates technical indicators for any asset using formula expressions.

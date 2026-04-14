@@ -22,11 +22,12 @@ def configure_runtime():
 def main():
     configure_runtime()
 
-    from src.bot import register_handlers, run_polling
-    from src.scheduler import start_scheduler
+    from src.bot import register_handlers, run_polling, bot, AUTHORIZED_USER_ID, trigger_nlp_and_callback, is_v_turn_active
+    from src.scheduler import start_scheduler, setup_dependencies
 
     print("🚀 MarginCall Express 已啟動！")
     register_handlers()
+    setup_dependencies(bot, AUTHORIZED_USER_ID, trigger_nlp_and_callback, is_v_turn_active)
     start_scheduler()
     run_polling()
 
