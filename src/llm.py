@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 AVAILABLE_MODELS = [
+    "gemini-3.1-flash-lite-preview",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemma-4-31b-it",
