@@ -63,6 +63,10 @@ class CachedTicker:
         """透傳 news 到 yf.Ticker"""
         return self._ticker.news
 
+    def __getattr__(self, item):
+        """透傳其他屬性到 yf.Ticker (如 quarterly_income_stmt 等)"""
+        return getattr(self._ticker, item)
+
     def history(self, period="1y", interval="1d", **kwargs):
         """
         攔截歷史數據請求。

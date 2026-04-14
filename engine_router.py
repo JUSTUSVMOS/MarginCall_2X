@@ -322,6 +322,6 @@ def get_strat_context(user_text: str) -> str:
             "market_data": data.get('metrics', {}),
             "nlp_sentiment_alpha": data.get('nlp_insights', {})
         }
-        context += json.dumps(combined_metrics, indent=2, ensure_ascii=False)
-    
-    return context
+        context += json.dumps(combined_metrics, ensure_ascii=False, separators=(',', ':'))
+
+        return context

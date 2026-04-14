@@ -302,7 +302,8 @@ def get_portfolio_raw_data() -> str:
                     "locked": bool(data[4]),
                     "market": market_type
                 })
-            return json.dumps(records)
+            lines = [f"{r['symbol']}|{r['shares']}sh|cost={r['cost']}|{r['market']}" for r in records]
+            return "\n".join(lines)
         except Exception as e:
             print(f"❌ 帳務同步異常: {e}")
             return "[]"

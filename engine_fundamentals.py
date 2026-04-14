@@ -29,19 +29,30 @@ class FundamentalEngine:
         return self._info
 
     def _extract_last_5(self, df: Optional[pd.DataFrame], row_name: str) -> str:
-        """安全擷取最近 5 季的數據陣列，供 LLM 分析長期趨勢 (OpenAlice 預設抓 5 期)"""
+        """安全擷取最新一季的數據與 QoQ 變化，供 LLM 分析 (壓縮版)"""
         if df is None or df.empty or row_name not in df.index:
             return "N/A"
         try:
-            # 擷取最多 5 筆，由新到舊
-            vals = df.loc[row_name].head(5).tolist()
-            # 轉換為字串陣列 [最新, 前一季, ..., 最舊]
-            return "[" + ", ".join([f"{v/1e6:.1f}M" if pd.notna(v) else "N/A" for v in vals]) + "]"
+            vals = df.loc[row_name].head(2).tolist()
+            if not vals or pd.isna(vals[0]):
+                return "N/A"
+            latest = vals[0]
+            if len(vals) > 1 and pd.notna(vals[1]) and vals[1] != 0:
+                qoq = ((latest - vals[1]) / abs(vals[1])) * 100
+                if abs(latest) >= 1e9:
+                    return f"{latest/1e9:.1f}B ({qoq:+.1f}% QoQ)"
+                else:
+                    return f"{latest/1e6:.1f}M ({qoq:+.1f}% QoQ)"
+            else:
+                if abs(latest) >= 1e9:
+                    return f"{latest/1e9:.1f}B"
+                else:
+                    return f"{latest/1e6:.1f}M"
         except:
             return "N/A"
 
     def _extract_last_5_ratio(self, df_num: Optional[pd.DataFrame], row_num: str, df_den: Optional[pd.DataFrame], row_den: str) -> str:
-        """安全計算兩行數據的相除比率，並回傳最近 5 季的百分比陣列"""
+        """安全計算兩行數據的相除比率，並回傳最新一季與 QoQ 變化 (壓縮版)"""
         if df_num is None or df_den is None or df_num.empty or df_den.empty:
             return "N/A"
         if row_num not in df_num.index or row_den not in df_den.index:
@@ -51,21 +62,27 @@ class FundamentalEngine:
             common_cols = df_num.columns.intersection(df_den.columns)
             if common_cols.empty:
                 return "N/A"
-            
-            num_vals = df_num.loc[row_num, common_cols].head(5)
-            den_vals = df_den.loc[row_den, common_cols].head(5)
-            
+
+            num_vals = df_num.loc[row_num, common_cols].head(2)
+            den_vals = df_den.loc[row_den, common_cols].head(2)
+
             res_arr = []
             for n, d in zip(num_vals, den_vals):
                 if pd.isna(n) or pd.isna(d) or d == 0:
-                    res_arr.append("N/A")
+                    res_arr.append(None)
                 else:
-                    res_arr.append(f"{(n/d)*100:.1f}%")
-                    
-            return "[" + ", ".join(res_arr) + "]"
+                    res_arr.append((n/d)*100)
+
+            if not res_arr or res_arr[0] is None:
+                return "N/A"
+            latest = res_arr[0]
+            if len(res_arr) > 1 and res_arr[1] is not None:
+                qoq = latest - res_arr[1]
+                return f"{latest:.1f}% ({qoq:+.1f}% QoQ)"
+            else:
+                return f"{latest:.1f}%"
         except:
             return "N/A"
-
     # ==========================================
     # 保留最原始的方法 (回傳 DataFrame)，防止破壞其他依賴
     # ==========================================
