@@ -92,18 +92,19 @@ def get_asset_profile(symbol: str) -> dict:
             logger.warning(f"Stage 1 fetching failed for {symbol}: {e}")
 
     # Stage 2: LLM Fallback (透過統一管理器)
-    logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
-    try:
-        from src.llm import quick_call, LIGHT_MODELS
+    if asset_type == "Unknown":
+        logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
+        try:
+            from src.llm import quick_call, LIGHT_MODELS
 
-        prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。\n僅回傳分類名稱。"
-        result = quick_call(prompt, models=LIGHT_MODELS)
-        if result:
-            llm_type = result.strip()
-            if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
-                asset_type = llm_type
-    except Exception as e:
-        logger.warning(f"Stage 2 LLM classification failed: {e}")
+            prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。\n僅回傳分類名稱。"
+            result = quick_call(prompt, models=LIGHT_MODELS)
+            if result:
+                llm_type = result.strip()
+                if llm_type in ['Tech_Momentum', 'Value_Holding', 'Macro_Hedge']:
+                    asset_type = llm_type
+        except Exception as e:
+            logger.warning(f"Stage 2 LLM classification failed: {e}")
 
     # 3. 持久化到 SQLite
     with db_lock:

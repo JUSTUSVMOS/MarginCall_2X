@@ -130,32 +130,41 @@ def quick_call(
     system_instruction: str = "",
     temperature: float = 0.1,
     thinking_level: Optional[str] = None,
+    max_503_retries: int = 2,
 ) -> Optional[str]:
     if not _client:
         return None
 
     for model_name in get_alive_models(models):
-        try:
-            response = _client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=_build_config(system_instruction, temperature, thinking_level=thinking_level),
-            )
-            if response.text:
-                return response.text
-        except Exception as exc:
-            if is_temporary_error(exc):
-                logger.warning(f"[LLM] {model_name} temp failure: {exc}")
-                mark_dead(model_name, exc)
-                continue
-            logger.error(f"[LLM] {model_name} fatal: {exc}")
-            return None
+        for attempt in range(1 + max_503_retries):
+            try:
+                response = _client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=_build_config(system_instruction, temperature, thinking_level=thinking_level),
+                )
+                if response.text:
+                    return response.text
+                break # 有回應但 text 為空，跳下一個模型
+            except Exception as exc:
+                msg = str(exc).upper()
+                if ("503" in msg or "UNAVAILABLE" in msg) and attempt < max_503_retries:
+                    logger.info(f"[LLM] {model_name} 503, retry {attempt+1}/{max_503_retries} in 3s...")
+                    time.sleep(3)
+                    continue # 原地重試同一個模型
+                elif is_temporary_error(exc):
+                    logger.warning(f"[LLM] {model_name} temp failure: {exc}")
+                    mark_dead(model_name, exc)
+                    break # 跳下一個模型
+                else:
+                    logger.error(f"[LLM] {model_name} fatal: {exc}")
+                    return None
 
     return None
 
 
 def supports_tools(model_name: str) -> bool:
-    return any(m in model_name for m in TOOL_SUPPORTED_MODELS)
+    return model_name in TOOL_SUPPORTED_MODELS
 
 
 def chat_with_tools(
@@ -194,59 +203,71 @@ def chat_with_tools(
     for model_name in final_candidates:
         if timeout_count >= max_timeouts:
             break
-        try:
-            # 判斷該模型是否支援 thinking
-            actual_thinking = thinking_level if "gemini-3" in model_name else None
             
-            chat = _client.chats.create(
-                model=model_name,
-                config=_build_config(system_instruction, temperature, use_tools, thinking_level=actual_thinking),
-                history=history,
-            )
+        retries_503 = 0
+        while retries_503 <= 2: # 最多重試 2 次 503
+            try:
+                # 判斷該模型是否支援 thinking
+                actual_thinking = thinking_level if "gemini-3" in model_name else None
+                
+                chat = _client.chats.create(
+                    model=model_name,
+                    config=_build_config(system_instruction, temperature, use_tools, thinking_level=actual_thinking),
+                    history=history,
+                )
 
-            response_container = []
-            exception_container = []
+                response_container = []
+                exception_container = []
 
-            def _thread_task():
-                try:
-                    response_container.append(chat.send_message(user_text))
-                except Exception as exc:
-                    exception_container.append(exc)
+                def _thread_task():
+                    try:
+                        response_container.append(chat.send_message(user_text))
+                    except Exception as exc:
+                        exception_container.append(exc)
 
-            llm_thread = threading.Thread(target=_thread_task)
-            llm_thread.start()
-            llm_thread.join(timeout=timeout_seconds)
+                llm_thread = threading.Thread(target=_thread_task)
+                llm_thread.start()
+                llm_thread.join(timeout=timeout_seconds)
 
-            if llm_thread.is_alive():
-                logger.warning(f"[LLM] {model_name} timeout ({timeout_seconds}s)")
-                mark_dead(model_name, Exception("DEADLINE_EXCEEDED"))
-                timeout_count += 1
-                if timeout_message:
-                    return timeout_message
-                continue
-
-            if exception_container:
-                raise exception_container[0]
-
-            if not response_container:
-                continue
-
-            response = response_container[0]
-            if history is not None:
-                new_history = chat.get_history()
-                history.clear()
-                history.extend(new_history[-20:])
-
-            return response.text if response.text else "大腦空白。"
-        except Exception as exc:
-            if is_temporary_error(exc):
-                logger.warning(f"[LLM] {model_name} temp failure: {exc}")
-                mark_dead(model_name, exc)
-                if "DEADLINE_EXCEEDED" in str(exc).upper():
+                if llm_thread.is_alive():
+                    logger.warning(f"[LLM] {model_name} timeout ({timeout_seconds}s)")
+                    mark_dead(model_name, Exception("DEADLINE_EXCEEDED"))
                     timeout_count += 1
-                continue
-            logger.error(f"[LLM] {model_name} fatal: {exc}")
-            return f"⚠️ 模型異常: {str(exc)[:100]}"
+                    if timeout_message:
+                        return timeout_message
+                    break # 跳下一個模型 (退出 while retry 循環)
+
+                if exception_container:
+                    raise exception_container[0]
+
+                if not response_container:
+                    break # 跳下一個模型
+
+                response = response_container[0]
+                if history is not None:
+                    new_history = chat.get_history()
+                    history.clear()
+                    history.extend(new_history[-20:])
+
+                return response.text if response.text else "大腦空白。"
+            except Exception as exc:
+                msg = str(exc).upper()
+                if ("503" in msg or "UNAVAILABLE" in msg) and retries_503 < 2:
+                    retries_503 += 1
+                    logger.info(f"[LLM] {model_name} 503, retry {retries_503}/2 in 3s...")
+                    time.sleep(3)
+                    continue # 原地重試同一個模型
+                elif is_temporary_error(exc):
+                    logger.warning(f"[LLM] {model_name} temp failure: {exc}")
+                    mark_dead(model_name, exc)
+                    if "DEADLINE_EXCEEDED" in msg:
+                        timeout_count += 1
+                    break # 跳下一個模型
+                else:
+                    logger.error(f"[LLM] {model_name} fatal: {exc}")
+                    return f"⚠️ 模型異常: {str(exc)[:100]}"
+        
+        # while 結束 (代表 retry 完還是失敗，或被 break 跳出)，繼續下一個候選模型
 
     return unavailable_message
 
