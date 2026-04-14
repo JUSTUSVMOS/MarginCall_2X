@@ -1,45 +1,45 @@
 {
   "state": {
-    "frontalLobe": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI PC 領導地位與 14A 藍圖使其成為全球戰略製造中心。建議持續關注 18A 客戶擴展進度與毛利率修復情況。",
+    "frontalLobe": "Market View: Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery in Panels/Memory.\nCore Levels: Watch TAIEX 35,500 support; TSMC 2000 psychological level.\nPortfolio Health: Risk-on mode fully engaged; global risk score at 0.\nNext Round: If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical positions.",
     "emotion": "confident",
     "marketRegime": {
-      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
+      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康",
       "state": "🟢 多頭",
       "riskScore": 0,
-      "updatedAt": "2026-04-13T17:40:08Z",
+      "updatedAt": "2026-04-14T06:20:32Z",
       "source": "macro_heartbeat",
       "watchpoints": [
-        "殖利率曲線 10Y-2Y: 0.317",
-        "GEX: 5.11B",
+        "殖利率曲線 10Y-2Y: 0.297",
+        "GEX: 0.0B",
         "市場情緒: 中性 (0.0)",
-        "SPX: 6816.9 / MA20 6602.2 / MA200 6663.6",
-        "🟢 暗池吸籌，大戶提供下檔支撐"
+        "SPX: 6886.2 / MA20 6614.9 / MA200 6667.3",
+        "🟢 指標目前健康"
       ],
       "reasons": [
-        "🟢 暗池吸籌，大戶提供下檔支撐"
+        "🟢 指標目前健康"
       ],
       "signals": {
-        "yieldCurve10Y2Y": 0.317,
-        "fedFundsRate": 3.59,
-        "dixPr": 0.89,
-        "gexBillions": 5.11,
+        "yieldCurve10Y2Y": 0.297,
+        "fedFundsRate": 3.6,
+        "dixPr": 0.64,
+        "gexBillions": 0.0,
         "sentimentScore": 0.0,
         "sentimentLabel": "中性",
-        "spx": 6816.9,
-        "spx10Ma": 6605.2,
-        "spx20Ma": 6602.2,
-        "spx200Ma": 6663.6,
+        "spx": 6886.2,
+        "spx10Ma": 6657.0,
+        "spx20Ma": 6614.9,
+        "spx200Ma": 6667.3,
         "dxyZ": NaN,
         "tnxZ": NaN,
         "vixZ": NaN,
-        "skewPr": 0.43
+        "skewPr": 0.44
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-13T17:40:08Z",
-      "lastMacroChangeAt": "2026-04-13T17:40:08Z",
+      "lastMacroSyncAt": "2026-04-14T06:20:32Z",
+      "lastMacroChangeAt": "2026-04-14T06:20:32Z",
       "lastSyncStatus": "updated",
-      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康"
     }
   },
   "commits": [
@@ -197,15 +197,82 @@
       "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
       "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6816.90",
       "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": 0,
         "risk_score_to": 0,
         "state_from": "🟢 多頭",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "3df87935",
+      "parent_hash": "5d1b7e63",
+      "timestamp": "2026-04-14 05:02:06",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.11B, VIX_Z=+nan, DIX_PR=0.89, SPX=6886.20",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "ab7c7752",
+      "parent_hash": "3df87935",
+      "timestamp": "2026-04-14 10:30:19",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 指標目前健康",
+      "key_signals": "GEX=+5.67B, VIX_Z=+nan, DIX_PR=0.64, SPX=6886.20",
+      "frontal_lobe_ref": "INTC 已從 2024 年的危機中轉身，18A 工藝於 2025 年底進入量產 (HVM)，並獲得 NVIDIA、Microsoft 與 Amazon 的戰略支持。隨著重組見效，市場信心顯著回升。雖然代工業務仍面臨虧損，但 AI P...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康"
+      }
+    },
+    {
+      "hash": "59cad680",
+      "parent_hash": "ab7c7752",
+      "timestamp": "2026-04-14 13:11:18",
+      "type": "frontal_lobe",
+      "summary": "🧠 NOTE: Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery... | Watch TAIEX 35,500 support; TSMC 2000 psychological level.",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+5.67B, VIX_Z=+nan, DIX_PR=0.64",
+      "frontal_lobe_ref": "Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery... | Next: If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical...",
+      "source": "frontal_lobe_write",
+      "delta": {
+        "market_view": "Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery in Panels/Memory.",
+        "core_levels": "Watch TAIEX 35,500 support; TSMC 2000 psychological level.",
+        "portfolio_health": "Risk-on mode fully engaged; global risk score at 0.",
+        "next_round": "If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical positions."
+      }
+    },
+    {
+      "hash": "4b07c039",
+      "parent_hash": "59cad680",
+      "timestamp": "2026-04-14 14:20:32",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 指標目前健康",
+      "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=0.64, SPX=6886.20",
+      "frontal_lobe_ref": "Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery... | Next: If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical...",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康"
       },
       "source": "macro_heartbeat"
     }
   ],
-  "head": "5d1b7e63"
+  "head": "4b07c039"
 }

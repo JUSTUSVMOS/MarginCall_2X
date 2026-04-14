@@ -63,7 +63,7 @@ def detect_symbols(text: str) -> list:
         return symbols
 
     try:
-        from src.llm import quick_call
+        from src.llm import quick_call, LIGHT_MODELS
 
         prompt = f"""Extract stock symbols or company names mentioned in the text and convert them to yfinance compatible ticker formats (e.g., TSLA, 2330.TW, BRK-B).
 Return ONLY a valid JSON object in this exact format, with no markdown formatting or extra text:
@@ -72,7 +72,7 @@ If no symbols are found, return {{"symbols": []}}.
 
 Text: {text}"""
         
-        res_text = quick_call(prompt)
+        res_text = quick_call(prompt, models=LIGHT_MODELS)
         if res_text:
             # Clean markdown code blocks if AI wrapped the JSON
             cleaned_json = re.sub(r'^```(?:json)?\s*(.*?)\s*```$', r'\1', res_text.strip(), flags=re.DOTALL)

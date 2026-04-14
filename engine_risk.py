@@ -301,12 +301,12 @@ def get_market_sentiment_score():
 
         # 優先嘗試 LLM (透過統一管理器)
         try:
-            from src.llm import quick_call
+            from src.llm import quick_call, LIGHT_MODELS
 
             prompt = f"""請分析以下美股新聞標題的綜合市場情緒：
 {all_titles}
 請僅回傳一個浮點數，範圍從 -1.0 (極度悲觀/利空) 到 1.0 (極度樂觀/利多)。不要回傳任何其他文字。"""
-            result = quick_call(prompt)
+            result = quick_call(prompt, models=LIGHT_MODELS)
             if result:
                 normalized_score = float(result.strip())
                 normalized_score = max(-1.0, min(1.0, normalized_score))

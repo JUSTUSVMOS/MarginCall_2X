@@ -145,9 +145,12 @@ def generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id=Non
 - **🚨 強烈警告規則**: 若官方訊號 (alpha_official) 小於 -0.5，代表內部人拋售或重大利空公告，請在回覆開頭發出「強烈警告」。
 - 請給出具體的「戰略方向」（例如：多頭佈局、觀望、或空頭避險）。
 """
+    from src.llm import quick_call, HEAVY_MODELS
     result = quick_call(
         analysis_prompt,
         system_instruction=system_prompt,
+        models=HEAVY_MODELS,
+        thinking_level="high", # 最終戰報使用高思考等級
     )
     final_text = result if result else "分析失敗。"
 
@@ -172,7 +175,7 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
     """
     統一的 LLM 呼叫入口 - 委託給 src.llm
     """
-    from src.llm import chat_with_tools
+    from src.llm import chat_with_tools, HEAVY_MODELS
 
     tw_tz = pytz.timezone("Asia/Taipei")
     us_tz = pytz.timezone("US/Eastern")
@@ -199,6 +202,8 @@ def ask_llm(user_text, tools, chat_history=None, system_prompt_override=None, al
         history=chat_history,
         timeout_seconds=30,
         max_timeouts=1 if not allow_retry else 2,
+        models=HEAVY_MODELS,
+        thinking_level="medium", # 主對話使用中等思考等級
     )
 
 
