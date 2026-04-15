@@ -1,10 +1,13 @@
 # fubon.py
 import os
 import json
+import logging
 import pandas as pd
 from fubon_neo.sdk import FubonSDK
 from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
 from src.tools import tool
+
+logger = logging.getLogger(__name__)
 
 # 把實體化延後，避免 import 時就連線失敗崩潰
 fubon_sdk = None
@@ -26,7 +29,7 @@ def get_fubon_technical(symbol: str) -> str:
         try:
             stats = reststock.historical.stats(symbol=symbol)
         except Exception as e:
-            print(f"Stats fetch failed: {e}")
+            logger.warning(f"Stats fetch failed: {e}")
             stats = {}
 
         h52, l52 = stats.get('week52High', 0), stats.get('week52Low', 0)
@@ -46,7 +49,7 @@ def get_fubon_technical(symbol: str) -> str:
                 # 計算 POC 價位的積極買賣力道 (外盤 - 內盤)
                 net_buy_at_poc = poc_item.get('volumeAtAsk', 0) - poc_item.get('volumeAtBid', 0)
         except Exception as e:
-            print(f"Volume Profile fetch failed: {e}")
+            logger.warning(f"Volume Profile fetch failed: {e}")
         
         # 2. 抓取歷史 K 線並計算 MA20, MA60
         # 確保 to >= from
@@ -65,7 +68,7 @@ def get_fubon_technical(symbol: str) -> str:
                 ma20 = df_hist['ma20'].iloc[-1] if len(df_hist) >= 20 else 0
                 ma60 = df_hist['ma60'].iloc[-1] if len(df_hist) >= 60 else 0
         except Exception as e:
-            print(f"Candles fetch failed: {e}")
+            logger.warning(f"Candles fetch failed: {e}")
 
         # 3. 抓取 RSI (週期改為國際標準 14)
         rsi = 0
@@ -73,7 +76,7 @@ def get_fubon_technical(symbol: str) -> str:
             rsi_data = reststock.technical.rsi(symbol=symbol, timeframe='D', period=14, to=to_date, **{'from': from_date})
             rsi = rsi_data.get('data', [])[-1].get('rsi', 0) if rsi_data.get('data') else 0
         except Exception as e:
-            print(f"RSI fetch failed: {e}")
+            logger.warning(f"RSI fetch failed: {e}")
         
         # 4. 抓取 MACD
         dif, dea, macd_hist = 0, 0, 0
@@ -83,7 +86,7 @@ def get_fubon_technical(symbol: str) -> str:
             dif, dea = macd_last.get('macdLine', 0), macd_last.get('signalLine', 0)
             macd_hist = dif - dea 
         except Exception as e:
-            print(f"MACD fetch failed: {e}")
+            logger.warning(f"MACD fetch failed: {e}")
         
         # 5. 抓取布林通道
         upper, lower = 0, 0
@@ -92,7 +95,7 @@ def get_fubon_technical(symbol: str) -> str:
             bb_last = bb_data.get('data', [])[-1] if bb_data.get('data') else {}
             upper, lower = bb_last.get('upper', 0), bb_last.get('lower', 0)
         except Exception as e:
-            print(f"BB fetch failed: {e}")
+            logger.warning(f"BB fetch failed: {e}")
 
         # 6. 抓取 KDJ (9, 3, 3)
         vk, vd, vj = 50, 50, 50
@@ -101,7 +104,7 @@ def get_fubon_technical(symbol: str) -> str:
             kdj_last = kdj_data.get('data', [])[-1] if kdj_data.get('data') else {}
             vk, vd, vj = kdj_last.get('k', 50), kdj_last.get('d', 50), kdj_last.get('j', 50)
         except Exception as e:
-            print(f"KDJ fetch failed: {e}")
+            logger.warning(f"KDJ fetch failed: {e}")
         
         report = f"🇹🇼 === {symbol} 台股全武裝分析 ===\n"
         report += f"● 現價: {curr} | 52週高: {h52} | 52週低: {l52}\n"
@@ -137,21 +140,21 @@ def init_fubon():
     cert_path = "./R124949189.pfx"
 
     try:
-        print(f"🔌 正在連線富邦主機 (ID: {my_id})...")
+        logger.info(f"🔌 正在連線富邦主機 (ID: {my_id})...")
         # 在這裡才真正建立 SDK 物件
         from fubon_neo.sdk import FubonSDK
         fubon_sdk = FubonSDK()
         
         accounts = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
         if accounts.is_success:
-            print("✅ 富邦帳戶登入成功！正在建立即時行情連線...")
+            logger.info("✅ 富邦帳戶登入成功！正在建立即時行情連線...")
             fubon_sdk.init_realtime() 
             fubon_ready = True
-            print("🔥 富邦 V8 雙渦輪行情通道啟動完畢！")
+            logger.info("🔥 富邦 V8 雙渦輪行情通道啟動完畢！")
         else:
-            print(f"❌ 富邦登入失敗: {accounts.message}")
+            logger.warning(f"❌ 富邦登入失敗: {accounts.message}")
     except Exception as e:
-        print(f"⚠️ 富邦 SDK 初始化異常 (可能伺服器維護中): {e}")
+        logger.warning(f"⚠️ 富邦 SDK 初始化異常 (可能伺服器維護中): {e}")
         fubon_ready = False
         fubon_sdk = None
 def get_fubon_inventories():
@@ -499,12 +502,12 @@ def get_intraday_trend(symbol: str) -> str:
         candles_data = reststock.intraday.candles(symbol=symbol, timeframe='5')
         
         # 🚨 [除錯專用] 把富邦吐出來的原始格式印出來看 (只印前1000字元避免洗版)
-        print(f"👀 【除錯】富邦原始 API 回傳格式 (Raw Data 預覽):")
+        logger.info("👀 【除錯】富邦原始 API 回傳格式 (Raw Data 預覽):")
         if isinstance(candles_data, dict):
-            print(json.dumps(candles_data, indent=2, ensure_ascii=False)[:1000] + "\n...(後面省略)")
+            logger.info("%s", json.dumps(candles_data, indent=2, ensure_ascii=False)[:1000] + "\n...(後面省略)")
         else:
-            print(str(candles_data)[:1000] + "\n...(後面省略)")
-        print("="*50)
+            logger.info("%s", str(candles_data)[:1000] + "\n...(後面省略)")
+        logger.info("%s", "=" * 50)
 
         # 2. 提取資料陣列
         data_list = candles_data.get('data', []) if isinstance(candles_data, dict) else getattr(candles_data, 'data', [])

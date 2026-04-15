@@ -207,7 +207,8 @@ class FundamentalEngine:
                         cl = bal.loc['Current Liabilities'].head(5)
                         cr_arr = [f"{n/d:.2f}x" if pd.notna(n) and pd.notna(d) and d!=0 else "N/A" for n, d in zip(ca, cl)]
                         res['流動比率(近5季)'] = "[" + ", ".join(cr_arr) + "]"
-                    except: pass
+                    except Exception:
+                        pass
 
         return res
 
@@ -251,7 +252,8 @@ class FundamentalEngine:
         try:
             dates = self.ticker.earnings_dates
             res['預計財報日'] = dates.index[0].strftime('%Y-%m-%d') if dates is not None and not dates.empty else "未知"
-        except: res['預計財報日'] = "未知"
+        except Exception:
+            res['預計財報日'] = "未知"
         
         try:
             recs = self.ticker.recommendations
@@ -260,13 +262,15 @@ class FundamentalEngine:
                 res['分析師共識'] = f"{latest.get('strongBuy', 0)}強買, {latest.get('buy', 0)}買, {latest.get('hold', 0)}持有, {latest.get('sell', 0)}賣"
             else:
                 res['分析師共識'] = "無資料"
-        except: res['分析師共識'] = "解析失敗"
+        except Exception:
+            res['分析師共識'] = "解析失敗"
 
         try:
             news = self.ticker.news
             if news:
                 res['最新頭條'] = f"[{news[0].get('publisher', 'N/A')}] {news[0].get('title', 'N/A')}"
-        except: pass
+        except Exception:
+            pass
 
         return res
 

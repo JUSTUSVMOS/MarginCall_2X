@@ -1,9 +1,10 @@
 import json
+import inspect
 import logging
 import os
 import threading
 import time
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, get_args, get_origin
 
 import httpx
 from google import genai
@@ -23,6 +24,9 @@ TOOL_SUPPORTED_MODELS = {
     "gemini-3.1-flash-lite-preview",
     "minimax/minimax-m2.5:free",
     "openai/gpt-oss-120b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/elephant-alpha",
+    "google/gemma-4-31b-it:free",
 }
 
 # 重活：主對話 (需要 tool calling + 深度推理)
@@ -30,17 +34,34 @@ HEAVY_MODELS = [
     "gemini-3.1-flash-lite-preview",
     "minimax/minimax-m2.5:free",
     "openai/gpt-oss-120b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/elephant-alpha",
+    "google/gemma-4-31b-it:free",
+]
+
+# 最終戰報彙整 (不需 tools，純文字推理)
+REPORT_MODELS = [
+    # "gemini-3.1-flash-lite-preview",
+    # "openai/gpt-oss-120b:free",
+    # "minimax/minimax-m2.5:free",
+    "gemma-4-31b-it",
+    "google/gemma-4-31b-it:free",
+    "gemma-4-26b-it",
+    "google/gemma-4-26b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/elephant-alpha",
 ]
 
 # 輕活：symbol detection、情緒打分、asset 分類
 LIGHT_MODELS = [
     "gemini-3.1-flash-lite-preview",
     "openai/gpt-oss-120b:free",
+    "gemma-4-31b-it",
+    "gemma-4-26b-it",
+    "google/gemma-4-31b-it:free",
 ]
 
-AVAILABLE_MODELS = HEAVY_MODELS
-
-AVAILABLE_MODELS = HEAVY_MODELS
+AVAILABLE_MODELS = HEAVY_MODELS + ["gemma-4-31b-it", "gemma-3-27b-it"]
 
 TEMPORARY_ERROR_MARKERS = (
     "429",
@@ -112,6 +133,56 @@ def is_temporary_error(exc: Exception) -> bool:
     return any(marker in message for marker in TEMPORARY_ERROR_MARKERS)
 
 
+def _annotation_to_openai_schema(annotation) -> Dict:
+    if annotation is inspect.Signature.empty:
+        return {"type": "string"}
+
+    origin = get_origin(annotation)
+    args = [arg for arg in get_args(annotation) if arg is not type(None)]
+
+    if args and origin is not None:
+        if origin in (list, List):
+            item_annotation = args[0] if args else str
+            return {"type": "array", "items": _annotation_to_openai_schema(item_annotation)}
+        if origin in (dict, Dict):
+            return {"type": "object"}
+        if len(args) == 1:
+            return _annotation_to_openai_schema(args[0])
+
+    if annotation is str:
+        return {"type": "string"}
+    if annotation is int:
+        return {"type": "integer"}
+    if annotation is float:
+        return {"type": "number"}
+    if annotation is bool:
+        return {"type": "boolean"}
+
+    return {"type": "string"}
+
+
+def _normalize_openrouter_content(content) -> Optional[str]:
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        if "text" in content:
+            return str(content["text"])
+        if "content" in content and isinstance(content["content"], str):
+            return content["content"]
+        return json.dumps(content, ensure_ascii=False)
+    if isinstance(content, list):
+        normalized_parts = []
+        for item in content:
+            normalized = _normalize_openrouter_content(item)
+            if normalized:
+                normalized_parts.append(normalized)
+        merged = "\n".join(normalized_parts).strip()
+        return merged or None
+    return str(content)
+
+
 def _convert_to_openai_tools(tools: list) -> Optional[List[Dict]]:
     """將 Python 函式列表轉換為 OpenAI/OpenRouter 相容的 tools 格式"""
     if not tools:
@@ -122,9 +193,18 @@ def _convert_to_openai_tools(tools: list) -> Optional[List[Dict]]:
         try:
             # 嘗試抓取 docstring 作為描述
             desc = tool.__doc__ or f"Execute {tool.__name__} function"
-            
-            # 這裡我們簡化處理，假設大部份工具目前不帶複雜參數或由 LLM 自行決定
-            # 若要更精確，需解析 inspect.signature
+            signature = inspect.signature(tool)
+            properties = {}
+            required = []
+
+            for name, param in signature.parameters.items():
+                if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                    continue
+                param_schema = _annotation_to_openai_schema(param.annotation)
+                properties[name] = param_schema
+                if param.default is inspect.Signature.empty:
+                    required.append(name)
+
             openai_tools.append({
                 "type": "function",
                 "function": {
@@ -132,8 +212,8 @@ def _convert_to_openai_tools(tools: list) -> Optional[List[Dict]]:
                     "description": desc.split('\n')[0].strip(), # 只取第一行
                     "parameters": {
                         "type": "object",
-                        "properties": {}, # 簡化：由模型根據 docstring 推斷
-                        "required": []
+                        "properties": properties,
+                        "required": required,
                     }
                 }
             })
@@ -143,8 +223,10 @@ def _convert_to_openai_tools(tools: list) -> Optional[List[Dict]]:
     return openai_tools if openai_tools else None
 
 
-def _call_openrouter(model_name: str, messages: List[Dict], temperature: float = 0.3, tools=None) -> Optional[str]:
-    """呼叫 OpenRouter API"""
+def _call_openrouter(model_name: str, messages: List[Dict], temperature: float = 0.3, tools=None) -> Optional[Dict]:
+    """
+    呼叫 OpenRouter API 並回傳完整的訊息物件。
+    """
     if not _openrouter_key:
         logger.error("[LLM] OPENROUTER_API_KEY not found.")
         return None
@@ -163,28 +245,18 @@ def _call_openrouter(model_name: str, messages: List[Dict], temperature: float =
             "temperature": temperature,
         }
         
-        # 注入工具定義
+        # 注入工具定義 (OpenAI 格式)
         if tools:
             openai_tools = _convert_to_openai_tools(tools)
             if openai_tools:
                 data["tools"] = openai_tools
                 data["tool_choice"] = "auto"
 
-        with httpx.Client(timeout=45.0) as client:
+        with httpx.Client(timeout=60.0) as client:
             resp = client.post(url, headers=headers, json=data)
             if resp.status_code == 200:
                 result = resp.json()
-                choice = result["choices"][0]
-                message = choice.get("message", {})
-                
-                # 處理工具調用 (OpenRouter 可能回傳 tool_calls)
-                if "tool_calls" in message:
-                    # 目前系統主要由 Gemini 原生處理工具循環，
-                    # 這裡我們先回傳一個提示標記，或嘗試簡化回傳。
-                    # 為了相容性，這裡先回傳內容或首個調用。
-                    return message.get("content") or f"[tool_calls detected: {message['tool_calls'][0]['function']['name']}]"
-                
-                return message.get("content")
+                return result["choices"][0]["message"]
             else:
                 logger.warning(f"[LLM] OpenRouter {model_name} failed: {resp.status_code} {resp.text}")
                 if resp.status_code in (429, 503, 502, 504):
@@ -194,6 +266,70 @@ def _call_openrouter(model_name: str, messages: List[Dict], temperature: float =
         logger.error(f"[LLM] OpenRouter {model_name} error: {e}")
         mark_dead(model_name, e)
         return None
+
+
+def _execute_openai_tool_calls(tool_calls: List[Dict], tools: List[Callable]) -> List[Dict]:
+    """
+    執行 OpenRouter 回傳的工具調用指令，並格式化為 OpenAI 的 tool 回傳格式。
+    """
+    results = []
+    tool_map = {t.__name__: t for t in tools}
+    
+    for tc in tool_calls:
+        call_id = tc.get("id")
+        func_name = tc.get("function", {}).get("name")
+        func_args_str = tc.get("function", {}).get("arguments", "{}")
+        
+        logger.info(f"🛠️ [OpenRouter_Tool] Executing {func_name}...")
+        
+        try:
+            import json
+            args = json.loads(func_args_str)
+            func = tool_map.get(func_name)
+            if func:
+                if not isinstance(args, dict):
+                    raise ValueError(f"Tool arguments for {func_name} must be a JSON object.")
+
+                signature = inspect.signature(func)
+                accepts_var_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in signature.parameters.values()
+                )
+
+                filtered_args = args
+                if not accepts_var_kwargs:
+                    allowed_names = set(signature.parameters.keys())
+                    filtered_args = {key: value for key, value in args.items() if key in allowed_names}
+                    dropped_args = sorted(set(args.keys()) - allowed_names)
+                    if dropped_args:
+                        logger.warning(
+                            f"⚠️ [OpenRouter_Tool] Dropping unsupported args for {func_name}: {', '.join(dropped_args)}"
+                        )
+
+                res = func(**filtered_args)
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": func_name,
+                    "content": str(res)
+                })
+            else:
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": func_name,
+                    "content": f"Error: Tool {func_name} not found."
+                })
+        except Exception as e:
+            logger.error(f"❌ [OpenRouter_Tool] {func_name} failed: {e}")
+            results.append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": func_name,
+                "content": f"Error: {str(e)}"
+            })
+            
+    return results
 
 
 def _build_config(system_instruction: str, temperature: float, tools=None, thinking_level: Optional[str] = None):
@@ -206,7 +342,7 @@ def _build_config(system_instruction: str, temperature: float, tools=None, think
     # 支援 Gemini 3 系列的 thinking_level
     if thinking_level:
         kwargs["thinking_config"] = types.ThinkingConfig(
-            include_thoughts=False, # 預設不回傳思考過程以節省 token
+            include_thoughts=True, # 改為 True，避免模型只思考不講話導致大腦空白
             thinking_level=thinking_level
         )
         
@@ -336,7 +472,7 @@ def quick_call(
             
             res = _call_openrouter(model_name, messages, temperature)
             if res:
-                return res
+                return _normalize_openrouter_content(res.get("content"))
             continue
 
         # Gemini 原生模型路徑
@@ -422,13 +558,49 @@ def chat_with_tools(
             messages.append({"role": "user", "content": user_text})
             
             # 傳遞工具定義
-            res = _call_openrouter(model_name, messages, temperature, tools=use_tools)
-            if res:
-                # 寫回歷史紀錄
-                if history is not None:
+            res_message = _call_openrouter(model_name, messages, temperature, tools=use_tools)
+            logger.info(f"DEBUG OpenRouter initial res_message: {res_message}")
+            
+            if res_message:
+                tool_calls = res_message.get("tool_calls")
+                content = _normalize_openrouter_content(res_message.get("content"))
+                
+                # 建立一個迴圈，讓模型可以連續呼叫工具 (最多 15 次)
+                loop_count = 0
+                while tool_calls and use_tools and loop_count < 15:
+                    loop_count += 1
+                    messages.append(res_message)
+                    
+                    tool_results = _execute_openai_tool_calls(tool_calls, use_tools)
+                    logger.info(f"DEBUG tool_results: {tool_results}")
+                    messages.extend(tool_results)
+                    
+                    res_message = _call_openrouter(model_name, messages, temperature, tools=use_tools)
+                    logger.info(f"DEBUG OpenRouter step {loop_count} res_message: {res_message}")
+                    
+                    if not res_message:
+                        break
+                    
+                    tool_calls = res_message.get("tool_calls")
+                    content = _normalize_openrouter_content(res_message.get("content"))
+                
+                if res_message is None:
+                    logger.warning(f"[LLM] {model_name} failed to return final summary after tool execution.")
+                    continue
+                    
+                # 如果依然沒有 content，看看有沒有 reasoning 可以頂替
+                if not content and res_message.get("reasoning"):
+                    content = res_message.get("reasoning")
+                
+                if not content:
+                    logger.warning(f"[LLM] {model_name} returned empty content.")
+                    continue
+                
+                # 寫回歷史紀錄 (維持原本的 Gemini Content 格式)
+                if history is not None and content:
                     history.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
-                    history.append(types.Content(role="model", parts=[types.Part(text=res)]))
-                return res
+                    history.append(types.Content(role="model", parts=[types.Part(text=content)]))
+                return content
             continue
 
         # --- Gemini 原生路徑 ---

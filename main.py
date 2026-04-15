@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 from config import LOG_FILE, PROJECT_ROOT
 
 
+logger = logging.getLogger(__name__)
+
+
 def configure_runtime():
     load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
@@ -22,12 +25,15 @@ def configure_runtime():
 def main():
     configure_runtime()
 
-    from src.bot import register_handlers, run_polling, bot, AUTHORIZED_USER_ID, trigger_nlp_and_callback, is_v_turn_active
+    import engine_portfolio as portfolio
+    from src.bot import init_bot, register_handlers, run_polling, trigger_nlp_and_callback, is_v_turn_active
     from src.scheduler import start_scheduler, setup_dependencies
 
-    print("🚀 MarginCall Express 已啟動！")
+    portfolio.init_db()
+    bot_instance, user_id = init_bot()
+    logger.info("🚀 MarginCall Express 已啟動！")
     register_handlers()
-    setup_dependencies(bot, AUTHORIZED_USER_ID, trigger_nlp_and_callback, is_v_turn_active)
+    setup_dependencies(bot_instance, user_id, trigger_nlp_and_callback, is_v_turn_active)
     start_scheduler()
     run_polling()
 

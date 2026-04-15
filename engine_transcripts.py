@@ -83,7 +83,7 @@ class TranscriptEngine:
                 "year": report_year
             }
         except Exception as e:
-            print(f"Earnings Info Error: {e}")
+            logger.warning(f"Earnings Info Error: {e}")
             return None
 
     def construct_fool_urls(self):
@@ -112,17 +112,17 @@ class TranscriptEngine:
         if not urls:
             return "❌ 無法推算財報網址，請確認 Ticker 是否正確。"
 
-        print(f"🕵️ 正在嘗試構造的 {len(urls)} 個網址...")
+        logger.info(f"🕵️ 正在嘗試構造的 {len(urls)} 個網址...")
         
         for url in urls:
             try:
                 # 增加隨機延遲，模擬真人
                 time.sleep(1.5)
-                print(f"📡 嘗試抓取: {url}")
+                logger.info(f"📡 嘗試抓取: {url}")
                 response = requests.get(url, headers=self.headers, timeout=10)
                 
                 if response.status_code == 200:
-                    print("✅ 擊中目標！正在解析全文...")
+                    logger.info("✅ 擊中目標！正在解析全文...")
                     soup = BeautifulSoup(response.text, 'html.parser')
                     content = soup.find('div', class_='article-body')
                     if content:
@@ -131,7 +131,7 @@ class TranscriptEngine:
                         if len(clean_text) > 1000:
                             return clean_text
                 elif response.status_code == 429:
-                    print("🛑 遭到 429 限流，請更換 User-Agent 或稍後再試。")
+                    logger.warning("🛑 遭到 429 限流，請更換 User-Agent 或稍後再試。")
                     return "❌ 被網站擋住了 (429 Too Many Requests)。"
             except Exception as e:
                 continue
@@ -142,4 +142,4 @@ if __name__ == "__main__":
     # 以 TSLA 為例，因為它的 Slug 很穩定
     engine = TranscriptEngine("TSLA")
     result = engine.scrape_transcript()
-    print(f"\n--- 抓取結果 (前 500 字) ---\n{result[:500]}...")
+    logger.info("\n--- 抓取結果 (前 500 字) ---\n%s...", result[:500])

@@ -7,7 +7,14 @@ import engine_market as market
 import engine_memory as memory
 import engine_router as router
 from config import system_prompt
-from src.llm import chat_with_tools, quick_call
+from src.llm import chat_with_tools, quick_call, REPORT_MODELS
+
+
+user_chat_history = []
+
+
+def reset_history():
+    user_chat_history.clear()
 
 
 def build_time_context() -> str:
@@ -64,8 +71,10 @@ def generate_final_report(symbol, strat_data, nlp_alpha):
 - **🚨 強烈警告規則**: 若官方訊號 (alpha_official) 小於 -0.5，代表內部人拋售或重大利空公告，請在回覆開頭發出「強烈警告」。
 - 請給出具體的「戰略方向」（例如：多頭佈局、觀望、或空頭避險）。
 """
+
     result = quick_call(
         analysis_prompt,
+        models=REPORT_MODELS,
         system_instruction=system_prompt,
         thinking_level="high",
     )

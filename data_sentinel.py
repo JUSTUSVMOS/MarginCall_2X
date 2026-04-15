@@ -6,12 +6,6 @@ import json
 from datetime import datetime
 import pytz
 
-# 設定監控日誌
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [SENTINEL] - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler("sentinel.log"), logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
 
 # 引入核心引擎進行實測
@@ -90,7 +84,7 @@ class DataSentinel:
                 if len(auth_data.get('cookies', [])) > 0:
                     return "✅ 正常 (已持有 Token)"
                 return "⚠️ auth.json 格式異常"
-        except:
+        except Exception:
             return "❌ 讀取失敗"
 
     def check_risk_indicators(self):

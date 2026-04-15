@@ -12,15 +12,6 @@ from src.database import db_lock, get_connection
 from src.symbols import normalize_ticker
 from src.tools import format_tool_error, tool
 
-# 設定基礎日誌
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
 
 FMP_KEY = os.getenv("FMP_API_KEY")
@@ -462,12 +453,21 @@ def get_fundamental_data(symbol: str) -> str:
     """
     return build_fundamental_report(symbol)
 
-def build_technical_report(symbol: str) -> str:
+def build_technical_report(symbol: str, interval: str = "1d") -> str:
     """Pure technical-analysis logic for direct callers and tests."""
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
         clean_symbol = s.replace('.TW', '').replace('.TWO', '')
+        requested_interval = (interval or "1d").lower()
+        tech_period_by_interval = {
+            "1d": "6mo",
+            "1wk": "3y",
+            "1mo": "10y",
+        }
+        history_interval = requested_interval if requested_interval in tech_period_by_interval else "1d"
+        if history_interval != requested_interval:
+            logger.debug(f"Unsupported technical interval '{interval}' for {s}, falling back to 1d")
         is_taiwan = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
         
         # --- 台股使用 Fubon SDK 官方數據 ---
@@ -476,7 +476,7 @@ def build_technical_report(symbol: str) -> str:
             
         # --- 美股使用 yfinance + pandas 自行計算 ---
         ticker = get_ticker(s)
-        df = ticker.history(period="6mo")
+        df = ticker.history(period=tech_period_by_interval[history_interval], interval=history_interval)
         if df.empty: return f"❌ {s} 無法取得歷史數據。"
         
         close = df['Close']
@@ -564,12 +564,12 @@ def build_technical_report(symbol: str) -> str:
         return format_tool_error(f"❌ 技術分析失敗: {e}", data_unavailable=True)
 
 @tool()
-def get_technical_analysis(symbol: str) -> str:
+def get_technical_analysis(symbol: str, interval: str = "1d") -> str:
     """
     Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands).
     Provides a strategic outlook based on indicator alignment.
     """
-    return build_technical_report(symbol)
+    return build_technical_report(symbol, interval)
 
 def build_movers_report() -> str:
     """Pure market-movers logic for direct callers and tests."""

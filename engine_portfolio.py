@@ -62,7 +62,7 @@ def init_db():
 
         # 檢查是否需要從 CSV 遷移
         if os.path.exists(CSV_BACKUP):
-            print(f"📦 偵測到舊帳本 {CSV_BACKUP}，正在執行自動遷移...")
+            logger.info(f"📦 偵測到舊帳本 {CSV_BACKUP}，正在執行自動遷移...")
             try:
                 with open(CSV_BACKUP, mode='r', encoding='utf-8-sig') as f:
                     reader = csv.reader(f)
@@ -78,13 +78,10 @@ def init_db():
                 conn.commit()
                 # 遷移完成後將舊檔改名備份
                 os.rename(CSV_BACKUP, f"{CSV_BACKUP}.migrated_{int(time.time())}")
-                print("✅ 遷移完成，舊檔已備份。")
+                logger.info("✅ 遷移完成，舊檔已備份。")
             except Exception as e:
-                print(f"⚠️ 遷移失敗: {e}")
+                logger.warning(f"⚠️ 遷移失敗: {e}")
         conn.close()
-
-# 啟動時自動初始化
-init_db()
 
 def execute_position_update(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
     """Pure portfolio-write logic for direct callers and tests."""

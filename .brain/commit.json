@@ -1,28 +1,29 @@
 {
   "state": {
-    "frontalLobe": "Market View: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.\nCore Levels: TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).\nPortfolio Health: Risk-on, but monitoring TSM earnings (4/16) for potential \"sell the news\" volatility.\nNext Round: If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge.",
-    "emotion": "confident",
+    "frontalLobe": "Market View: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.\nCore Levels: TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).\nPortfolio Health: Risk-on, but monitoring TSM earnings (4/16) for potential \"sell the news\" volatility. User panic-bought 00997A at 10.6, current price 10.5.\nNext Round: If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge. Advised user to hold 00997A as it's a long-term growth vehicle, not a day-trading scalp.",
+    "emotion": "cautious",
     "marketRegime": {
-      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 23。核心觀察：🟠 尾部風險升溫",
+      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐",
       "state": "🟢 多頭",
-      "riskScore": 23,
-      "updatedAt": "2026-04-14T21:07:25Z",
+      "riskScore": 0,
+      "updatedAt": "2026-04-15T15:36:49Z",
       "source": "macro_heartbeat",
       "watchpoints": [
         "殖利率曲線 10Y-2Y: 0.256",
-        "GEX: 2.96B",
+        "GEX: 4.42B",
         "市場情緒: 中性 (0.0)",
         "SPX: 6967.4 / MA20 6628.3 / MA200 6671.3",
         "🟠 尾部風險升溫"
       ],
       "reasons": [
-        "🟠 尾部風險升溫"
+        "🟠 尾部風險升溫",
+        "🟢 暗池吸籌，大戶提供下檔支撐"
       ],
       "signals": {
         "yieldCurve10Y2Y": 0.256,
         "fedFundsRate": 3.61,
-        "dixPr": 0.64,
-        "gexBillions": 2.96,
+        "dixPr": 0.96,
+        "gexBillions": 4.42,
         "sentimentScore": 0.0,
         "sentimentLabel": "中性",
         "spx": 6967.4,
@@ -36,10 +37,10 @@
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-14T21:07:25Z",
-      "lastMacroChangeAt": "2026-04-14T21:07:25Z",
+      "lastMacroSyncAt": "2026-04-15T15:36:49Z",
+      "lastMacroChangeAt": "2026-04-15T15:36:49Z",
       "lastSyncStatus": "updated",
-      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 23。核心觀察：🟠 尾部風險升溫"
+      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐"
     }
   },
   "commits": [
@@ -331,15 +332,114 @@
       "summary": "🟢 多頭 RISK DOWN: 42 -> 23 | 🟠 尾部風險升溫",
       "key_signals": "GEX=+2.96B, VIX_Z=+nan, DIX_PR=0.64, SPX=6967.40",
       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": 42,
         "risk_score_to": 23,
         "state_from": "🟡 整理",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 23。核心觀察：🟠 尾部風險升溫"
+      }
+    },
+    {
+      "hash": "cccad380",
+      "parent_hash": "1e8f7290",
+      "timestamp": "2026-04-15 10:31:11",
+      "type": "emotion",
+      "summary": "🧠 EMOTION: confident -> cautious | 用戶在 10.60 買入 00997A，目前現價 10.50，處於短線虧損狀態，情緒焦慮。",
+      "key_signals": "RISK=23 | REGIME=🟢 多頭 | GEX=+2.96B, VIX_Z=+nan, DIX_PR=0.64",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "emotion_update",
+      "delta": {
+        "from": "confident",
+        "to": "cautious",
+        "reason": "用戶在 10.60 買入 00997A，目前現價 10.50，處於短線虧損狀態，情緒焦慮。"
+      }
+    },
+    {
+      "hash": "a9cba553",
+      "parent_hash": "cccad380",
+      "timestamp": "2026-04-15 11:06:10",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK DOWN: 23 -> 0 | 🟠 尾部風險升溫",
+      "key_signals": "GEX=+7.50B, VIX_Z=+nan, DIX_PR=0.96, SPX=6967.40",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 23,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "6aa6d39d",
+      "parent_hash": "a9cba553",
+      "timestamp": "2026-04-15 11:07:00",
+      "type": "frontal_lobe",
+      "summary": "🧠 NOTE: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | TSM Support at $369 (POC) and $345 (MA20); Resistance at...",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+7.50B, VIX_Z=+nan, DIX_PR=0.96",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "frontal_lobe_write",
+      "delta": {
+        "market_view": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.",
+        "core_levels": "TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).",
+        "portfolio_health": "Risk-on, but monitoring TSM earnings (4/16) for potential \"sell the news\" volatility. User panic-bought 00997A at 10.6, current price 10.5.",
+        "next_round": "If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge. Advised user to hold 00997A as it's a long-term growth vehicle, not a day-trading scalp."
+      }
+    },
+    {
+      "hash": "5149f5a6",
+      "parent_hash": "6aa6d39d",
+      "timestamp": "2026-04-15 14:06:15",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟠 尾部風險升溫",
+      "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=0.96, SPX=6967.40",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "9578985b",
+      "parent_hash": "5149f5a6",
+      "timestamp": "2026-04-15 18:56:48",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟠 尾部風險升溫",
+      "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=0.96, SPX=6967.40",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "a2c040eb",
+      "parent_hash": "9578985b",
+      "timestamp": "2026-04-15 23:36:49",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟠 尾部風險升溫",
+      "key_signals": "GEX=+4.42B, VIX_Z=+nan, DIX_PR=0.96, SPX=6967.40",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐"
       },
       "source": "macro_heartbeat"
     }
   ],
-  "head": "1e8f7290"
+  "head": "a2c040eb"
 }

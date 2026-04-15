@@ -7,8 +7,10 @@ import finnhub
 from lxml import etree
 from tqdm import tqdm
 import warnings
+import logging
 
 warnings.filterwarnings("ignore")
+logger = logging.getLogger(__name__)
 
 class FinnhubNewsDownloader:
     """
@@ -30,7 +32,7 @@ class FinnhubNewsDownloader:
             if response.status_code == 200:
                 return response
         except Exception as e:
-            print(f"Request Error: {url} - {e}")
+            logger.warning(f"Request Error: {url} - {e}")
         return None
 
     def download_date_range_stock(self, start_date, end_date, stock="AAPL"):
@@ -133,6 +135,6 @@ if __name__ == "__main__":
     if TOKEN:
         downloader = FinnhubNewsDownloader(TOKEN)
         downloader.download_date_range_stock("2024-04-10", "2024-04-12", stock="NVDA")
-        print(downloader.dataframe.head())
+        logger.info("%s", downloader.dataframe.head())
     else:
-        print("Please set FINNHUB_API_KEY for testing.")
+        logger.warning("Please set FINNHUB_API_KEY for testing.")

@@ -50,7 +50,7 @@ def get_cik(symbol):
                 if val['ticker'] == symbol:
                     return str(val['cik_str']).zfill(10)
     except Exception as e:
-        print(f"⚠️ CIK 查詢異常: {e}")
+        logger.warning(f"⚠️ CIK 查詢異常: {e}")
     
     # 🚨🚨🚨 刪掉原本的 CIK_MAP！找不到就回傳 None，寧願沒資料也不要拿 NVDA 來瞎掰！
     return None
@@ -177,7 +177,7 @@ def extract_insight_parallel(text, symbol):
         return final_data
         
     except Exception as e:
-        print(f"   [Debug] Gemma 萃取異常: {e}")
+        logger.warning(f"   [Debug] Gemma 萃取異常: {e}")
         return {"institutional": {"sentiment": "neutral", "insights": []}, "retail": {"sentiment": "neutral", "insights": []}}
     
 
@@ -239,7 +239,7 @@ def semantic_reduce(categorized_tags, symbol, company_name, sector):
         return final_report
                 
     except Exception as e:
-        print(f"   [Debug] Reduce 異常: {e}")
+        logger.warning(f"   [Debug] Reduce 異常: {e}")
         return f"• **官方基本面**：分析中...\n• **總經與新聞**：分析中...\n• **散戶情緒**：分析中..."
 
 def extract_section(text, start_keyword, stop_keywords, max_len=5000):
@@ -357,9 +357,9 @@ def adjust_retail_score(raw_score, source_count):
 def _fetch_sec_data(stock, raw_texts):
     """SEC 資料抓取，回傳 None 表示跳過"""
     cik = get_cik(stock)
-    print(f"    🔍 CIK: {cik}")
+    logger.info(f"    🔍 CIK: {cik}")
     if not cik:
-        print(f"    ⚠️ {stock} 無法查到 CIK，跳過 SEC 分析")
+        logger.warning(f"    ⚠️ {stock} 無法查到 CIK，跳過 SEC 分析")
         return
         
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -376,14 +376,14 @@ def _fetch_sec_data(stock, raw_texts):
         # ==========================================
         # 軌道一：深度解剖「最新一份年報」(10-K / 20-F)
         # ==========================================
-        print(f"   🕵️ 軌道 1：搜尋 {stock} 最新年報...")
+        logger.info(f"   🕵️ 軌道 1：搜尋 {stock} 最新年報...")
         for i, form in enumerate(forms):
             if form in ['10-K', '20-F']:
                 acc_num_raw = str(accessions[i])
                 acc_num = acc_num_raw.replace('-', '')
                 doc_name = docs[i]
                 annual_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
-                print(f"  🎯 找到最新年報 ({form}, 發布於 {dates[i]}), 下載 primaryDocument...")
+                logger.info(f"  🎯 找到最新年報 ({form}, 發布於 {dates[i]}), 下載 primaryDocument...")
 
                 doc_res = requests.get(annual_url, headers=SEC_HEADERS, timeout=30)
                 if doc_res.status_code == 200:
@@ -404,7 +404,7 @@ def _fetch_sec_data(stock, raw_texts):
                         )
                         if risk_text:
                             raw_texts.append(f"SEC 10-K [風險因素]: {risk_text}")
-                            print(f"      ✅ 錨點命中 Risk Factors")
+                            logger.info("      ✅ 錨點命中 Risk Factors")
 
                         mda_text = extract_section(clean_text,
                             "MANAGEMENT'S DISCUSSION",
@@ -412,15 +412,15 @@ def _fetch_sec_data(stock, raw_texts):
                         )
                         if mda_text:
                             raw_texts.append(f"SEC 10-K [營運分析]: {mda_text}")
-                            print(f"      ✅ 錨點命中 MD&A")
+                            logger.info("      ✅ 錨點命中 MD&A")
 
                         if not risk_text and not mda_text:
                             raw_texts.append(f"SEC 10-K [年報摘要]: {clean_text[15000:19000]}")
-                            print(f"      ⚠️ 錨點全部未命中，盲切 [15000:19000]")
+                            logger.warning("      ⚠️ 錨點全部未命中，盲切 [15000:19000]")
 
                     # 分流 2：外國發行人 (20-F)，使用智能段落抓取避開 iXBRL 亂碼
                     elif form == '20-F':
-                        print("   ℹ️ 20-F 外國年報啟用智能段落解析 (過濾 iXBRL)...")
+                        logger.info("   ℹ️ 20-F 外國年報啟用智能段落解析 (過濾 iXBRL)...")
                         soup = BeautifulSoup(doc_res.text, 'html.parser')
                         
                         valid_paragraphs = []
@@ -465,7 +465,7 @@ def _fetch_sec_data(stock, raw_texts):
         # 軌道二：近期動態監控 (45天內)
         # ==========================================
         limit_date = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
-        print(f"   🕵️ 軌道 2：監控 45 天內動態 (自 {limit_date} 起)...")
+        logger.info(f"   🕵️ 軌道 2：監控 45 天內動態 (自 {limit_date} 起)...")
         
         dynamic_count = 0
         for i, form in enumerate(forms):
@@ -532,12 +532,12 @@ def _fetch_sec_data(stock, raw_texts):
                             raw_texts.append(f"SEC {form} ({dates[i]}): {extracted}")
                     
                     dynamic_count += 1
-        print(f"   ✅ SEC 雙軌解析完成")
+        logger.info("   ✅ SEC 雙軌解析完成")
 
         # ==========================================
         # 軌道三：最新一季財報電話會議 (Earning Call)
         # ==========================================
-        print(f"   🚀 軌道 3：搜尋 {stock} 最新 Earning Call (via Motley Fool)...")
+        logger.info(f"   🚀 軌道 3：搜尋 {stock} 最新 Earning Call (via Motley Fool)...")
         try:
             content = fetch_earning_call_from_fool(stock)
             if content and len(content) > 500:
@@ -552,10 +552,10 @@ def _fetch_sec_data(stock, raw_texts):
                         break
                 if qa_start != -1:
                     raw_texts.append(f"SEC EarningCall [Q&A]: {content[qa_start : qa_start + 3000]}")
-                    print(f"   ✅ Earning Call Q&A 命中")
+                    logger.info("   ✅ Earning Call Q&A 命中")
                 else:
                     raw_texts.append(f"SEC EarningCall [後半段]: {content[len(content)//2 : len(content)//2 + 3000]}")
-                    print(f"   ✅ Earning Call 取後半段")
+                    logger.info("   ✅ Earning Call 取後半段")
 
                 # 2. 尋找前瞻指引
                 guidance_keywords = ["GUIDANCE", "OUTLOOK", "EXPECT", "FORECAST"]
@@ -563,14 +563,14 @@ def _fetch_sec_data(stock, raw_texts):
                     g_idx = upper_content.find(kw)
                     if g_idx != -1 and g_idx < len(content) // 2: 
                         raw_texts.append(f"SEC EarningCall [指引]: {content[g_idx : g_idx + 1500]}")
-                        print(f"   ✅ Earning Call 前瞻指引命中")
+                        logger.info("   ✅ Earning Call 前瞻指引命中")
                         break
             else:
-                print(f"   ⚠️ Earning Call 未在 Motley Fool 總覽頁找到")
+                logger.warning("   ⚠️ Earning Call 未在 Motley Fool 總覽頁找到")
         except Exception as e:
-            print(f"   ⚠️ Earning Call 抓取失敗: {e}")
+            logger.warning(f"   ⚠️ Earning Call 抓取失敗: {e}")
     else:
-        print(f"    ⚠️ SEC 請求被拒絕 (HTTP {res.status_code})")
+        logger.warning(f"    ⚠️ SEC 請求被拒絕 (HTTP {res.status_code})")
 
 # --- 4. 引擎主體 ---
 def run_turbo_trinity_scout(stock="NVDA"):
@@ -581,7 +581,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
     """
     # --- 0. Ollama 預檢 ---
     if not check_ollama():
-        print("❌ Ollama 未啟動或無法連線，中止分析。")
+        logger.warning("❌ Ollama 未啟動或無法連線，中止分析。")
         sys.exit(1)
 
     # --- 0. 動態獲取公司背景 ---
@@ -590,13 +590,13 @@ def run_turbo_trinity_scout(stock="NVDA"):
         company_name = ticker_info.get('longName', stock)
         sector = ticker_info.get('sector', 'Unknown Sector')
         industry = ticker_info.get('industry', 'Unknown Industry')
-        print(f"🧬 偵測到標的：{company_name} | 產業：{sector} / {industry}")
+        logger.info(f"🧬 偵測到標的：{company_name} | 產業：{sector} / {industry}")
     except Exception as e:
         logger.warning(f"Error getting ticker info for {stock}: {e}")
         company_name, sector, industry = stock, "Financial", "Technology" # 失敗時的備援
 
     init_nlp_db()
-    print(f"🔥 [Ubuntu] 啟動 {stock} 四維一體深度掃描 (全網聚合 + StockTwits 版)...")
+    logger.info(f"🔥 [Ubuntu] 啟動 {stock} 四維一體深度掃描 (全網聚合 + StockTwits 版)...")
     raw_texts = []
     
     # A. Reddit
@@ -619,8 +619,9 @@ def run_turbo_trinity_scout(stock="NVDA"):
                 if re.search(rf'\b{stock}\b|\${stock}', full_text):
                     raw_texts.append(f"Reddit: {title} | {body[:200]}")
                     valid_count += 1
-            print(f"   ✅ Reddit: {valid_count} 筆 (過濾後)")
-    except Exception as e: print(f"   ⚠️ Reddit 異常: {e}")
+            logger.info(f"   ✅ Reddit: {valid_count} 筆 (過濾後)")
+    except Exception as e:
+        logger.warning(f"   ⚠️ Reddit 異常: {e}")
 
     # B. StockTwits 即時多空情緒 (Cloudscraper 穿甲版)
     try:
@@ -635,11 +636,11 @@ def run_turbo_trinity_scout(stock="NVDA"):
             for m in messages:
                 body = m.get('body', '')
                 raw_texts.append(f"StockTwits: {body[:300]}")
-            print(f"   ✅ StockTwits: {len(messages)} 筆 (穿甲成功)")
+            logger.info(f"   ✅ StockTwits: {len(messages)} 筆 (穿甲成功)")
         else:
-            print(f"   ⚠️ StockTwits 穿甲失敗 (HTTP {st_resp.status_code})")
+            logger.warning(f"   ⚠️ StockTwits 穿甲失敗 (HTTP {st_resp.status_code})")
     except Exception as e:
-        print(f"   ⚠️ StockTwits 穿甲異常: {e}")
+        logger.warning(f"   ⚠️ StockTwits 穿甲異常: {e}")
 
     # C. Finnhub 全網媒體聚合
     try:
@@ -649,7 +650,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
         # 確保抓到 KEY
         fh_key = os.getenv("FINNHUB_API_KEY")
         if not fh_key:
-            print("   ⚠️ 未設定 FINNHUB_API_KEY，跳過新聞抓取。")
+            logger.warning("   ⚠️ 未設定 FINNHUB_API_KEY，跳過新聞抓取。")
         else:
             fh_downloader = Finnhub_Date_Range(fh_key)
             fh_downloader.download_date_range_stock(stock=stock, start_date=start_date, end_date=end_date)
@@ -662,29 +663,31 @@ def run_turbo_trinity_scout(stock="NVDA"):
                     headline = row.get('headline', '')
                     summary = row.get('summary', '')[:300]
                     raw_texts.append(f"Macro({source}): {headline} | {summary}")
-                print(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
+                logger.info(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
     except Exception as e: 
-        print(f"   ⚠️ Finnhub 流程異常: {e}")
+        logger.warning(f"   ⚠️ Finnhub 流程異常: {e}")
 
     # D. SEC
     try:
         _fetch_sec_data(stock, raw_texts)
     except Exception as e:
-        print(f"    ⚠️ SEC 抓取失敗: {e}")
+        logger.warning(f"    ⚠️ SEC 抓取失敗: {e}")
 
     total = len(raw_texts)
 
-    if total == 0: return print("📭 無情報")
+    if total == 0:
+        logger.info("📭 無情報")
+        return
 
     # --- 🔍 偵錯列印：檢視抓取內容 ---
-    print("\n--- 🕵️ 原始情報抽樣檢視 ---")
+    logger.info("\n--- 🕵️ 原始情報抽樣檢視 ---")
     sources = ["Reddit", "StockTwits", "Macro", "SEC"]
     for src in sources:
         samples = [t for t in raw_texts if t.startswith(src)]
-        print(f"\n【{src} 來源抽樣 ({len(samples)} 筆)】")
+        logger.info(f"\n【{src} 來源抽樣 ({len(samples)} 筆)】")
         for i, s in enumerate(samples[:3]):
-            print(f"  {i+1}. {s[:150]}...")
-    print("\n--- 🧠 啟動 GPU 語意分析 ---")
+            logger.info(f"  {i+1}. {s[:150]}...")
+    logger.info("\n--- 🧠 啟動 GPU 語意分析 ---")
 
     # --- 分組合併，只跑 3 次 LLM ( Map 階段 ) ---
     categorized_tags = {"SEC": [], "Macro": [], "Retail": []}
@@ -714,7 +717,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
         if not texts: continue
             
         combined = "\n---\n".join([t[:500] for t in texts])[:4000]
-        print(f"    🧠 分析 {category} ( {len(texts)} 篇合併 )...")
+        logger.info(f"    🧠 分析 {category} ( {len(texts)} 篇合併 )...")
         
         res_data = extract_insight_parallel(combined, stock)
         
@@ -804,16 +807,16 @@ def run_turbo_trinity_scout(stock="NVDA"):
             if v_response.status_code == 200:
                 answer = v_response.json().get("response", "").strip().upper()
                 if "REAL_THREAT" in answer:
-                    print(f"   ☢️ LLM 確認核彈級利空！字眼: {triggered_nukes}，觸發 Alpha 熔斷！")
+                    logger.warning(f"   ☢️ LLM 確認核彈級利空！字眼: {triggered_nukes}，觸發 Alpha 熔斷！")
                     nlp_alpha = -0.95 # 強制給予極度悲觀的量化分數
                     divergence_alert = f"☢️ 偵測到重大法律或會計風險 (經 LLM 核實: {triggered_nukes})"
                 else:
-                    print(f"   ✅ LLM 判定為良性用法 ({triggered_nukes})，解除警報。")
+                    logger.info(f"   ✅ LLM 判定為良性用法 ({triggered_nukes})，解除警報。")
             else:
                 # 若較強模型失敗，不再強行熔斷，改為標註警告
                 divergence_alert = f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實服務超時，請人工確認。"
         except Exception as ve:
-            print(f"   ⚠️ 核彈核實異常: {ve}")
+            logger.warning(f"   ⚠️ 核彈核實異常: {ve}")
             divergence_alert = f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實過程異常，請人工確認。"
 
     report_header = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f}\n"
@@ -822,7 +825,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
         
     report = report_header + semantic_reduce(categorized_tags, stock, company_name, sector)
     save_to_db(stock, nlp_alpha, a_retail, a_mac, a_sec, total, report, "TRINITY")
-    print(f"\n{report}")
+    logger.info("\n%s", report)
 
 if __name__ == "__main__":
     target = sys.argv[1].upper() if len(sys.argv) > 1 else "NVDA"
