@@ -7,7 +7,7 @@ import engine_market as market
 import engine_memory as memory
 import engine_router as router
 from config import system_prompt
-from src.llm import chat_with_tools, quick_call, REPORT_MODELS
+from src.llm import chat_with_tools, quick_call
 
 
 user_chat_history = []
@@ -74,7 +74,6 @@ def generate_final_report(symbol, strat_data, nlp_alpha):
 
     result = quick_call(
         analysis_prompt,
-        models=REPORT_MODELS,
         system_instruction=system_prompt,
         thinking_level="high",
     )

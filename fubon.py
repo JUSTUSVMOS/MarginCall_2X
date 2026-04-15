@@ -222,56 +222,61 @@ def get_fubon_bank_remain():
         logger.warning(f"Fubon data fetch error: {e}")
         return None
 
-# 👇 給 AI 用的 Tool 函數
-# 👇 【深層戰術工具】抓取成交明細 (Intraday Trades)
-@tool()
-def get_market_trades(symbol: str, limit: int = 20) -> str:
-    """
-    Fetches the most recent intraday trade details (price and size) for a Taiwan stock.
-    """
-    global fubon_sdk, fubon_ready
-    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
-    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+def _normalize_tw_symbol(symbol: str) -> str:
+    return symbol.upper().replace('.TW', '').replace('.TWO', '')
+
+
+def _get_stock_rest_client():
+    return fubon_sdk.marketdata.rest_client.stock
+
+
+def _get_futopt_rest_client():
+    return fubon_sdk.marketdata.rest_client.futopt
+
+
+def build_market_trades_report(symbol: str, limit: int = 20) -> str:
+    """Pure intraday-trades logic for direct callers and tests."""
+    global fubon_ready
+    if not fubon_ready:
+        return "⚠️ 富邦引擎未啟動。"
+    symbol = _normalize_tw_symbol(symbol)
     try:
-        reststock = fubon_sdk.marketdata.rest_client.stock
+        reststock = _get_stock_rest_client()
         res = reststock.intraday.trades(symbol=symbol, limit=limit)
         data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
-        if not data: return f"📊 {symbol} 目前無成交明細。"
-        
+        if not data:
+            return f"📊 {symbol} 目前無成交明細。"
+
         report = f"📜 【{symbol} 最近 {len(data)} 筆成交明細】\n"
         for d in data[:limit]:
             price = d.get('price')
             size = d.get('size')
             time_raw = d.get('time', 0)
-            # 轉換時間格式 (微秒轉 HH:MM:SS)
-            from datetime import datetime
-            t_str = datetime.fromtimestamp(time_raw/1000000).strftime('%H:%M:%S')
+            t_str = datetime.fromtimestamp(time_raw / 1000000).strftime('%H:%M:%S')
             report += f"  [{t_str}] 價: {price} | 量: {size}\n"
         return report
     except Exception as e:
+        logger.warning(f"Market trades fetch failed for {symbol}: {e}")
         return f"❌ 明細抓取異常: {e}"
 
-# 👇 【深層戰術工具】抓取分價量表 (Intraday Volumes)
-@tool()
-def get_price_volumes(symbol: str) -> str:
-    """
-    Retrieves the volume profile (intraday volumes at price) for a Taiwan stock.
-    Helps identify support and resistance levels based on volume concentration.
-    """
-    global fubon_sdk, fubon_ready
-    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
-    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+
+def build_price_volumes_report(symbol: str) -> str:
+    """Pure volume-profile logic for direct callers and tests."""
+    global fubon_ready
+    if not fubon_ready:
+        return "⚠️ 富邦引擎未啟動。"
+    symbol = _normalize_tw_symbol(symbol)
     try:
-        reststock = fubon_sdk.marketdata.rest_client.stock
+        reststock = _get_stock_rest_client()
         res = reststock.intraday.volumes(symbol=symbol)
         data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
-        if not data: return f"📊 {symbol} 無分價量表數據。"
-        
-        # 排序：按價格由高到低
+        if not data:
+            return f"📊 {symbol} 無分價量表數據。"
+
         data = sorted(data, key=lambda x: x.get('price', 0), reverse=True)
         report = f"🧱 【{symbol} 分價量表 - 壓力支撐觀測】\n"
-        max_vol = max([d.get('volume', 1) for d in data])
-        
+        max_vol = max((d.get('volume', 1) for d in data), default=1) or 1
+
         for d in data:
             price = d.get('price')
             vol = d.get('volume')
@@ -280,77 +285,66 @@ def get_price_volumes(symbol: str) -> str:
             report += f"  {price:>7.2f} | {bar} {vol}張\n"
         return report
     except Exception as e:
+        logger.warning(f"Price-volume fetch failed for {symbol}: {e}")
         return f"❌ 分價量表異常: {e}"
 
-# 👇 【深層戰術工具】抓取 52 週高低價與基本資訊 (Historical Stats)
-@tool()
-def get_historical_stats(symbol: str) -> str:
-    """
-    Provides 52-week high/low prices and current percentile rank for a Taiwan stock.
-    """
-    global fubon_sdk, fubon_ready
-    if not fubon_ready: return "⚠️ 富邦引擎未啟動。"
-    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
+
+def build_historical_stats_report(symbol: str) -> str:
+    """Pure historical-stats logic for direct callers and tests."""
+    global fubon_ready
+    if not fubon_ready:
+        return "⚠️ 富邦引擎未啟動。"
+    symbol = _normalize_tw_symbol(symbol)
     try:
-        reststock = fubon_sdk.marketdata.rest_client.stock
+        reststock = _get_stock_rest_client()
         res = reststock.historical.stats(symbol=symbol)
-        
+
         name = res.get('name', '未知')
         high52 = res.get('week52High', 0)
         low52 = res.get('week52Low', 0)
         curr_close = res.get('closePrice', 0)
-        
+
         report = f"🏛️ 【{symbol} {name} 52週戰略位階】\n"
         report += f"  ● 52週最高: {high52}\n"
         report += f"  ● 52週最低: {low52}\n"
         report += f"  ● 最後收盤: {curr_close}\n"
-        
-        # 計算目前位階百分比
+
         pos = ((curr_close - low52) / (high52 - low52)) * 100 if (high52 - low52) != 0 else 0
         report += f"  ● 目前位階: {pos:.1f}% (0%為最低, 100%為最高)\n"
         return report
     except Exception as e:
+        logger.warning(f"Historical stats fetch failed for {symbol}: {e}")
         return f"❌ 52週數據異常: {e}"
 
-# 👇 【TXO 期權戰術工具】抓取台指期權 (TXO) 戰報
-@tool()
-def get_txo_sentiment() -> str:
-    """
-    Calculates the Put/Call Ratio and market sentiment from Taiwan Index Options (TXO).
-    A key indicator for detecting overall market direction and big player positioning.
-    """
-    global fubon_sdk, fubon_ready
-    if not fubon_ready: return "⚠️ 富邦引擎未啟動，無法抓取 TXO 數據。"
-    
+
+def build_txo_sentiment_report() -> str:
+    """Pure TXO-sentiment logic for direct callers and tests."""
+    global fubon_ready
+    if not fubon_ready:
+        return "⚠️ 富邦引擎未啟動，無法抓取 TXO 數據。"
+
     try:
-        # 使用 futopt client
-        restfut = fubon_sdk.marketdata.rest_client.futopt
-        
-        # 1. 抓取期交所熱門合約快照
-        res = restfut.snapshot.actives(market='TFE', trade='volume') 
+        restfut = _get_futopt_rest_client()
+        res = restfut.snapshot.actives(market='TFE', trade='volume')
         data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
-        
-        if not data: return "📊 TXO 目前無交易數據。"
-        
+
+        if not data:
+            return "📊 TXO 目前無交易數據。"
+
         calls_vol = 0
         puts_vol = 0
         report = "🔮 【TXO 台指期權戰報 - 市場情緒觀測】\n"
-        
-        # 遍歷熱門合約計算 P/C Ratio
+
         for item in data:
             sym = (item.get('symbol', '') if isinstance(item, dict) else getattr(item, 'symbol', '')).upper()
             vol = item.get('volume', 0) if isinstance(item, dict) else getattr(item, 'volume', 0)
-            
-            # 判斷是否為台指選 (TXO)
+
             if 'TXO' in sym:
-                # 兼容性判斷：優先找 C/P，若無則看 TAIFEX 月份代號
                 if 'C' in sym:
                     calls_vol += vol
                 elif 'P' in sym:
                     puts_vol += vol
                 elif len(sym) >= 10:
-                    # 假設格式如 TXO17000A4, 第 9 碼是 A (index 8)
-                    # 或是 TXO17000A4 的 sym[-2]
                     month_code = sym[-2]
                     if month_code in 'ABCDEFGHIJKL':
                         calls_vol += vol
@@ -359,59 +353,50 @@ def get_txo_sentiment() -> str:
 
         pc_ratio = (puts_vol / calls_vol) if calls_vol > 0 else 0
         pc_label = "🔴 極度看空" if pc_ratio > 1.2 else "🟡 避險轉強" if pc_ratio > 1.0 else "🟢 多頭佔優" if pc_ratio < 0.8 else "⚖️ 中性偏多"
-        
+
         report += f"  ● 今日熱門合約 P/C Ratio: {pc_ratio:.2f} ({pc_label})\n"
         report += f"  ● Call 總量: {calls_vol} | Put 總量: {puts_vol}\n"
         report += "\n💡 戰略提示：若 P/C Ratio 持續拉升，代表台股大盤壓力沉重，留意台積電是否同步走軟。"
-        
         return report
     except Exception as e:
+        logger.warning(f"TXO sentiment fetch failed: {e}")
         return f"❌ TXO 數據抓取失敗: {e} (請確認帳號具備期貨權限)"
 
-# 把舊的 get_quote_and_orderbook 增強，加入更多總量資訊
-@tool()
-def get_quote_and_orderbook(symbol: str) -> str:
 
-    """
-    Fetches real-time bid/ask orderbook (Level 2) and recent price for a Taiwan stock.
-    Used to analyze immediate supply/demand pressure and large order positioning.
-    """
-    global fubon_sdk, fubon_ready
-
+def build_quote_and_orderbook_report(symbol: str) -> str:
+    """Pure orderbook logic for direct callers and tests."""
+    global fubon_ready
     if not fubon_ready:
-        return f"⚠️ 警告：富邦 V8 引擎未啟動。"
+        return "⚠️ 警告：富邦 V8 引擎未啟動。"
 
-    # 🚨 一樣洗掉後綴
-    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
-    
+    symbol = _normalize_tw_symbol(symbol)
     try:
-        reststock = fubon_sdk.marketdata.rest_client.stock
+        reststock = _get_stock_rest_client()
         quote_data = reststock.intraday.quote(symbol=symbol)
-        
-        # 增加試撮數據判定 (支援開盤前/收盤前)
+
         current_price = quote_data.get('closePrice') or quote_data.get('lastPrice', 0)
         trial = quote_data.get('lastTrial', {})
         trial_price = trial.get('price', 0)
-        
+
         status_msg = ""
         if quote_data.get('isTrial'):
             status_msg = f" (⚠️ 目前為試撮階段，價格: {trial_price})"
             current_price = trial_price
-        
+
         bids = quote_data.get('bids', [])
         asks = quote_data.get('asks', [])
 
         report = f"📊 【{symbol} 即時報價與五檔觀測】\n現價: {current_price}{status_msg}\n\n"
-        
+
         report += "🛑 [上方賣壓牆] (Asks):\n"
         if asks:
-            for i, ask in enumerate(reversed(asks[:5])): 
+            for i, ask in enumerate(reversed(asks[:5])):
                 price = ask.get('price', 0) if isinstance(ask, dict) else getattr(ask, 'price', 0)
                 size = ask.get('size', 0) if isinstance(ask, dict) else getattr(ask, 'size', 0)
                 report += f"  賣{5-i}: 價格 {price} | 掛單 {size} 張\n"
         else:
             report += "  (目前無賣單數據)\n"
-            
+
         report += "-----------------------\n🛡️ [下方防守牆] (Bids):\n"
         if bids:
             for i, bid in enumerate(bids[:5]):
@@ -422,34 +407,27 @@ def get_quote_and_orderbook(symbol: str) -> str:
             report += "  (目前無買單數據)\n"
 
         return report
-
     except FugleAPIError as e:
+        logger.warning(f"Quote/orderbook fetch failed for {symbol}: {e}")
         return f"❌ 取得 {symbol} 報價失敗 (狀態碼: {e.status_code})"
     except Exception as e:
+        logger.warning(f"Quote/orderbook parse failed for {symbol}: {e}")
         return f"❌ 五檔解析異常: {e}"
 
-@tool()
-def get_market_hot_stocks() -> str:
-    """
-    Identifies Taiwan market heatspots by scanning for top stocks by trading value and percentage gain.
-    Helps detect where the "big money" is moving during the trading session.
-    """
-    global fubon_sdk, fubon_ready
 
+def build_market_hot_stocks_report() -> str:
+    """Pure hot-stocks logic for direct callers and tests."""
+    global fubon_ready
     if not fubon_ready:
         return "⚠️ 富邦行情引擎未啟動，無法掃描熱門股。"
 
     try:
-        reststock = fubon_sdk.marketdata.rest_client.stock
-        
-        # 1. 抓成交值排行
+        reststock = _get_stock_rest_client()
         actives = reststock.snapshot.actives(market='TSE', trade='value')
-        # 2. 抓漲幅排行
         movers = reststock.snapshot.movers(market='TSE', direction='up', change='percent')
 
         report = "🔥 【台股資金熱點雷達 (即時快照)】\n\n"
-        
-        # 解析 Actives (成交值)
+
         actives_data = actives.get('data', []) if isinstance(actives, dict) else getattr(actives, 'data', [])
         report += "💰 [成交值排行榜] (大戶資金都在這):\n"
         if actives_data:
@@ -460,8 +438,7 @@ def get_market_hot_stocks() -> str:
                 report += f"  {i+1}. {sym} {name} | 現價: {price}\n"
         else:
             report += "  (目前無成交值數據)\n"
-        
-        # 解析 Movers (漲幅)
+
         report += "\n🚀 [漲幅排行榜] (今天的強勢妖股):\n"
         movers_data = movers.get('data', []) if isinstance(movers, dict) else getattr(movers, 'data', [])
         if movers_data:
@@ -474,34 +451,25 @@ def get_market_hot_stocks() -> str:
             report += "  (目前無漲幅數據)\n"
 
         return report
-
     except FugleAPIError as e:
+        logger.warning(f"Hot stocks fetch failed: {e}")
         return f"❌ 取得熱點雷達失敗 (狀態碼: {e.status_code})"
     except Exception as e:
+        logger.warning(f"Hot stocks parse failed: {e}")
         return f"❌ 熱點雷達解析異常: {e}"
 
 
-@tool()
-def get_intraday_trend(symbol: str) -> str:
-    """
-    Fetches 5-minute K-line data for a Taiwan stock to analyze intraday price and volume trends.
-    Useful for short-term tactical decisions and monitoring momentum.
-    """
-    global fubon_sdk, fubon_ready
-
+def build_intraday_trend_report(symbol: str) -> str:
+    """Pure intraday-trend logic for direct callers and tests."""
+    global fubon_ready
     if not fubon_ready:
-        return f"⚠️ 警告：富邦 V8 引擎未啟動。"
+        return "⚠️ 警告：富邦 V8 引擎未啟動。"
 
-    # 🚨 洗掉 AI 自作聰明的 Yahoo 後綴
-    symbol = symbol.upper().replace('.TW', '').replace('.TWO', '')
-    
+    symbol = _normalize_tw_symbol(symbol)
     try:
-        reststock = fubon_sdk.marketdata.rest_client.stock
-        
-        # 1. 抓取 5 分 K 原始資料
+        reststock = _get_stock_rest_client()
         candles_data = reststock.intraday.candles(symbol=symbol, timeframe='5')
-        
-        # 🚨 [除錯專用] 把富邦吐出來的原始格式印出來看 (只印前1000字元避免洗版)
+
         logger.info("👀 【除錯】富邦原始 API 回傳格式 (Raw Data 預覽):")
         if isinstance(candles_data, dict):
             logger.info("%s", json.dumps(candles_data, indent=2, ensure_ascii=False)[:1000] + "\n...(後面省略)")
@@ -509,13 +477,10 @@ def get_intraday_trend(symbol: str) -> str:
             logger.info("%s", str(candles_data)[:1000] + "\n...(後面省略)")
         logger.info("%s", "=" * 50)
 
-        # 2. 提取資料陣列
         data_list = candles_data.get('data', []) if isinstance(candles_data, dict) else getattr(candles_data, 'data', [])
-        
         if not data_list:
             return f"📊 【{symbol} 盤中趨勢】目前無 K 線數據 (可能尚未開盤)。"
 
-        # 3. 硬核提取法：確保丟給 Pandas 的一定是乾淨的 Dictionary
         parsed_data = []
         for d in data_list:
             parsed_data.append({
@@ -524,21 +489,18 @@ def get_intraday_trend(symbol: str) -> str:
                 'high': d.get('high', 0) if isinstance(d, dict) else getattr(d, 'high', 0),
                 'low': d.get('low', 0) if isinstance(d, dict) else getattr(d, 'low', 0),
                 'close': d.get('close', 0) if isinstance(d, dict) else getattr(d, 'close', 0),
-                'volume': d.get('volume', 0) if isinstance(d, dict) else getattr(d, 'volume', 0)
+                'volume': d.get('volume', 0) if isinstance(d, dict) else getattr(d, 'volume', 0),
             })
 
-        # 4. 餵給 Pandas 處理
         df = pd.DataFrame(parsed_data)
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date').reset_index(drop=True)
-        
+
         recent_df = df.tail(10)
-        
-        # 5. 組裝給 AI 的戰情報告
         report = f"📈 【{symbol} 盤中短線趨勢 (最新 {len(recent_df)} 根 5 分 K)】\n"
         report += "(註：時間由舊到新，可觀察底底高或頭頭低)\n\n"
-        
-        for index, row in recent_df.iterrows():
+
+        for _, row in recent_df.iterrows():
             time_str = row['date'].strftime('%H:%M')
             k_color = "🔴(紅)" if row['close'] > row['open'] else "🟢(綠)" if row['close'] < row['open'] else "⚪(平)"
             report += f"[{time_str}] {k_color} 開:{row['open']} | 高:{row['high']} | 低:{row['low']} | 收:{row['close']} | 量:{row['volume']}\n"
@@ -546,15 +508,76 @@ def get_intraday_trend(symbol: str) -> str:
         avg_close = recent_df['close'].mean()
         last_close = recent_df['close'].iloc[-1]
         trend_status = "多頭強勢 (站上短均)" if last_close > avg_close else "空頭弱勢 (跌破短均)"
-        
         report += f"\n💡 近期平均價: {avg_close:.2f} ({trend_status})"
-
         return report
-
     except FugleAPIError as e:
+        logger.warning(f"Intraday trend fetch failed for {symbol}: {e}")
         return f"❌ 取得 {symbol} K 線失敗 (狀態碼: {e.status_code})"
     except Exception as e:
+        logger.warning(f"Intraday trend parse failed for {symbol}: {e}")
         return f"❌ 趨勢解析異常: {e}"
+
+# 👇 給 AI 用的 Tool 函數
+# 👇 【深層戰術工具】抓取成交明細 (Intraday Trades)
+@tool()
+def get_market_trades(symbol: str, limit: int = 20) -> str:
+    """
+    Fetches the most recent intraday trade details (price and size) for a Taiwan stock.
+    """
+    return build_market_trades_report(symbol, limit)
+
+# 👇 【深層戰術工具】抓取分價量表 (Intraday Volumes)
+@tool()
+def get_price_volumes(symbol: str) -> str:
+    """
+    Retrieves the volume profile (intraday volumes at price) for a Taiwan stock.
+    Helps identify support and resistance levels based on volume concentration.
+    """
+    return build_price_volumes_report(symbol)
+
+# 👇 【深層戰術工具】抓取 52 週高低價與基本資訊 (Historical Stats)
+@tool()
+def get_historical_stats(symbol: str) -> str:
+    """
+    Provides 52-week high/low prices and current percentile rank for a Taiwan stock.
+    """
+    return build_historical_stats_report(symbol)
+
+# 👇 【TXO 期權戰術工具】抓取台指期權 (TXO) 戰報
+@tool()
+def get_txo_sentiment() -> str:
+    """
+    Calculates the Put/Call Ratio and market sentiment from Taiwan Index Options (TXO).
+    A key indicator for detecting overall market direction and big player positioning.
+    """
+    return build_txo_sentiment_report()
+
+# 把舊的 get_quote_and_orderbook 增強，加入更多總量資訊
+@tool()
+def get_quote_and_orderbook(symbol: str) -> str:
+
+    """
+    Fetches real-time bid/ask orderbook (Level 2) and recent price for a Taiwan stock.
+    Used to analyze immediate supply/demand pressure and large order positioning.
+    """
+    return build_quote_and_orderbook_report(symbol)
+
+@tool()
+def get_market_hot_stocks() -> str:
+    """
+    Identifies Taiwan market heatspots by scanning for top stocks by trading value and percentage gain.
+    Helps detect where the "big money" is moving during the trading session.
+    """
+    return build_market_hot_stocks_report()
+
+
+@tool()
+def get_intraday_trend(symbol: str) -> str:
+    """
+    Fetches 5-minute K-line data for a Taiwan stock to analyze intraday price and volume trends.
+    Useful for short-term tactical decisions and monitoring momentum.
+    """
+    return build_intraday_trend_report(symbol)
 
 def get_exhaustion_analysis(symbol: str) -> str:
     """

@@ -154,7 +154,7 @@ def build_symbol_identity_report(symbol: str) -> str:
     if is_taiwan and _has_fubon_provider():
         try:
             # 利用富邦歷史統計功能來抓取官方名稱
-            stats = _fubon_provider.get_historical_stats(symbol)
+            stats = _fubon_provider.build_historical_stats_report(symbol)
             if "未知" not in stats and "異常" not in stats:
                 return stats
         except Exception as e:

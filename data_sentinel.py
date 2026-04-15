@@ -44,7 +44,7 @@ class DataSentinel:
             # 這裡模擬初始化檢查
             fubon.init_fubon()
             # 嘗試抓取一個測試代碼
-            hot = fubon.get_market_hot_stocks()
+            hot = fubon.build_market_hot_stocks_report()
             if hot and "error" not in hot:
                 return "✅ 正常 (已獲取熱門股)"
             return "⚠️ SDK 初始化成功但資料回傳異常"
