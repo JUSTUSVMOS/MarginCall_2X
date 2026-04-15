@@ -242,6 +242,12 @@ class IndicatorCalculator:
 # --- 註冊給 main.py 使用的工具介面 ---
 from src.tools import tool
 
+def evaluate_indicator_formula(formula: str) -> str:
+    """Pure indicator-evaluation logic for direct callers and tests."""
+    calc = IndicatorCalculator()
+    return calc.calculate(formula)
+
+
 @tool()
 def calculate_indicator(formula: str) -> str:
     """
@@ -254,8 +260,7 @@ def calculate_indicator(formula: str) -> str:
     
     Example formula: "RSI(CLOSE('TSLA', '1h'), 14)[-1]"
     """
-    calc = IndicatorCalculator()
-    return calc.calculate(formula)
+    return evaluate_indicator_formula(formula)
 
 if __name__ == "__main__":
     # 實戰範例測試

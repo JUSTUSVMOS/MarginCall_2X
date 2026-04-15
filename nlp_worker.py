@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 import pandas as pd
 import requests
 import json
@@ -21,6 +22,8 @@ load_dotenv(os.path.join(str(PROJECT_ROOT), ".env"))
 from bs4 import BeautifulSoup
 import re
 
+logger = logging.getLogger(__name__)
+
 # SEC 官方要求必須提供 User-Agent 與聯繫 Email
 SEC_HEADERS = {
     "User-Agent": "MarginCall Bot (research@margincall.ai)",
@@ -32,7 +35,8 @@ def check_ollama():
     try:
         r = requests.get("http://localhost:11434/api/tags", timeout=5)
         return r.status_code == 200
-    except:
+    except Exception as e:
+        logger.debug(f"Ollama check failed: {e}")
         return False
 
 def get_cik(symbol):
@@ -74,11 +78,15 @@ def parse_form4_insider(content):
                 elif code == 'S':
                     net_value -= shares_val * price_val
                     total_shares -= shares_val
-            except: continue
+            except Exception as e:
+                logger.debug(f"Transaction parsing error: {e}")
+                continue
         if net_value > 0: return f"【內部人增持】淨買入約 ${net_value:,.0f}"
         elif net_value < 0: return f"【內部人減持】淨賣出約 ${abs(net_value):,.0f}"
         return "【內部人變動】無顯著方向。"
-    except: return "【解析異常】XML 解析失敗"
+    except Exception as e:
+        logger.warning(f"Form 4 parsing exception: {e}")
+        return "【解析異常】XML 解析失敗"
 
 def init_nlp_db():
     with db_lock:
@@ -150,7 +158,8 @@ def extract_insight_parallel(text, symbol):
         
         try:
             res_data = json.loads(clean_res)
-        except:
+        except Exception as e:
+            logger.debug(f"JSON decode error in extract_insight_parallel: {e}")
             res_data = {}
 
         # 🎯 格式標準化與強制填充
@@ -320,8 +329,8 @@ def fetch_earning_call_from_fool(symbol):
             for unwanted in content_div.find_all(['div', 'section'], class_=re.compile(r'pitch|promo|ads|sidebar')):
                 unwanted.decompose()
             return content_div.get_text(separator='\n', strip=True)
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Error fetching earning call for {symbol}: {e}")
     return None
 
 def adjust_retail_score(raw_score, source_count):
@@ -582,7 +591,8 @@ def run_turbo_trinity_scout(stock="NVDA"):
         sector = ticker_info.get('sector', 'Unknown Sector')
         industry = ticker_info.get('industry', 'Unknown Industry')
         print(f"🧬 偵測到標的：{company_name} | 產業：{sector} / {industry}")
-    except:
+    except Exception as e:
+        logger.warning(f"Error getting ticker info for {stock}: {e}")
         company_name, sector, industry = stock, "Financial", "Technology" # 失敗時的備援
 
     init_nlp_db()

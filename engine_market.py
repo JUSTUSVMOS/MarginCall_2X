@@ -10,7 +10,7 @@ from yf_session import get_ticker, get_download
 import logging
 from src.database import db_lock, get_connection
 from src.symbols import normalize_ticker
-from src.tools import tool
+from src.tools import format_tool_error, tool
 
 # 設定基礎日誌
 logging.basicConfig(
@@ -30,6 +30,10 @@ _fubon_provider = None
 def set_fubon_provider(provider):
     global _fubon_provider
     _fubon_provider = provider
+
+
+def _has_fubon_provider() -> bool:
+    return _fubon_provider is not None and getattr(_fubon_provider, "fubon_ready", False)
 
 def get_asset_profile(symbol: str) -> dict:
     """
@@ -70,7 +74,9 @@ def get_asset_profile(symbol: str) -> dict:
             info = get_ticker(symbol).info
             sector = info.get('sector', 'Unknown')
             industry = info.get('industry', 'Unknown')
-        except: pass
+        except Exception as e:
+            logger.debug(f"Stage 1 info fetching failed for {symbol}: {e}")
+            pass
     else:
         try:
             ticker = get_ticker(symbol)
@@ -149,19 +155,15 @@ def is_us_market_open() -> bool:
     end = now.replace(hour=16, minute=0, second=0, microsecond=0)
     return start <= now <= end
 
-@tool()
-def resolve_symbol_identity(symbol: str) -> str:
-    """
-    Identifies and validates a ticker symbol. Returns the official name and asset type.
-    Use this to resolve unknown or new symbols before further analysis.
-    """
+def build_symbol_identity_report(symbol: str) -> str:
+    """Pure symbol-identity logic for direct callers and tests."""
     symbol = normalize_ticker(symbol).replace('.TW', '').replace('.TWO', '')
     is_taiwan = any(char.isdigit() for char in symbol) and (len(symbol) <= 6)
     
-    if is_taiwan and fubon.fubon_ready:
+    if is_taiwan and _has_fubon_provider():
         try:
             # 利用富邦歷史統計功能來抓取官方名稱
-            stats = fubon.get_historical_stats(symbol)
+            stats = _fubon_provider.get_historical_stats(symbol)
             if "未知" not in stats and "異常" not in stats:
                 return stats
         except Exception as e:
@@ -175,14 +177,19 @@ def resolve_symbol_identity(symbol: str) -> str:
         return f"🔍 識別結果: {symbol} ({name}) | 類型: {info.get('quoteType', '未知')}"
     except Exception as e:
         logger.error(f"Failed to resolve symbol identity for {symbol}: {e}")
-        return f"❌ 無法識別標的: {symbol}，請確認代號是否正確。"
+        return format_tool_error(f"❌ 無法識別標的: {symbol}，請確認代號是否正確。", data_unavailable=True)
+
 
 @tool()
-def get_live_price(symbol: str) -> str:
+def resolve_symbol_identity(symbol: str) -> str:
     """
-    Fetches the real-time or most recent price for a given ticker symbol.
-    Supports US and Taiwan markets.
+    Identifies and validates a ticker symbol. Returns the official name and asset type.
+    Use this to resolve unknown or new symbols before further analysis.
     """
+    return build_symbol_identity_report(symbol)
+
+def fetch_live_price(symbol: str) -> str:
+    """Pure price-fetching logic for direct callers and tests."""
     symbol = normalize_ticker(symbol)
     clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
     if clean_symbol == "2454_ESOP": clean_symbol = "2454"
@@ -190,9 +197,9 @@ def get_live_price(symbol: str) -> str:
     is_taiwan_stock = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
     
     price = None
-    if is_taiwan_stock and fubon.fubon_ready:
+    if is_taiwan_stock and _has_fubon_provider():
         try:
-            reststock = fubon.fubon_sdk.marketdata.rest_client.stock
+            reststock = _fubon_provider.fubon_sdk.marketdata.rest_client.stock
             quote_data = reststock.intraday.quote(symbol=clean_symbol)
             is_dict = isinstance(quote_data, dict)
             price = quote_data.get('closePrice') or quote_data.get('lastPrice') if is_dict else getattr(quote_data, 'closePrice', getattr(quote_data, 'lastPrice', None))
@@ -225,10 +232,18 @@ def get_live_price(symbol: str) -> str:
         except Exception as e:
             logger.debug(f"YFinance fetch failed for {s}: {e}")
             continue
-    return "無法取得報價"
+    return format_tool_error("無法取得報價", data_unavailable=True)
 
 @tool()
-def get_us_realtime_insight(symbol: str) -> str:
+def get_live_price(symbol: str) -> str:
+    """
+    Fetches the real-time or most recent price for a given ticker symbol.
+    Supports US and Taiwan markets.
+    """
+    return fetch_live_price(symbol)
+
+def build_realtime_insight(symbol: str) -> str:
+    """Pure intraday insight logic for direct callers and tests."""
     symbol = normalize_ticker(symbol)
     try:
         ticker = get_ticker(symbol)
@@ -259,7 +274,9 @@ def get_us_realtime_insight(symbol: str) -> str:
                         total_calls += (c_sum if not np.isnan(c_sum) else 0)
                         total_puts += (p_sum if not np.isnan(p_sum) else 0)
                         valid_fetched += 1
-                    except: continue
+                    except Exception as chain_exc:
+                        logger.debug(f"Option chain fetch failed for {symbol} @ {date_str}: {chain_exc}")
+                        continue
                 if total_calls > 0:
                     pc_report = f"{total_puts / total_calls:.2f}"
         except Exception as e:
@@ -296,7 +313,9 @@ def get_us_realtime_insight(symbol: str) -> str:
                         expected_vol_at_now = (avg_vol / 390) * elapsed_mins
                         vol_ratio = curr_vol / expected_vol_at_now
                         vol_ratio_report = f"{vol_ratio:.2f}x"
-        except: pass
+        except Exception as e:
+            logger.debug(f"Stage 1 info fetching failed for {symbol}: {e}")
+            pass
 
         report = f"🚀 === {symbol} 美股即時戰情 ===\n"
         report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f} | P/C Ratio: {pc_report}\n"
@@ -305,14 +324,17 @@ def get_us_realtime_insight(symbol: str) -> str:
         for _, row in df.tail(5).iterrows():
             report += f"  [{row.name.strftime('%H:%M')}] {'🟢' if row['Close']>row['Open'] else '🔴'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
         return report
-    except Exception as e: return f"❌ 美股掃描失敗: {e}"
+    except Exception as e:
+        logger.error(f"Realtime insight failed for {symbol}: {e}")
+        return format_tool_error(f"❌ 美股掃描失敗: {e}", transient=True)
 
 @tool()
-def get_market_sentiment() -> str:
-    """
-    Analyzes global market sentiment by monitoring key indices, bonds, and commodities.
-    Provides a macro-level overview of capital flows and risk appetite.
-    """
+def get_us_realtime_insight(symbol: str) -> str:
+    """Tool schema for LLM."""
+    return build_realtime_insight(symbol)
+
+def build_sentiment_report() -> str:
+    """Pure market sentiment logic for direct callers and tests."""
     indicators = {
         "^TWII": "台股(加權)", "TSM": "台積ADR", "EWT": "台灣ETF",
         "^GSPC": "標普500(大盤)", "^IXIC": "那指(科技)", "^SOX": "費半(基石)", "^RUT": "羅素2000(水溫)",
@@ -369,29 +391,44 @@ def get_market_sentiment() -> str:
     return report
 
 @tool()
-def get_stock_news(symbol: str) -> str:
+def get_market_sentiment() -> str:
     """
-    Retrieves the latest news headlines for a specific stock symbol.
+    Analyzes global market sentiment by monitoring key indices, bonds, and commodities.
+    Provides a macro-level overview of capital flows and risk appetite.
     """
+    return build_sentiment_report()
+
+def build_stock_news_report(symbol: str) -> str:
+    """Pure stock-news logic for direct callers and tests."""
     try:
         symbol = normalize_ticker(symbol)
         search_symbol = symbol.upper()
         if search_symbol.isdigit(): search_symbol += ".TW"
         ticker = get_ticker(search_symbol)
         news_list = ticker.news[:10]
-        if not news_list: return "無新聞數據。"
+        if not news_list:
+            return format_tool_error("無新聞數據。", data_unavailable=True)
         report = f"【📰 {symbol} 最新情報】\n"
         for i, item in enumerate(news_list):
             title = item.get('title') or item.get('content', {}).get('title')
             publisher = item.get('publisher') or item.get('content', {}).get('provider', {}).get('displayName', '媒體')
             report += f"{i+1}. [{publisher}] {title}\n"
         return report
-    except Exception as e: return f"新聞異常: {e}"
+    except Exception as e:
+        logger.error(f"Stock news fetch failed for {symbol}: {e}")
+        return format_tool_error(f"新聞異常: {e}", transient=True)
 
-def get_fundamental_data(symbol: str) -> str:
+
+@tool()
+def get_stock_news(symbol: str) -> str:
     """
-    Retrieves key fundamental metrics (EPS, P/E, P/B, Institutional Ownership) for a stock.
+    Retrieves the latest news headlines for a specific stock symbol.
     """
+    return build_stock_news_report(symbol)
+
+
+def build_fundamental_report(symbol: str) -> str:
+    """Pure fundamental snapshot logic for direct callers and tests."""
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
@@ -414,14 +451,19 @@ def get_fundamental_data(symbol: str) -> str:
         
         return report
     except Exception as e:
-        return f"基本面數據獲取失敗: {e}"
+        logger.error(f"Fundamental data fetch failed for {symbol}: {e}")
+        return format_tool_error(f"基本面數據獲取失敗: {e}", data_unavailable=True)
+
 
 @tool()
-def get_technical_analysis(symbol: str) -> str:
+def get_fundamental_data(symbol: str) -> str:
     """
-    Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands).
-    Provides a strategic outlook based on indicator alignment.
+    Retrieves key fundamental metrics (EPS, P/E, P/B, Institutional Ownership) for a stock.
     """
+    return build_fundamental_report(symbol)
+
+def build_technical_report(symbol: str) -> str:
+    """Pure technical-analysis logic for direct callers and tests."""
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
@@ -429,8 +471,8 @@ def get_technical_analysis(symbol: str) -> str:
         is_taiwan = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
         
         # --- 台股使用 Fubon SDK 官方數據 ---
-        if is_taiwan and fubon.fubon_ready:
-            return fubon.get_fubon_technical(clean_symbol)
+        if is_taiwan and _has_fubon_provider():
+            return _fubon_provider.get_fubon_technical(clean_symbol)
             
         # --- 美股使用 yfinance + pandas 自行計算 ---
         ticker = get_ticker(s)
@@ -517,14 +559,20 @@ def get_technical_analysis(symbol: str) -> str:
             report += "🧘 戰略：目前位階中性，建議分批佈局過等待關鍵突破。\n"
         
         return report
-    except Exception as e: return f"❌ 技術分析失敗: {e}"
+    except Exception as e:
+        logger.error(f"Technical analysis failed for {symbol}: {e}")
+        return format_tool_error(f"❌ 技術分析失敗: {e}", data_unavailable=True)
 
 @tool()
-def get_market_movers() -> str:
+def get_technical_analysis(symbol: str) -> str:
     """
-    Retrieves top gainers, losers, and most active stocks.
-    Uses FMP API as primary and YFinance as fallback.
+    Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands).
+    Provides a strategic outlook based on indicator alignment.
     """
+    return build_technical_report(symbol)
+
+def build_movers_report() -> str:
+    """Pure market-movers logic for direct callers and tests."""
     report = "🚀 === 市場異動排行榜 (Movers) ===\n"
     
     if FMP_KEY:
@@ -572,7 +620,9 @@ def get_market_movers() -> str:
                             if pd.notna(prev_close) and pd.notna(curr_close) and prev_close > 0:
                                 chg = ((curr_close / prev_close) - 1) * 100
                                 results.append({'s': s, 'p': curr_close, 'c': chg})
-                except: continue
+                except Exception as scan_exc:
+                    logger.debug(f"Mover scan failed for {s}: {scan_exc}")
+                    continue
                 
         # 排序
         sorted_gainers = sorted(results, key=lambda x: x['c'], reverse=True)
@@ -587,21 +637,28 @@ def get_market_movers() -> str:
             report += f"  - {r['s']}: {r['p']:.2f} ({r['c']:+.2f}%)\n"
             
     except Exception as e:
-        report += f"掃描失敗: {e}\n"
+        logger.error(f"Market movers scan failed: {e}")
+        report += format_tool_error(f"掃描失敗: {e}", transient=True) + "\n"
         
     return report
 
 @tool()
-def get_market_history(symbol: str, days: int = 14) -> str:
+def get_market_movers() -> str:
     """
-    Fetches historical closing prices and volumes for a specific stock (up to 1 month).
+    Retrieves top gainers, losers, and most active stocks.
+    Uses FMP API as primary and YFinance as fallback.
     """
+    return build_movers_report()
+
+def build_market_history_report(symbol: str, days: int = 14) -> str:
+    """Pure market-history logic for direct callers and tests."""
     try:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
         if s.isdigit() and not s.endswith('.TW'): s += '.TW'
         hist = get_ticker(s).history(period="1mo").tail(days)
-        if hist.empty: return f"❌ {symbol} 無法取得歷史數據。"
+        if hist.empty:
+            return format_tool_error(f"❌ {symbol} 無法取得歷史數據。", data_unavailable=True)
         
         report = f"【📅 {symbol} 最近 {len(hist)} 日歷史走勢】\n"
         # 反轉順序，由新到舊顯示
@@ -609,7 +666,16 @@ def get_market_history(symbol: str, days: int = 14) -> str:
             report += f"[{date.strftime('%m/%d')}] 收:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
         return report
     except Exception as e:
-        return f"❌ 歷史數據獲取失敗: {e}"
+        logger.error(f"Market history fetch failed for {symbol}: {e}")
+        return format_tool_error(f"❌ 歷史數據獲取失敗: {e}", data_unavailable=True)
+
+
+@tool()
+def get_market_history(symbol: str, days: int = 14) -> str:
+    """
+    Fetches historical closing prices and volumes for a specific stock (up to 1 month).
+    """
+    return build_market_history_report(symbol, days)
 
 def get_market_calendar() -> str:
     """
@@ -634,7 +700,9 @@ def get_market_calendar() -> str:
                 upcoming = dates[(dates.index >= now) & (dates.index <= end_date)]
                 for d, _ in upcoming.iterrows():
                     events.append(f"  - {d.strftime('%m/%d')} | {s} 財報發布")
-        except: continue
+        except Exception as e:
+            logger.debug(f"Market calendar fetch failed for {s}: {e}")
+            continue
 
     if events:
         report += "【📣 重點財報】\n" + "\n".join(events) + "\n"

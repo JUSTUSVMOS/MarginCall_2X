@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 # 新增 FRED 相關 import
 import json
 from src.database import db_lock, get_connection
-from src.tools import tool
+from src.tools import format_tool_error, tool
 
 # 設定日誌
 logger = logging.getLogger(__name__)
@@ -68,7 +68,9 @@ class MacroEngine:
             try:
                 val = get_ticker(mapping[series_id]).history(period="1d")['Close'].iloc[-1]
                 return val if series_id != 'T10Y2Y' else val - 4.0 # 假定 2Y 在 4%
-            except: pass
+            except Exception as e:
+                logger.debug(f"GEX calculation error: {e}")
+                pass
         return None
 
     def get_macro_dashboard(self):
@@ -107,8 +109,8 @@ def init_market_db():
         for col in ['SOX', 'HYG', 'OIL']:
             try:
                 cursor.execute(f"ALTER TABLE market_history ADD COLUMN {col} REAL")
-            except:
-                pass  # 欄位已存在則忽略
+            except Exception as e:
+                logger.debug(f"Market history migration skipped for {col}: {e}")
         # 新增 V 轉狀態追蹤表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS v_turn_state (
@@ -266,7 +268,8 @@ def get_realtime_spy_gex():
         # 動態無風險利率 (TNX)
         try:
             r = get_ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100.0
-        except:
+        except Exception as e:
+            logger.debug(f"TNX fallback rate used: {e}")
             r = 0.04 # Fallback
 
         expirations = spy.options[:3]
@@ -528,14 +531,10 @@ def get_global_risk_radar(force_refresh: bool = False) -> str:
         return report + ("\n(⚡ DB-Cached)" if snapshot.get("cached") else "")
     except Exception as e:
         logger.error(f"Risk radar analysis failed: {e}")
-        return f"❌ 雷達異常: {e}"
+        return format_tool_error(f"❌ 雷達異常: {e}", transient=True)
 
-@tool()
-def get_v_turn_confirmation() -> str:
-    """
-    Monitors market bottoming signals and "Follow-Through Day" (FTD) events.
-    Combines price action with internal breadth, VIX term structure, and credit spreads.
-    """
+def build_v_turn_report() -> str:
+    """Pure V-turn logic for direct callers and tests."""
     try:
         init_market_db()
 
@@ -639,14 +638,18 @@ def get_v_turn_confirmation() -> str:
         return report
     except Exception as e:
         logger.error(f"V-turn confirmation failed: {e}")
-        return f"❌ V 轉監測失敗: {e}"
+        return format_tool_error(f"❌ V 轉監測失敗: {e}", transient=True)
 
 @tool()
-def get_capital_flow_matrix() -> str:
+def get_v_turn_confirmation() -> str:
     """
-    Calculates ratios and volume dynamics between different sectors and asset classes.
-    Identifies capital migration between tech, utilities, bonds, and currencies.
+    Monitors market bottoming signals and "Follow-Through Day" (FTD) events.
+    Combines price action with internal breadth, VIX term structure, and credit spreads.
     """
+    return build_v_turn_report()
+
+def build_capital_flow_report() -> str:
+    """Pure capital-flow logic for direct callers and tests."""
     try:
         symbols = ['^SOX', 'XLU', 'HG=F', 'GC=F', '^TNX', 'TLT', 'DX-Y.NYB', 'TWD=X', 'JPY=X', '^VIX']
         hist_data = get_download(symbols, period="1mo", group_by='ticker', progress=False)
@@ -721,7 +724,15 @@ def get_capital_flow_matrix() -> str:
         return report
     except Exception as e:
         logger.error(f"Capital Flow Matrix calculation failed: {e}")
-        return f"❌ 資金流向矩陣計算失敗: {e}\n"
+        return format_tool_error(f"❌ 資金流向矩陣計算失敗: {e}", transient=True) + "\n"
+
+@tool()
+def get_capital_flow_matrix() -> str:
+    """
+    Calculates ratios and volume dynamics between different sectors and asset classes.
+    Identifies capital migration between tech, utilities, bonds, and currencies.
+    """
+    return build_capital_flow_report()
 
 if __name__ == "__main__":
     print("🚀 === MarginCall_2X 引擎自檢測試 ===")

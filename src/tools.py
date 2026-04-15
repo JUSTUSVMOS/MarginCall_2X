@@ -43,3 +43,12 @@ def get_tools(mode: str = "all") -> List[Callable]:
     if mode == "all":
         return [entry["func"] for entry in _REGISTRY.values()]
     return [entry["func"] for entry in _REGISTRY.values() if entry["mode"] == mode]
+
+
+def format_tool_error(message: str, *, transient: bool = False, data_unavailable: bool = False) -> str:
+    hints = []
+    if transient:
+        hints.append("[暫時性錯誤，可重試]")
+    if data_unavailable:
+        hints.append("[資料不可用]")
+    return f"{message} {' '.join(hints)}".strip()

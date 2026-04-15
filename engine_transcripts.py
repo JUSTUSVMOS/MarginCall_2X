@@ -1,4 +1,5 @@
 import requests
+import logging
 from bs4 import BeautifulSoup
 import yfinance as yf
 from yf_session import get_ticker, get_download
@@ -9,6 +10,8 @@ from datetime import datetime
 
 # 忽略警告
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
 
 class TranscriptEngine:
     """
@@ -35,7 +38,8 @@ class TranscriptEngine:
             first_word = name.split()[0].split(',')[0].lower()
             slug = re.sub(r'[^a-z0-9]', '', first_word)
             return slug
-        except:
+        except Exception as e:
+            logger.warning(f"Error getting company slug for {self.ticker_symbol}: {e}")
             return self.ticker_symbol.lower()
 
     def get_latest_earnings_info(self):

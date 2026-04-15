@@ -148,7 +148,9 @@ def fetch_nlp_alpha(symbol: str) -> dict:
                 data_time = datetime.datetime.strptime(row[5], '%Y-%m-%d %H:%M:%S')
                 if (datetime.datetime.now() - data_time).total_seconds() > 1800:
                     return {"error": "NLP data expired (over 30 mins). Needs refresh."}
-            except: pass # 若格式不對則跳過時間檢查
+            except Exception as e:
+                logger.debug(f"Cache time check error: {e}")
+                pass # 若格式不對則跳過時間檢查
 
             return {
                 "nlp_alpha": round(row[0], 4),
@@ -195,8 +197,8 @@ def parse_pc_ratio(insight_text: str) -> float:
         match = re.search(r'P/C Ratio:\s*([\d\.]+)', insight_text)
         if match:
             return float(match.group(1))
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to parse P/C ratio: {e}")
     return None
 
 def fetch_strat_data(symbol: str) -> dict:
@@ -247,8 +249,8 @@ def fetch_strat_data(symbol: str) -> dict:
                 logger.warning(f"CVD Alert triggered for {symbol}: {cvd}")
 
             # 抓取技術面 (RSI, MACD 等)
-            tech_report = market.get_technical_analysis(symbol)
-            live_insight = market.get_us_realtime_insight(symbol)
+            tech_report = market.build_technical_report(symbol)
+            live_insight = market.build_realtime_insight(symbol)
             
             data["metrics"] = {
                 "cvd": round(cvd, 4),
@@ -286,17 +288,17 @@ def fetch_strat_data(symbol: str) -> dict:
 
         elif asset_type == 'Macro_Hedge':
             # 抓取價格趨勢 + 總經指標
-            market_sentiment = market.get_market_sentiment()
+            market_sentiment = market.build_sentiment_report()
             data["metrics"] = {
                 "market_sentiment": market_sentiment,
                 "news": market.get_stock_news(symbol),
-                "price": market.get_live_price(symbol)
+                "price": market.fetch_live_price(symbol)
             }
         
         else:
             # 預設回傳基礎數據
             data["metrics"] = {
-                "price": market.get_live_price(symbol),
+                "price": market.fetch_live_price(symbol),
                 "news": market.get_stock_news(symbol)
             }
 

@@ -193,7 +193,8 @@ def get_fubon_inventories():
                     inventory_map[s] = {'shares': qty, 'cost': cost}
 
         return inventory_map
-    except:
+    except Exception as e:
+        logger.warning(f"Fubon data fetch error: {e}")
         return {}
 
 
@@ -214,7 +215,8 @@ def get_fubon_bank_remain():
                 # 確保回傳整數
                 return int(res.data.available_balance)
         return None
-    except:
+    except Exception as e:
+        logger.warning(f"Fubon data fetch error: {e}")
         return None
 
 # 👇 給 AI 用的 Tool 函數

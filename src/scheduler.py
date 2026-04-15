@@ -53,7 +53,7 @@ def auto_v_turn_monitor():
         if not market.is_us_market_open() and now_et.hour < 16:
             return
 
-        report = risk.get_v_turn_confirmation()
+        report = risk.build_v_turn_report()
         if any(keyword in report for keyword in ["✅ 觸發", "偵測", "📈", "📉"]):
             if _bot_instance and _user_id:
                 _bot_instance.send_message(_user_id, report, parse_mode="Markdown")

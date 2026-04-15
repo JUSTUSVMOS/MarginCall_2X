@@ -3,24 +3,24 @@ Description=MarginCall 2X Bot Service
 After=network.target
 
 [Service]
-# 设置工作目录
 WorkingDirectory=/home/margincaller/MarginCall_2X
-
-# 设置环境变量，确保 Python 寻找正确的库和编码
 Environment="PYTHONPATH=/home/margincaller/MarginCall_2X"
 Environment="PYTHONIOENCODING=utf-8"
+Environment="PYTHONUNBUFFERED=1"
 
-# 使用虚拟环境中的 Python 运行 main.py
+# 啟動命令
 ExecStart=/home/margincaller/MarginCall_2X/venv/bin/python /home/margincaller/MarginCall_2X/main.py
 
-# 崩溃时自动重启
+# 快速關閉：不等待，直接送 SIGKILL (解決卡住問題)
+KillMode=process
+SendSIGKILL=yes
+TimeoutStopSec=2s
+
+# 自動重啟
 Restart=always
-RestartSec=10
+RestartSec=5
 
-# 运行用户
 User=margincaller
-
-# 日志输出（通常可以通过 journalctl 查看）
 StandardOutput=append:/home/margincaller/MarginCall_2X/bot.log
 StandardError=append:/home/margincaller/MarginCall_2X/bot.log
 

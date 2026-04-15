@@ -24,7 +24,8 @@ class FundamentalEngine:
         if self._info is None:
             try:
                 self._info = self.ticker.info
-            except:
+            except Exception as e:
+                logger.warning(f"Failed to fetch ticker info for {self.symbol}: {e}")
                 self._info = {}
         return self._info
 
@@ -48,7 +49,8 @@ class FundamentalEngine:
                     return f"{latest/1e9:.1f}B"
                 else:
                     return f"{latest/1e6:.1f}M"
-        except:
+        except Exception as e:
+            logger.debug(f"Error extracting {row_name} for {self.symbol}: {e}")
             return "N/A"
 
     def _extract_last_5_ratio(self, df_num: Optional[pd.DataFrame], row_num: str, df_den: Optional[pd.DataFrame], row_den: str) -> str:
@@ -81,7 +83,8 @@ class FundamentalEngine:
                 return f"{latest:.1f}% ({qoq:+.1f}% QoQ)"
             else:
                 return f"{latest:.1f}%"
-        except:
+        except Exception as e:
+            logger.debug(f"Error calculating ratio {row_num}/{row_den} for {self.symbol}: {e}")
             return "N/A"
     # ==========================================
     # 保留最原始的方法 (回傳 DataFrame)，防止破壞其他依賴
@@ -234,7 +237,8 @@ class FundamentalEngine:
                     res['最新財報驚喜'] = f"預估: {est} | 實際: {rep} | 驚喜差距: {surp_pct:+.2f}%" if isinstance(surp_pct, (int, float)) else f"預估: {est} | 實際: {rep}"
                 else:
                     res['最新財報驚喜'] = "無歷史開獎資料"
-        except:
+        except Exception as e:
+            logger.debug(f"Earnings surprise parsing failed for {self.symbol}: {e}")
             res['最新財報驚喜'] = "解析失敗"
             
         return res

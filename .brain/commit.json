@@ -1,45 +1,45 @@
 {
   "state": {
-    "frontalLobe": "Market View: Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery in Panels/Memory.\nCore Levels: Watch TAIEX 35,500 support; TSMC 2000 psychological level.\nPortfolio Health: Risk-on mode fully engaged; global risk score at 0.\nNext Round: If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical positions.",
+    "frontalLobe": "Market View: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.\nCore Levels: TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).\nPortfolio Health: Risk-on, but monitoring TSM earnings (4/16) for potential \"sell the news\" volatility.\nNext Round: If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge.",
     "emotion": "confident",
     "marketRegime": {
-      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康",
+      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 23。核心觀察：🟠 尾部風險升溫",
       "state": "🟢 多頭",
-      "riskScore": 0,
-      "updatedAt": "2026-04-14T06:20:32Z",
+      "riskScore": 23,
+      "updatedAt": "2026-04-14T21:07:25Z",
       "source": "macro_heartbeat",
       "watchpoints": [
-        "殖利率曲線 10Y-2Y: 0.297",
-        "GEX: 0.0B",
+        "殖利率曲線 10Y-2Y: 0.256",
+        "GEX: 2.96B",
         "市場情緒: 中性 (0.0)",
-        "SPX: 6886.2 / MA20 6614.9 / MA200 6667.3",
-        "🟢 指標目前健康"
+        "SPX: 6967.4 / MA20 6628.3 / MA200 6671.3",
+        "🟠 尾部風險升溫"
       ],
       "reasons": [
-        "🟢 指標目前健康"
+        "🟠 尾部風險升溫"
       ],
       "signals": {
-        "yieldCurve10Y2Y": 0.297,
-        "fedFundsRate": 3.6,
+        "yieldCurve10Y2Y": 0.256,
+        "fedFundsRate": 3.61,
         "dixPr": 0.64,
-        "gexBillions": 0.0,
+        "gexBillions": 2.96,
         "sentimentScore": 0.0,
         "sentimentLabel": "中性",
-        "spx": 6886.2,
-        "spx10Ma": 6657.0,
-        "spx20Ma": 6614.9,
-        "spx200Ma": 6667.3,
+        "spx": 6967.4,
+        "spx10Ma": 6719.3,
+        "spx20Ma": 6628.3,
+        "spx200Ma": 6671.3,
         "dxyZ": NaN,
         "tnxZ": NaN,
         "vixZ": NaN,
-        "skewPr": 0.44
+        "skewPr": 0.95
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-14T06:20:32Z",
-      "lastMacroChangeAt": "2026-04-14T06:20:32Z",
+      "lastMacroSyncAt": "2026-04-14T21:07:25Z",
+      "lastMacroChangeAt": "2026-04-14T21:07:25Z",
       "lastSyncStatus": "updated",
-      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康"
+      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 23。核心觀察：🟠 尾部風險升溫"
     }
   },
   "commits": [
@@ -264,15 +264,82 @@
       "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 指標目前健康",
       "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=0.64, SPX=6886.20",
       "frontal_lobe_ref": "Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery... | Next: If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical...",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": 0,
         "risk_score_to": 0,
         "state_from": "🟢 多頭",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康"
+      }
+    },
+    {
+      "hash": "6889374a",
+      "parent_hash": "4b07c039",
+      "timestamp": "2026-04-14 20:08:56",
+      "type": "market_regime",
+      "summary": "🟡 整理 RISK UP: 0 -> 42 | 🔴 波動率失控 / 負 Gamma (-0.00B)",
+      "key_signals": "GEX=-0.00B, VIX_Z=+nan, DIX_PR=0.64, SPX=6886.20",
+      "frontal_lobe_ref": "Bullish - TAIEX vertical breakout (36k+) driven by TSMC and cyclical recovery... | Next: If TWD reverses past 31.8 or TSMC breaks 5MA, I will trim high-beta cyclical...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 42,
+        "state_from": "🟢 多頭",
+        "state_to": "🟡 整理",
+        "summary": "市場處於整理盤，適合等待更清楚的方向再擴大部位。 當前 regime：🟡 整理，風險分數 42。核心觀察：🔴 波動率失控 / 負 Gamma (-0.00B)"
+      }
+    },
+    {
+      "hash": "3806f846",
+      "parent_hash": "6889374a",
+      "timestamp": "2026-04-14 21:56:29",
+      "type": "frontal_lobe",
+      "summary": "🧠 NOTE: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | TSM Support at $369 (POC) and $345 (MA20); Resistance at...",
+      "key_signals": "RISK=42 | REGIME=🟡 整理 | GEX=-0.00B, VIX_Z=+nan, DIX_PR=0.64",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "frontal_lobe_write",
+      "delta": {
+        "market_view": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.",
+        "core_levels": "TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).",
+        "portfolio_health": "Risk-on, but monitoring TSM earnings (4/16) for potential \"sell the news\" volatility.",
+        "next_round": "If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge."
+      }
+    },
+    {
+      "hash": "debaa8e1",
+      "parent_hash": "3806f846",
+      "timestamp": "2026-04-14 23:36:25",
+      "type": "market_regime",
+      "summary": "🟡 整理 RISK HOLD: 42 -> 42 | 🔴 波動率失控 / 負 Gamma (-3.47B)",
+      "key_signals": "GEX=-3.47B, VIX_Z=+nan, DIX_PR=0.64, SPX=6886.20",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 42,
+        "risk_score_to": 42,
+        "state_from": "🟡 整理",
+        "state_to": "🟡 整理",
+        "summary": "市場處於整理盤，適合等待更清楚的方向再擴大部位。 當前 regime：🟡 整理，風險分數 42。核心觀察：🔴 波動率失控 / 負 Gamma (-3.47B)"
+      }
+    },
+    {
+      "hash": "1e8f7290",
+      "parent_hash": "debaa8e1",
+      "timestamp": "2026-04-15 05:07:25",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK DOWN: 42 -> 23 | 🟠 尾部風險升溫",
+      "key_signals": "GEX=+2.96B, VIX_Z=+nan, DIX_PR=0.64, SPX=6967.40",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "delta": {
+        "risk_score_from": 42,
+        "risk_score_to": 23,
+        "state_from": "🟡 整理",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 23。核心觀察：🟠 尾部風險升溫"
       },
       "source": "macro_heartbeat"
     }
   ],
-  "head": "4b07c039"
+  "head": "1e8f7290"
 }

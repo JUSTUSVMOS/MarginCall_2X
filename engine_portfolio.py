@@ -2,21 +2,24 @@ import json
 import time
 import os
 import csv
+import logging
 import yfinance as yf
 import fubon
 from typing import Dict, List
 from yf_session import get_ticker
 from src.database import db_lock, get_connection
 from src.symbols import normalize_ticker
-from src.tools import tool
+from src.tools import format_tool_error, tool
+
+logger = logging.getLogger(__name__)
 
 CSV_BACKUP = "my_portfolio.csv"
 
 # --- 匯率快取 ---
 _fx_cache = {"rate": 32.0, "timestamp": 0}
 
-@tool()
-def get_exchange_rate() -> float:
+def fetch_exchange_rate() -> float:
+    """Pure FX-rate logic for direct callers and tests."""
     global _fx_cache
     current_time = time.time()
     if current_time - _fx_cache["timestamp"] < 600:
@@ -27,8 +30,14 @@ def get_exchange_rate() -> float:
         _fx_cache["rate"] = round(float(rate), 2)
         _fx_cache["timestamp"] = current_time
         return _fx_cache["rate"]
-    except:
+    except Exception as e:
+        logger.warning(f"Exchange rate refresh failed, using cache: {e}")
         return _fx_cache["rate"]
+
+
+@tool()
+def get_exchange_rate() -> float:
+    return fetch_exchange_rate()
 
 # --- 資料庫初始化與遷移 ---
 def init_db():
@@ -47,8 +56,8 @@ def init_db():
         # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
         try:
             cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Portfolio migration skipped: {e}")
         conn.commit()
 
         # 檢查是否需要從 CSV 遷移
@@ -63,7 +72,7 @@ def init_db():
                             sym = row[0].upper()
                             cost = float(row[1])
                             shares = float(row[2])
-                            twd_c = float(row[3]) if len(row) >= 4 else (cost * shares * (get_exchange_rate() if ".TW" not in sym and "CASH" not in sym else 1.0))
+                            twd_c = float(row[3]) if len(row) >= 4 else (cost * shares * (fetch_exchange_rate() if ".TW" not in sym and "CASH" not in sym else 1.0))
                             locked = int(row[4]) if len(row) >= 5 else 0
                             cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (sym, cost, shares, twd_c, locked))
                 conn.commit()
@@ -77,19 +86,12 @@ def init_db():
 # 啟動時自動初始化
 init_db()
 
-@tool(mode="write")
-def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
-    """
-    Updates a portfolio position or cash balance.
-    action: 'buy', 'sell', or 'set' (manual adjustment).
-    price: unit price in original currency.
-    shares: quantity to change.
-    locked: 1 to lock position from AI trading, 0 to unlock.
-    """
+def execute_position_update(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
+    """Pure portfolio-write logic for direct callers and tests."""
     symbol = normalize_ticker(symbol)
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
     is_cash = 'CASH' in symbol
-    fx_rate = get_exchange_rate() if (not is_taiwan and not is_cash) else 1.0
+    fx_rate = fetch_exchange_rate() if (not is_taiwan and not is_cash) else 1.0
     
     # 核心邏輯：計算該次異動的台幣價值
     if total_amount_twd:
@@ -151,9 +153,21 @@ def update_position(symbol: str, price: float, shares: float, action: str = 'set
             conn.commit()
             return msg
         except Exception as e:
-            return f"❌ 記帳異常: {e}"
+            logger.error(f"Position update failed for {symbol}: {e}")
+            return format_tool_error(f"❌ 記帳異常: {e}", transient=True)
         finally:
             conn.close()
+
+@tool(mode="write")
+def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
+    """
+    Updates a portfolio position or cash balance.
+    action: 'buy', 'sell', or 'set' (manual adjustment).
+    price: unit price in original currency.
+    shares: quantity to change.
+    locked: 1 to lock position from AI trading, 0 to unlock.
+    """
+    return execute_position_update(symbol, price, shares, action, total_amount_twd, locked)
 
 # --- 標的名對應表 (手動維護優先，其餘自動偵測) ---
 SYMBOL_NAME_MAP = {
@@ -194,8 +208,8 @@ def get_symbol_name(symbol: str) -> str:
             import yfinance as yf
             ticker = get_ticker(clean_sym, cache_level="daily")
             name = ticker.info.get('shortName') or ticker.info.get('longName') or clean_sym
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Symbol name lookup failed for {symbol}: {e}")
 
     # 特殊字尾裝飾
     if '_ESOP' in symbol or '_TRUST' in symbol:
@@ -204,12 +218,8 @@ def get_symbol_name(symbol: str) -> str:
     _AUTO_NAME_CACHE[symbol] = name
     return name
 
-@tool()
-def get_portfolio_raw_data() -> str:
-    """
-    Retrieves current portfolio positions and balances.
-    Synchronizes with Fubon Securities if the SDK is available.
-    """
+def build_portfolio_raw_data() -> str:
+    """Pure portfolio snapshot logic for direct callers and tests."""
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
@@ -305,23 +315,29 @@ def get_portfolio_raw_data() -> str:
             lines = [f"{r['symbol']}|{r['shares']}sh|cost={r['cost']}|{r['market']}" for r in records]
             return "\n".join(lines)
         except Exception as e:
-            print(f"❌ 帳務同步異常: {e}")
-            return "[]"
+            logger.error(f"Portfolio snapshot failed: {e}")
+            return format_tool_error("[]", transient=True)
         finally:
             conn.close()
 
+
 @tool()
-def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
+def get_portfolio_raw_data() -> str:
     """
-    Calculates profit and loss (PNL) for a specific position.
-    Converts foreign values to TWD and accounts for estimated exchange fees.
+    Retrieves current portfolio positions and balances.
+    Synchronizes with Fubon Securities if the SDK is available.
     """
+    return build_portfolio_raw_data()
+
+
+def calculate_position_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
+    """Pure PnL logic for direct callers and tests."""
     # 識別市場
     is_uk_stock = symbol.endswith('.L') or symbol.endswith('.IL')
     is_foreign = is_us_stock or is_uk_stock or symbol == 'CASH_USD'
     
     # 取得匯率
-    raw_fx = get_exchange_rate() if is_foreign else 1.0
+    raw_fx = fetch_exchange_rate() if is_foreign else 1.0
     # 海外資產換回台幣需扣除約 0.2% 換匯手續費與價差
     settle_fx = raw_fx * 0.998 if is_foreign else 1.0
 
@@ -349,3 +365,12 @@ def calculate_pnl(symbol: str, current_price: float, shares: float, historical_t
         "pnl_percent": round(pnl_percent, 2),
         "market": "UK" if is_uk_stock else "US" if is_us_stock else "TW"
     }
+
+
+@tool()
+def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
+    """
+    Calculates profit and loss (PNL) for a specific position.
+    Converts foreign values to TWD and accounts for estimated exchange fees.
+    """
+    return calculate_position_pnl(symbol, current_price, shares, historical_twd_cost, is_us_stock)
