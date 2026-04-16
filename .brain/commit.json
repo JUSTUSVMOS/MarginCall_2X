@@ -1,16 +1,16 @@
 {
   "state": {
-    "frontalLobe": "Market View: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.\nCore Levels: TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).\nPortfolio Health: NAV: NT$99,441 | PnL: +9.6% | Top3 集中度: 58% (⚠️ 總體損益波動劇烈)\nNext Round: If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge. Advised user to hold 00997A as it's a long-term growth vehicle, not a day-trading scalp.",
+    "frontalLobe": "Market View: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.\nCore Levels: TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).\nPortfolio Health: NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)\nNext Round: If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge. Advised user to hold 00997A as it's a long-term growth vehicle, not a day-trading scalp.",
     "emotion": "cautious",
     "marketRegime": {
       "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
       "state": "🟢 多頭",
       "riskScore": 0,
-      "updatedAt": "2026-04-15T22:45:07Z",
+      "updatedAt": "2026-04-16T15:12:02Z",
       "source": "macro_heartbeat",
       "watchpoints": [
         "殖利率曲線 10Y-2Y: 0.282",
-        "GEX: 42.85B",
+        "GEX: 5.31B",
         "市場情緒: 中性 (0.0)",
         "SPX: 7023.0 / MA20 6643.6 / MA200 6675.3",
         "🟢 暗池吸籌，大戶提供下檔支撐"
@@ -21,8 +21,8 @@
       "signals": {
         "yieldCurve10Y2Y": 0.282,
         "fedFundsRate": 3.61,
-        "dixPr": 0.96,
-        "gexBillions": 42.85,
+        "dixPr": 1.0,
+        "gexBillions": 5.31,
         "sentimentScore": 0.0,
         "sentimentLabel": "中性",
         "spx": 7023.0,
@@ -36,8 +36,8 @@
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-15T22:45:07Z",
-      "lastMacroChangeAt": "2026-04-15T22:45:07Z",
+      "lastMacroSyncAt": "2026-04-16T15:12:02Z",
+      "lastMacroChangeAt": "2026-04-16T15:12:02Z",
       "lastSyncStatus": "updated",
       "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
     }
@@ -447,14 +447,14 @@
       "summary": "🟡 整理 RISK UP: 0 -> 34 | 🔴 波動率失控 / 負 Gamma (-0.34B)",
       "key_signals": "GEX=-0.34B, VIX_Z=+nan, DIX_PR=0.96, SPX=6967.40",
       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": 0,
         "risk_score_to": 34,
         "state_from": "🟢 多頭",
         "state_to": "🟡 整理",
         "summary": "市場處於整理盤，適合等待更清楚的方向再擴大部位。 當前 regime：🟡 整理，風險分數 34。核心觀察：🔴 波動率失控 / 負 Gamma (-0.34B)；🟠 尾部風險升溫；🟢 暗池吸籌，大戶提供下檔支撐"
-      },
-      "source": "macro_heartbeat"
+      }
     },
     {
       "hash": "d85e2059",
@@ -464,10 +464,10 @@
       "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$109,643 | PnL: +20.8% | Top3 集中度: 58% (⚠️ 總體損益波動劇烈)",
       "key_signals": "RISK=34 | REGIME=🟡 整理 | GEX=-0.34B, VIX_Z=+nan, DIX_PR=0.96",
       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "portfolio_review",
       "delta": {
         "portfolio_health": "NAV: NT$109,643 | PnL: +20.8% | Top3 集中度: 58% (⚠️ 總體損益波動劇烈)"
-      },
-      "source": "portfolio_review"
+      }
     },
     {
       "hash": "6b16ea0c",
@@ -477,14 +477,14 @@
       "summary": "🟢 多頭 RISK DOWN: 34 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
       "key_signals": "GEX=+42.85B, VIX_Z=+nan, DIX_PR=0.96, SPX=7023.00",
       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": 34,
         "risk_score_to": 0,
         "state_from": "🟡 整理",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      },
-      "source": "macro_heartbeat"
+      }
     },
     {
       "hash": "278c64db",
@@ -494,11 +494,144 @@
       "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$99,441 | PnL: +9.6% | Top3 集中度: 58% (⚠️ 總體損益波動劇烈)",
       "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+42.85B, VIX_Z=+nan, DIX_PR=0.96",
       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "portfolio_review",
       "delta": {
         "portfolio_health": "NAV: NT$99,441 | PnL: +9.6% | Top3 集中度: 58% (⚠️ 總體損益波動劇烈)"
+      }
+    },
+    {
+      "hash": "9838ecb0",
+      "parent_hash": "278c64db",
+      "timestamp": "2026-04-16 12:44:54",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "e2dae743",
+      "parent_hash": "9838ecb0",
+      "timestamp": "2026-04-16 12:46:00",
+      "type": "frontal_lobe_patch",
+      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$97,694 | PnL: -0.1% | Top3 集中度: 48%",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.00B, VIX_Z=+nan, DIX_PR=1.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "manual_force_update",
+      "delta": {
+        "portfolio_health": "NAV: NT$97,694 | PnL: -0.1% | Top3 集中度: 48%"
+      }
+    },
+    {
+      "hash": "fe68c01e",
+      "parent_hash": "e2dae743",
+      "timestamp": "2026-04-16 13:04:59",
+      "type": "frontal_lobe_patch",
+      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$132,897 | PnL: -0.1% | Top3 集中度: 57%",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.00B, VIX_Z=+nan, DIX_PR=1.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "manual_correction",
+      "delta": {
+        "portfolio_health": "NAV: NT$132,897 | PnL: -0.1% | Top3 集中度: 57%"
+      }
+    },
+    {
+      "hash": "376c7918",
+      "parent_hash": "fe68c01e",
+      "timestamp": "2026-04-16 13:18:16",
+      "type": "frontal_lobe_patch",
+      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$143,620 | PnL: +8.0% | Top3 集中度: 59% (⚠️ 總體損益波動劇烈)",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.00B, VIX_Z=+nan, DIX_PR=1.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "portfolio_review",
+      "delta": {
+        "portfolio_health": "NAV: NT$143,620 | PnL: +8.0% | Top3 集中度: 59% (⚠️ 總體損益波動劇烈)"
+      }
+    },
+    {
+      "hash": "43d0c369",
+      "parent_hash": "376c7918",
+      "timestamp": "2026-04-16 13:26:06",
+      "type": "frontal_lobe_patch",
+      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$143,641 | PnL: +8.0% | Top3 集中度: 59% (⚠️ 總體損益波動劇烈)",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.00B, VIX_Z=+nan, DIX_PR=1.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "portfolio_review",
+      "delta": {
+        "portfolio_health": "NAV: NT$143,641 | PnL: +8.0% | Top3 集中度: 59% (⚠️ 總體損益波動劇烈)"
+      }
+    },
+    {
+      "hash": "caa52126",
+      "parent_hash": "43d0c369",
+      "timestamp": "2026-04-16 16:26:17",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      }
+    },
+    {
+      "hash": "57546e43",
+      "parent_hash": "caa52126",
+      "timestamp": "2026-04-16 20:11:56",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+75.36B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      },
+      "source": "macro_heartbeat"
+    },
+    {
+      "hash": "d689bbce",
+      "parent_hash": "57546e43",
+      "timestamp": "2026-04-16 20:11:57",
+      "type": "frontal_lobe_patch",
+      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+75.36B, VIX_Z=+nan, DIX_PR=1.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "delta": {
+        "portfolio_health": "NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)"
       },
       "source": "portfolio_review"
+    },
+    {
+      "hash": "8da22aa6",
+      "parent_hash": "d689bbce",
+      "timestamp": "2026-04-16 23:12:02",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+      "key_signals": "GEX=+5.31B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
+      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      },
+      "source": "macro_heartbeat"
     }
   ],
-  "head": "278c64db"
+  "head": "8da22aa6"
 }

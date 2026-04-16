@@ -282,11 +282,14 @@ def build_realtime_insight(symbol: str) -> str:
         poc_price = (poc_bin.left + poc_bin.right) / 2
         vp_status = "🛡️ 支撐" if df['Close'].iloc[-1] > poc_price else "🧱 壓力"
 
-        # 📊 成交量爆發力 (Volume Ratio) - 修正時間加權 Bug
+        # 📊 成交量爆發力與換手率 (Volume & Turnover)
         vol_ratio_report = "N/A"
+        turnover_report = "N/A"
         try:
             avg_vol = info.get('averageVolume')
             curr_vol = info.get('regularMarketVolume')
+
+            # 1. Volume Ratio (時間加權成交量能比) - 保持您原本的邏輯
             if avg_vol and curr_vol and avg_vol > 0:
                 import pytz
                 est = pytz.timezone('US/Eastern')
@@ -304,13 +307,23 @@ def build_realtime_insight(symbol: str) -> str:
                         expected_vol_at_now = (avg_vol / 390) * elapsed_mins
                         vol_ratio = curr_vol / expected_vol_at_now
                         vol_ratio_report = f"{vol_ratio:.2f}x"
+                        
+            # [新增] 2. 換手率 (Turnover Rate) 與 AI 訊號
+            if curr_vol and curr_vol > 0:
+                # 穩健容錯: 優先使用 floatShares，若無則降級使用 sharesOutstanding
+                base_shares = info.get('floatShares') or info.get('sharesOutstanding')
+                if base_shares and base_shares > 0:
+                    turnover_rate = (curr_vol / base_shares) * 100
+                    turnover_report = f"{turnover_rate:.2f}%"
+                    if turnover_rate > 5.0:  # 訊號生成: 日換手 >5% 視為籌碼極度活躍
+                        turnover_report += " 🔥籌碼活躍"
         except Exception as e:
-            logger.debug(f"Stage 1 info fetching failed for {symbol}: {e}")
+            logger.debug(f"Volume/Turnover metrics fetching failed for {symbol}: {e}")
             pass
 
         report = f"🚀 === {symbol} 美股即時戰情 ===\n"
         report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f} | P/C Ratio: {pc_report}\n"
-        report += f"● 成交量能比: {vol_ratio_report} | POC 密集區: {poc_price:.2f} ({vp_status})\n"
+        report += f"● 成交量能比: {vol_ratio_report} | 換手率: {turnover_report} | POC 密集區: {poc_price:.2f} ({vp_status})\n"
         report += "【📊 最近 5 根 K 線】\n"
         for _, row in df.tail(5).iterrows():
             report += f"  [{row.name.strftime('%H:%M')}] {'🟢' if row['Close']>row['Open'] else '🔴'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"

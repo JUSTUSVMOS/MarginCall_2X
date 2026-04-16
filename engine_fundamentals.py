@@ -118,6 +118,21 @@ class FundamentalEngine:
     def get_valuation_metrics(self) -> Dict[str, Any]:
         info = self.info
         inst_own = info.get('heldPercentInstitutions')
+
+        # [新增] 放空比率 (Short % of Float) 邏輯與 AI 訊號生成
+        short_pct_float = "N/A"
+        short_shares = info.get('sharesShort')
+        if short_shares:
+            # 穩健容錯: 優先使用 floatShares，若無則降級使用 sharesOutstanding
+            base_shares = info.get('floatShares') or info.get('sharesOutstanding')
+            if base_shares and base_shares > 0:
+                pct = (short_shares / base_shares) * 100
+                short_pct_float = f"{pct:.2f}%"
+                if pct > 15.0: # 訊號生成: >15% 視為高軋空潛力
+                    short_pct_float += " ⚠️高軋空潛力"
+        elif info.get('shortPercentOfFloat'):
+            short_pct_float = f"{info.get('shortPercentOfFloat') * 100:.2f}%"
+
         return {
             "市值": f"{info.get('marketCap', 0)/1e9:.2f}B" if info.get('marketCap') else 'N/A',
             "本益比(PE)": info.get('trailingPE', 'N/A'),
@@ -126,6 +141,7 @@ class FundamentalEngine:
             "企業倍數(EV/EBITDA)": info.get('enterpriseToEbitda', 'N/A'),
             "股息殖利率": f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "0.00%",
             "空頭回補天數": info.get('shortRatio', 'N/A'),
+            "放空比率(Short%)": short_pct_float,
             "機構持倉比": f"{inst_own*100:.1f}%" if inst_own is not None else "N/A"
         }
 
@@ -306,7 +322,7 @@ class FundamentalEngine:
         report = f"💎 === {self.symbol} 深度基本面全武裝 (含時間序列與預估) ===\n"
         report += f"【🏢 1. 公司概況】\n- 名稱: {profile['公司名稱']} | 產業: {profile['產業']}\n- CEO: {profile['CEO']} | 員工數: {profile['員工數']} | 網站: {profile.get('官方網站')}\n- 簡介: {profile['公司簡介']}\n"
         
-        report += f"【💰 2. 關鍵估值】\n- 市值: {val['市值']} | PE: {val['本益比(PE)']} | 預估PE: {val['預估PE(Forward)']}\n- PB: {val['市淨率(PB)']} | EV/EBITDA: {val['企業倍數(EV/EBITDA)']} | 股息: {val['股息殖利率']}\n- 空頭回補天數: {val['空頭回補天數']} | 機構持倉: {val['機構持倉比']}\n"
+        report += f"【💰 2. 關鍵估值】\n- 市值: {val['市值']} | PE: {val['本益比(PE)']} | 預估PE: {val['預估PE(Forward)']}\n- PB: {val['市淨率(PB)']} | EV/EBITDA: {val['企業倍數(EV/EBITDA)']} | 股息: {val['股息殖利率']}\n- 空頭回補天數: {val['空頭回補天數']} | 放空比率: {val['放空比率(Short%)']} | 機構持倉: {val['機構持倉比']}\n"
         
         report += f"【📊 3. 財務報表 (動態 QoQ 追蹤)】\n"
         if "error" not in stmts:

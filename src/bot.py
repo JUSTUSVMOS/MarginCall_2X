@@ -41,7 +41,7 @@ READ_ONLY_TOOLS = get_tools("read") + [
 ]
 _handlers_registered = False
 _runtime_initialized = False
-_v_turn_active = True
+_v_turn_active = False
 
 
 def _require_bot():
@@ -230,6 +230,24 @@ def toggle_v_turn(message):
     _require_bot().reply_to(message, f"V 轉監控 {status}")
 
 
+def handle_unknown_command(message):
+    """
+    攔截所有未定義的 / 指令，避免送往 AI 浪費 token。
+    """
+    if not _is_authorized(message):
+        return
+
+    help_text = (
+        "❓ *未知指令*\n\n"
+        "目前支援的指令如下：\n"
+        "🔍 `/analyze <代號>` - 深度分析股票 (雙重視角戰報)\n"
+        "📝 `/trade <內容>` - 快速記帳模式\n"
+        "🧹 `/reset` - 清空對話記憶\n"
+        "🟢 `/vturn` - 切換 V 轉監控狀態"
+    )
+    _require_bot().reply_to(message, help_text, parse_mode="Markdown")
+
+
 def handle_all_text(message):
     if not _is_authorized(message):
         return
@@ -259,6 +277,7 @@ def register_handlers():
     bot_instance.register_message_handler(reset_memory, commands=["reset"])
     bot_instance.register_message_handler(handle_trade_command, commands=["trade"])
     bot_instance.register_message_handler(toggle_v_turn, commands=["vturn"])
+    bot_instance.register_message_handler(handle_unknown_command, func=lambda message: message.text and message.text.startswith("/"))
     bot_instance.register_message_handler(handle_all_text, func=lambda message: True)
     _handlers_registered = True
 

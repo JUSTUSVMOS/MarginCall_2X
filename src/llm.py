@@ -31,6 +31,7 @@ TOOL_SUPPORTED_MODELS = {
 
 # 重活：主對話 (需要 tool calling + 深度推理)
 HEAVY_MODELS = [
+    "gemma-4-31b-it",
     "gemini-3.1-flash-lite-preview",
     "minimax/minimax-m2.5:free",
     "openai/gpt-oss-120b:free",
