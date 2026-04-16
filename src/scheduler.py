@@ -36,6 +36,18 @@ def daily_nlp_scout():
         time.sleep(20)
 
 
+def daily_portfolio_review():
+    """定期執行持倉健檢並更新額葉 (Portfolio Health)"""
+    try:
+        import engine_portfolio as portfolio
+        data = portfolio.refresh_portfolio_health_summary(source="portfolio_review")
+        logger.info(f"📊 [PortfolioReview] {data['memory_update']['message']} -> {data['summary']}")
+        return data
+    except Exception as exc:
+        logger.error(f"Daily portfolio review failed: {exc}")
+        return None
+
+
 def macro_brain_heartbeat(force=False):
     result = memory.sync_market_brain(force=force, max_age_minutes=180)
     logger.info(f"🧠 [MacroHeartbeat] {result['message']}")
@@ -72,6 +84,7 @@ def start_scheduler():
         macro_brain_heartbeat(force=False)
     except Exception as exc:
         logger.error(f"Initial macro heartbeat failed: {exc}")
+    daily_portfolio_review()
 
     scheduler.add_job(auto_v_turn_monitor, "interval", hours=2, id="auto-v-turn-monitor", replace_existing=True)
     scheduler.add_job(
@@ -80,6 +93,14 @@ def start_scheduler():
         hours=3,
         id="macro-brain-heartbeat",
         next_run_time=datetime.now(pytz.timezone("Asia/Taipei")),
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        daily_portfolio_review,
+        "cron",
+        hour=8,
+        minute=5,
+        id="daily-portfolio-review",
         replace_existing=True,
     )
     scheduler.add_job(daily_nlp_scout, "interval", hours=4, id="daily-nlp-scout", replace_existing=True)

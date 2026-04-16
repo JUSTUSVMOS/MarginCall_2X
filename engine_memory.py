@@ -229,6 +229,11 @@ def parse_frontal_lobe_note(content: str) -> Dict[str, str]:
             sections[label] = value
     return sections
 
+def _coerce_frontal_lobe_sections(content: str) -> Dict[str, str]:
+    if not content or not content.strip():
+        return parse_frontal_lobe_note("")
+    return parse_frontal_lobe_note(normalize_frontal_lobe_note(content))
+
 def _format_signal_value(key: str, value: Any) -> str:
     if isinstance(value, float):
         if key in {"vixZ", "tnxZ", "dxyZ", "sentimentScore", "yieldCurve10Y2Y"}:
@@ -638,6 +643,38 @@ class Brain:
 
     # ==================== Mutations (寫入記憶) ====================
 
+    def update_lobe_section(self, section_name: str, new_content: str, source: str = "system") -> Dict[str, Any]:
+        """精準更新額葉的特定區塊，保留其他部分"""
+        if section_name not in FRONTAL_LOBE_FIELDS:
+            return {"success": False, "message": f"Invalid section: {section_name}"}
+        
+        current_note = self.state.get("frontalLobe") or ""
+        sections = _coerce_frontal_lobe_sections(current_note)
+        
+        # 更新指定區塊
+        sections[section_name] = new_content.strip()
+        
+        # 重新組裝 Markdown 格式的內容
+        lines = [f"{field}: {sections[field]}" for field in FRONTAL_LOBE_FIELDS]
+        if sections.get("Context Note"):
+            lines.append(f"Context Note: {sections['Context Note']}")
+        
+        normalized_note = "\n".join(lines)
+        self.state["frontalLobe"] = normalized_note
+        
+        # 建立 commit
+        summary = f"🧠 {section_name.upper()} AUTO-UPDATE: {_shorten(new_content, 80)}"
+        delta_key = section_name.lower().replace(" ", "_")
+        self._create_commit(
+            "frontal_lobe_patch",
+            summary,
+            delta={delta_key: new_content},
+            key_signals=self._compose_market_signal_summary(self.state.get("marketRegime")),
+            frontal_lobe_ref=self._build_frontal_lobe_ref(normalized_note),
+            source=source
+        )
+        return {"success": True, "message": f"Frontal lobe section '{section_name}' updated."}
+
     def update_frontal_lobe(self, content: str) -> Dict[str, Any]:
         normalized_note = normalize_frontal_lobe_note(content)
         self.state["frontalLobe"] = normalized_note
@@ -914,6 +951,9 @@ def sync_market_brain(force: bool = False, max_age_minutes: int = 180) -> Dict[s
 
 def build_cognitive_context(max_age_minutes: int = 180) -> str:
     return _global_brain.get_cognitive_context(max_age_minutes=max_age_minutes)
+
+def patch_frontal_lobe_section(section_name: str, content: str, source: str = "system") -> Dict[str, Any]:
+    return _global_brain.update_lobe_section(section_name, content, source=source)
 
 if __name__ == "__main__":
     # 自檢測試

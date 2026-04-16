@@ -5,7 +5,7 @@ import csv
 import logging
 import yfinance as yf
 import fubon
-from typing import Dict, List
+from typing import Any, Dict, List
 from yf_session import get_ticker
 from src.database import db_lock, get_connection
 from src.symbols import normalize_ticker
@@ -83,7 +83,7 @@ def init_db():
                 logger.warning(f"⚠️ 遷移失敗: {e}")
         conn.close()
 
-def execute_position_update(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
+def execute_position_update(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None, sync_memory: bool = False) -> str:
     """Pure portfolio-write logic for direct callers and tests."""
     symbol = normalize_ticker(symbol)
     is_taiwan = (any(char.isdigit() for char in symbol) and len(symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
@@ -102,6 +102,8 @@ def execute_position_update(symbol: str, price: float, shares: float, action: st
     # 美股扣款原幣，台股扣款台幣
     settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
 
+    result_message = ""
+    should_refresh_memory = False
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
@@ -119,41 +121,55 @@ def execute_position_update(symbol: str, price: float, shares: float, action: st
 
             if action == 'buy':
                 if cash_pos[1] < settle_amount:
-                    return f"❌ 買進失敗：{settle_currency} 餘額不足！(剩 {cash_pos[1]:.2f})"
-                new_shares = old_pos[1] + shares
-                new_twd_cost = old_pos[2] + actual_twd_total
-                new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
-                cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, new_cost, new_shares, new_twd_cost, current_locked))
-                cursor.execute("UPDATE portfolio SET shares = shares - ?, twd_cost = twd_cost - ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
-                msg = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
+                    result_message = f"❌ 買進失敗：{settle_currency} 餘額不足！(剩 {cash_pos[1]:.2f})"
+                else:
+                    new_shares = old_pos[1] + shares
+                    new_twd_cost = old_pos[2] + actual_twd_total
+                    new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
+                    cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, new_cost, new_shares, new_twd_cost, current_locked))
+                    cursor.execute("UPDATE portfolio SET shares = shares - ?, twd_cost = twd_cost - ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+                    result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
+                    should_refresh_memory = True
             
             elif action == 'sell':
                 if old_pos[3] == 1:
-                    return f"❌ 賣出失敗：標的 {symbol} 被鎖定 (福利信託/長期持有)，禁止機器人操作。請手動解除鎖定後再試。"
-                if old_pos[1] < shares:
-                    return f"❌ 賣出失敗：持股不足 (只有 {old_pos[1]})"
-                cost_ratio = shares / old_pos[1]
-                realized_twd_cost = old_pos[2] * cost_ratio
-                realized_pnl = actual_twd_total - realized_twd_cost
-                new_shares = old_pos[1] - shares
-                if new_shares > 0:
-                    cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
+                    result_message = f"❌ 賣出失敗：標的 {symbol} 被鎖定 (福利信託/長期持有)，禁止機器人操作。請手動解除鎖定後再試。"
+                elif old_pos[1] < shares:
+                    result_message = f"❌ 賣出失敗：持股不足 (只有 {old_pos[1]})"
                 else:
-                    cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
-                cursor.execute("UPDATE portfolio SET shares = shares + ?, twd_cost = twd_cost + ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
-                msg = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
+                    cost_ratio = shares / old_pos[1]
+                    realized_twd_cost = old_pos[2] * cost_ratio
+                    realized_pnl = actual_twd_total - realized_twd_cost
+                    new_shares = old_pos[1] - shares
+                    if new_shares > 0:
+                        cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
+                    else:
+                        cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
+                    cursor.execute("UPDATE portfolio SET shares = shares + ?, twd_cost = twd_cost + ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+                    result_message = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
+                    should_refresh_memory = True
             
             elif action == 'set':
                 cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, actual_unit_price, shares, actual_twd_total, current_locked))
-                msg = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
+                result_message = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
+                should_refresh_memory = True
+            else:
+                result_message = f"❌ 未知操作: {action}"
 
             conn.commit()
-            return msg
         except Exception as e:
             logger.error(f"Position update failed for {symbol}: {e}")
             return format_tool_error(f"❌ 記帳異常: {e}", transient=True)
         finally:
             conn.close()
+
+    if sync_memory and should_refresh_memory:
+        try:
+            refresh_portfolio_health_summary(source="portfolio_trade")
+        except Exception as e:
+            logger.warning(f"Portfolio health refresh failed after updating {symbol}: {e}")
+
+    return result_message
 
 @tool(mode="write")
 def update_position(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None) -> str:
@@ -164,7 +180,7 @@ def update_position(symbol: str, price: float, shares: float, action: str = 'set
     shares: quantity to change.
     locked: 1 to lock position from AI trading, 0 to unlock.
     """
-    return execute_position_update(symbol, price, shares, action, total_amount_twd, locked)
+    return execute_position_update(symbol, price, shares, action, total_amount_twd, locked, sync_memory=True)
 
 # --- 標的名對應表 (手動維護優先，其餘自動偵測) ---
 SYMBOL_NAME_MAP = {
@@ -320,11 +336,100 @@ def build_portfolio_raw_data() -> str:
 
 @tool()
 def get_portfolio_raw_data() -> str:
-    """
-    Retrieves current portfolio positions and balances.
-    Synchronizes with Fubon Securities if the SDK is available.
-    """
+    """Retrieves current portfolio positions and balances."""
     return build_portfolio_raw_data()
+
+
+def build_portfolio_analysis() -> Dict[str, Any]:
+    """生成持倉健檢摘要，用於系統自動更新額葉。"""
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, cost, shares, twd_cost FROM portfolio")
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+    active_rows = [row for row in rows if row[2] > 0]
+    if not active_rows:
+        return {
+            "total_current": 0,
+            "total_pnl_pct": 0,
+            "top3_concentration": 0,
+            "position_count": 0,
+            "summary": "無有效持倉數據；請確認帳本或券商同步狀態。",
+        }
+
+    total_cost_twd = 0.0
+    total_market_value_twd = 0.0
+    assets = []
+
+    for sym, cost, shares, twd_cost in active_rows:
+        current_price = cost
+        is_us = False
+        if 'CASH' in sym:
+            current_price = 1.0 if 'TWD' in sym else fetch_exchange_rate()
+        else:
+            try:
+                if (any(c.isdigit() for c in sym[:4]) and len(sym.split('.')[0]) <= 6) or '.TW' in sym or '.TWO' in sym:
+                    if fubon.fubon_ready:
+                        quote = fubon.fubon_sdk.marketdata.rest_client.stock.intraday.quote(
+                            symbol=sym.replace('.TW', '').replace('.TWO', '')
+                        )
+                        current_price = quote.get('closePrice') or quote.get('lastPrice') or cost
+                else:
+                    is_us = True
+                    ticker = get_ticker(sym, cache_level="daily")
+                    current_price = ticker.fast_info.get('last_price') or cost
+            except Exception as e:
+                logger.warning(f"Portfolio analysis price refresh failed for {sym}: {e}")
+
+        pnl = calculate_position_pnl(sym, current_price, shares, twd_cost, is_us)
+        mv = pnl['market_value_twd']
+        total_market_value_twd += mv
+        total_cost_twd += twd_cost
+        if 'CASH' not in sym:
+            assets.append({"symbol": sym, "mv": mv})
+
+    # 計算集中度
+    assets.sort(key=lambda x: x['mv'], reverse=True)
+    top3_mv = sum(a['mv'] for a in assets[:3])
+    top3_pct = (top3_mv / total_market_value_twd * 100) if total_market_value_twd > 0 else 0
+    
+    total_pnl_pct = ((total_market_value_twd - total_cost_twd) / total_cost_twd * 100) if total_cost_twd > 0 else 0
+
+    summary = (
+        f"NAV: NT${total_market_value_twd:,.0f} | "
+        f"PnL: {total_pnl_pct:+.1f}% | "
+        f"Top3 集中度: {top3_pct:.0f}%"
+    )
+    
+    # 如果有大幅變動，增加警語
+    if abs(total_pnl_pct) > 5:
+        summary += f" (⚠️ 總體損益波動劇烈)"
+
+    return {
+        "total_current": total_market_value_twd,
+        "total_pnl_pct": total_pnl_pct,
+        "top3_concentration": top3_pct,
+        "position_count": len(active_rows),
+        "summary": summary
+    }
+
+def refresh_portfolio_health_summary(source: str = "portfolio_review") -> Dict[str, Any]:
+    """Builds a portfolio-health snapshot and patches the frontal lobe section."""
+    analysis = build_portfolio_analysis()
+    import engine_memory as memory
+
+    memory_update = memory.patch_frontal_lobe_section("Portfolio Health", analysis["summary"], source=source)
+    return {**analysis, "memory_update": memory_update}
+
+@tool()
+def get_portfolio_analysis() -> str:
+    """Returns a high-level summary of portfolio health, NAV, and concentration."""
+    res = build_portfolio_analysis()
+    return res['summary']
 
 
 def calculate_position_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
