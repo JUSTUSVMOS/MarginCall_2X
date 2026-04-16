@@ -33,3 +33,9 @@ gha-creds-*.json
 .brain/market-regime.md
 .brain/snapshot.json
 .github/
+diff_output.patch
+list_models.py
+test_*.py
+todo.txt
+*.service
+sa_login_generator.py
