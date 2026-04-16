@@ -32,3 +32,4 @@ gha-creds-*.json
 .brain/heartbeat.json
 .brain/market-regime.md
 .brain/snapshot.json
+.github/
