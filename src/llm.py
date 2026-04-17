@@ -17,6 +17,7 @@ MICROCOMPACT_KEEP_FULL_TOOL_RESULTS = 3
 RECENT_HISTORY_WINDOW = 12
 MAX_HISTORY_MESSAGES = 40
 SOFT_HISTORY_CHAR_LIMIT = 12000
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 45
 
 
 # 定義哪些模型支援工具呼叫 (Function Calling)
@@ -72,6 +73,7 @@ TEMPORARY_ERROR_MARKERS = (
     "INTERNAL",
     "DEADLINE_EXCEEDED",
     "TIMEOUT",
+    "TIMED OUT",
 )
 
 _api_key = os.getenv("GEMINI_API_KEY")
@@ -97,7 +99,7 @@ def mark_dead(model: str, exc: Optional[Exception] = None) -> None:
         cooldown = 5   # 塞車很快會恢復
     elif "429" in msg or "RESOURCE_EXHAUSTED" in msg:
         cooldown = 30  # 配額限制通常按分鐘計
-    elif "DEADLINE_EXCEEDED" in msg or "TIMEOUT" in msg:
+    elif "DEADLINE_EXCEEDED" in msg or "TIMEOUT" in msg or "TIMED OUT" in msg:
         cooldown = 15  # 逾時通常是暫時的
     else:
         cooldown = 60  # 預設
@@ -130,8 +132,22 @@ def get_alive_models(models: Optional[List[str]] = None) -> List[str]:
 
 
 def is_temporary_error(exc: Exception) -> bool:
+    if is_timeout_error(exc):
+        return True
     message = str(exc).upper()
     return any(marker in message for marker in TEMPORARY_ERROR_MARKERS)
+
+
+def is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return True
+
+    message = str(exc).upper()
+    return (
+        "TIMEOUT" in message
+        or "TIMED OUT" in message
+        or "DEADLINE_EXCEEDED" in message
+    )
 
 
 def _annotation_to_openai_schema(annotation) -> Dict:
@@ -184,6 +200,21 @@ def _normalize_openrouter_content(content) -> Optional[str]:
     return str(content)
 
 
+def _build_http_options(timeout_seconds: Optional[int]) -> Optional[types.HttpOptions]:
+    if timeout_seconds is None:
+        return None
+
+    try:
+        timeout_value = int(timeout_seconds)
+    except (TypeError, ValueError):
+        return None
+
+    if timeout_value <= 0:
+        return None
+
+    return types.HttpOptions(timeout=timeout_value)
+
+
 def _convert_to_openai_tools(tools: list) -> Optional[List[Dict]]:
     """將 Python 函式列表轉換為 OpenAI/OpenRouter 相容的 tools 格式"""
     if not tools:
@@ -224,7 +255,13 @@ def _convert_to_openai_tools(tools: list) -> Optional[List[Dict]]:
     return openai_tools if openai_tools else None
 
 
-def _call_openrouter(model_name: str, messages: List[Dict], temperature: float = 0.3, tools=None) -> Optional[Dict]:
+def _call_openrouter(
+    model_name: str,
+    messages: List[Dict],
+    temperature: float = 0.3,
+    tools=None,
+    timeout_seconds: int = 60,
+) -> Optional[Dict]:
     """
     呼叫 OpenRouter API 並回傳完整的訊息物件。
     """
@@ -253,7 +290,7 @@ def _call_openrouter(model_name: str, messages: List[Dict], temperature: float =
                 data["tools"] = openai_tools
                 data["tool_choice"] = "auto"
 
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=float(timeout_seconds)) as client:
             resp = client.post(url, headers=headers, json=data)
             if resp.status_code == 200:
                 result = resp.json()
@@ -333,12 +370,21 @@ def _execute_openai_tool_calls(tool_calls: List[Dict], tools: List[Callable]) ->
     return results
 
 
-def _build_config(system_instruction: str, temperature: float, tools=None, thinking_level: Optional[str] = None):
+def _build_config(
+    system_instruction: str,
+    temperature: float,
+    tools=None,
+    thinking_level: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
+):
     kwargs = {"temperature": temperature}
     if system_instruction:
         kwargs["system_instruction"] = system_instruction
     if tools is not None:
         kwargs["tools"] = tools
+    http_options = _build_http_options(timeout_seconds)
+    if http_options is not None:
+        kwargs["http_options"] = http_options
     
     # 支援 Gemini 3 系列的 thinking_level
     if thinking_level:
@@ -390,6 +436,13 @@ def _normalize_history_item(item) -> types.Content:
 
     normalized_parts = [types.Part(text=_normalize_part(part)) for part in parts]
     return types.Content(role=role, parts=normalized_parts)
+
+
+def _history_item_to_openrouter_message(item) -> Dict[str, str]:
+    normalized = _normalize_history_item(item)
+    role = "assistant" if normalized.role == "model" else normalized.role
+    content = "\n".join(part.text for part in normalized.parts if part.text).strip()
+    return {"role": role, "content": content}
 
 
 def _is_tool_like_message(item: types.Content) -> bool:
@@ -453,6 +506,7 @@ def quick_call(
     temperature: float = 0.1,
     thinking_level: Optional[str] = None,
     max_503_retries: int = 2,
+    timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
 ) -> Optional[str]:
     # 取得候選模型清單
     candidates = get_alive_models(models)
@@ -470,8 +524,8 @@ def quick_call(
             if system_instruction:
                 messages.append({"role": "system", "content": system_instruction})
             messages.append({"role": "user", "content": prompt})
-            
-            res = _call_openrouter(model_name, messages, temperature)
+             
+            res = _call_openrouter(model_name, messages, temperature, timeout_seconds=timeout_seconds)
             if res:
                 return _normalize_openrouter_content(res.get("content"))
             continue
@@ -486,7 +540,12 @@ def quick_call(
                 response = _client.models.generate_content(
                     model=model_name,
                     contents=prompt,
-                    config=_build_config(system_instruction, temperature, thinking_level=actual_thinking),
+                    config=_build_config(
+                        system_instruction,
+                        temperature,
+                        thinking_level=actual_thinking,
+                        timeout_seconds=timeout_seconds,
+                    ),
                 )
                 if response.text:
                     return response.text
@@ -531,9 +590,14 @@ def chat_with_tools(
     # 邏輯 A: 優先嘗試支援工具的模型
     tool_enabled_candidates = [m for m in candidates if supports_tools(m)]
     
-    # 邏輯 B: 如果需要工具但沒有可用模型，則退而求其次使用不帶工具的模型
-    final_candidates = tool_enabled_candidates if (tool_enabled_candidates or not tools) else candidates
-    use_tools = tools if tool_enabled_candidates else None
+    # 邏輯 B: 只有真的要用 tools 時，才限制為支援工具的模型。
+    # 否則保留完整候選集，避免 timeout/fallback 時被不必要地卡死在少數模型。
+    if tools:
+        final_candidates = tool_enabled_candidates or candidates
+        use_tools = tools if tool_enabled_candidates else None
+    else:
+        final_candidates = candidates
+        use_tools = None
     
     if not final_candidates:
         return unavailable_message
@@ -549,19 +613,25 @@ def chat_with_tools(
             messages = []
             if system_instruction:
                 messages.append({"role": "system", "content": system_instruction})
-            
+             
             if history:
                 for h in history:
-                    # 重要：OpenRouter 不認識 'model' 角色，必須映射為 'assistant'
-                    role = "assistant" if h.role == "model" else h.role
-                    messages.append({"role": role, "content": _normalize_part(h.parts[0])})
-            
+                    message = _history_item_to_openrouter_message(h)
+                    if message["content"]:
+                        messages.append(message)
+             
             messages.append({"role": "user", "content": user_text})
-            
+             
             # 傳遞工具定義
-            res_message = _call_openrouter(model_name, messages, temperature, tools=use_tools)
+            res_message = _call_openrouter(
+                model_name,
+                messages,
+                temperature,
+                tools=use_tools,
+                timeout_seconds=timeout_seconds,
+            )
             logger.info(f"DEBUG OpenRouter initial res_message: {res_message}")
-            
+             
             if res_message:
                 tool_calls = res_message.get("tool_calls")
                 content = _normalize_openrouter_content(res_message.get("content"))
@@ -575,10 +645,16 @@ def chat_with_tools(
                     tool_results = _execute_openai_tool_calls(tool_calls, use_tools)
                     logger.info(f"DEBUG tool_results: {tool_results}")
                     messages.extend(tool_results)
-                    
-                    res_message = _call_openrouter(model_name, messages, temperature, tools=use_tools)
+                     
+                    res_message = _call_openrouter(
+                        model_name,
+                        messages,
+                        temperature,
+                        tools=use_tools,
+                        timeout_seconds=timeout_seconds,
+                    )
                     logger.info(f"DEBUG OpenRouter step {loop_count} res_message: {res_message}")
-                    
+                     
                     if not res_message:
                         break
                     
@@ -599,8 +675,12 @@ def chat_with_tools(
                 
                 # 寫回歷史紀錄 (維持原本的 Gemini Content 格式)
                 if history is not None and content:
-                    history.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
-                    history.append(types.Content(role="model", parts=[types.Part(text=content)]))
+                    updated_history = list(history) + [
+                        types.Content(role="user", parts=[types.Part(text=user_text)]),
+                        types.Content(role="model", parts=[types.Part(text=content)]),
+                    ]
+                    history.clear()
+                    history.extend(compact_history(updated_history))
                 return content
             continue
 
@@ -610,42 +690,24 @@ def chat_with_tools(
 
         try:
             actual_thinking = thinking_level if "gemini-3" in model_name else None
+            prepared_history = compact_history(history) if history else history
             chat = _client.chats.create(
                 model=model_name,
-                config=_build_config(system_instruction, temperature, use_tools, thinking_level=actual_thinking),
-                history=history,
+                config=_build_config(
+                    system_instruction,
+                    temperature,
+                    use_tools,
+                    thinking_level=actual_thinking,
+                    timeout_seconds=timeout_seconds,
+                ),
+                history=prepared_history,
             )
 
             retries_503 = 0
             while retries_503 <= 2:
                 try:
-                    response_container = []
-                    exception_container = []
-
-                    def _thread_task():
-                        try:
-                            part = types.Part(text=user_text)
-                            response_container.append(chat.send_message(part))
-                        except Exception as exc:
-                            exception_container.append(exc)
-
-                    llm_thread = threading.Thread(target=_thread_task)
-                    llm_thread.start()
-                    llm_thread.join(timeout=timeout_seconds)
-
-                    if llm_thread.is_alive():
-                        logger.warning(f"[LLM] {model_name} timeout ({timeout_seconds}s)")
-                        mark_dead(model_name, Exception("TIMEOUT"))
-                        timeout_count += 1
-                        break
-
-                    if exception_container:
-                        raise exception_container[0]
-
-                    if not response_container:
-                        break
-
-                    response = response_container[0]
+                    part = types.Part(text=user_text)
+                    response = chat.send_message(part)
                     if history is not None:
                         new_history = chat.get_history()
                         history.clear()
@@ -659,6 +721,11 @@ def chat_with_tools(
                         logger.info(f"[LLM] {model_name} 503, retry {retries_503}/2 in 3s...")
                         time.sleep(3)
                         continue
+                    elif is_timeout_error(exc):
+                        logger.warning(f"[LLM] {model_name} timeout ({timeout_seconds}s): {exc}")
+                        mark_dead(model_name, exc)
+                        timeout_count += 1
+                        break
                     elif is_temporary_error(exc):
                         logger.warning(f"[LLM] {model_name} temp failure: {exc}")
                         mark_dead(model_name, exc)
@@ -667,13 +734,21 @@ def chat_with_tools(
                         logger.error(f"[LLM] {model_name} fatal: {exc}")
                         return f"⚠️ 模型異常: {str(exc)[:100]}"
         except Exception as outer_exc:
-            if is_temporary_error(outer_exc):
+            if is_timeout_error(outer_exc):
+                logger.warning(f"[LLM] {model_name} session init timeout ({timeout_seconds}s): {outer_exc}")
+                mark_dead(model_name, outer_exc)
+                timeout_count += 1
+                continue
+            elif is_temporary_error(outer_exc):
                 logger.warning(f"[LLM] {model_name} session init failed: {outer_exc}")
                 mark_dead(model_name, outer_exc)
                 continue
             else:
                 logger.error(f"[LLM] {model_name} session fatal: {outer_exc}")
                 return f"⚠️ 模型會話異常: {str(outer_exc)[:100]}"
+
+    if timeout_count >= max_timeouts and timeout_message:
+        return timeout_message
 
     return unavailable_message
 

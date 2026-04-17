@@ -255,11 +255,10 @@ class FundamentalEngine:
                 past_earnings = dates.dropna(subset=['Reported EPS'])
                 if not past_earnings.empty:
                     latest = past_earnings.iloc[0]
-                    est = latest.get('Estimate', 'N/A')
+                    # yfinance 的欄位名稱是 'EPS Estimate'，且 Surprise(%) 已經是實際百分比 (例如 6.34)
+                    est = latest.get('EPS Estimate', latest.get('Estimate', 'N/A'))
                     rep = latest.get('Reported EPS', 'N/A')
-                    surp = latest.get('Surprise(%)', 0)
-                    # 處理百分比顯示 (有些來源給小數，有些給整數)
-                    surp_pct = surp * 100 if isinstance(surp, (int, float)) and abs(surp) < 10 else surp
+                    surp_pct = latest.get('Surprise(%)', 0)
                     
                     res['最新財報驚喜'] = f"預估: {est} | 實際: {rep} | 驚喜差距: {surp_pct:+.2f}%" if isinstance(surp_pct, (int, float)) else f"預估: {est} | 實際: {rep}"
                 else:
