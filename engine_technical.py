@@ -335,6 +335,84 @@ class IndicatorCalculator:
             result["details"] = " | ".join(details)
         return result
 
+    def MEAN_REVERSION(self, data: np.ndarray, lookback: int = 60) -> Dict[str, Any]:
+        price_series = pd.Series(np.asarray(data, dtype=float)).replace([np.inf, -np.inf], np.nan).dropna()
+        result = {
+            "zscore": None,
+            "half_life_days": None,
+            "signal": "neutral",
+            "signal_label": "⚪ 中性",
+            "reversion_candidate": False,
+            "details": "資料不足",
+            "lookback_used": None,
+        }
+        if price_series.empty:
+            return result
+
+        effective_lookback = min(max(int(lookback), 5), len(price_series))
+        result["lookback_used"] = effective_lookback
+        if effective_lookback < 20:
+            return result
+
+        rolling_mean = price_series.rolling(window=effective_lookback).mean()
+        rolling_std = price_series.rolling(window=effective_lookback).std(ddof=0)
+        latest_mean = rolling_mean.iloc[-1]
+        latest_std = rolling_std.iloc[-1]
+        if pd.isna(latest_mean) or pd.isna(latest_std) or latest_std <= 0:
+            result["details"] = "波動過低，無法計算"
+            return result
+
+        zscore = float((price_series.iloc[-1] - latest_mean) / latest_std)
+        spread = (price_series - rolling_mean).dropna()
+        half_life = None
+        if len(spread) >= max(10, effective_lookback // 2):
+            lagged = spread.shift(1).dropna()
+            current = spread.loc[lagged.index]
+            if not lagged.empty and float(lagged.std(ddof=0)) > 0:
+                x = lagged.to_numpy(dtype=float)
+                y = current.to_numpy(dtype=float)
+                x_var = float(np.var(x))
+                if x_var > 0:
+                    beta = float(np.mean((x - x.mean()) * (y - y.mean())) / x_var)
+                else:
+                    beta = None
+                if beta is not None and 0 < beta < 1:
+                    half_life = float(-np.log(2) / np.log(beta))
+
+        if zscore <= -2:
+            signal, label = "strong_buy", "🟢 強均值回歸多頭"
+        elif zscore <= -1:
+            signal, label = "buy", "🟡 偏離下緣"
+        elif zscore >= 2:
+            signal, label = "strong_sell", "🔴 強均值回歸空頭"
+        elif zscore >= 1:
+            signal, label = "sell", "🟠 偏離上緣"
+        else:
+            signal, label = "neutral", "⚪ 中性"
+
+        reversion_candidate = half_life is not None and half_life <= 30
+        details = f"價格相對 {effective_lookback} 期均值偏離 {zscore:+.2f}σ。"
+        if half_life is not None:
+            details += f" 估計半衰期約 {half_life:.1f} 期。"
+            if reversion_candidate:
+                details += " 回歸速度可交易。"
+            else:
+                details += " 回歸速度偏慢，訊號需搭配催化。"
+        else:
+            details += " 半衰期不收斂，較像趨勢延伸或 regime shift。"
+
+        result.update(
+            {
+                "zscore": round(zscore, 2),
+                "half_life_days": round(half_life, 1) if half_life is not None else None,
+                "signal": signal,
+                "signal_label": label,
+                "reversion_candidate": reversion_candidate,
+                "details": details,
+            }
+        )
+        return result
+
     # ==========================================
     # 5. 形態分析 (Structure)
     # ==========================================
@@ -363,7 +441,7 @@ class IndicatorCalculator:
             'LOW': self.LOW, 'VOLUME': self.VOLUME,
             'SMA': self.SMA, 'EMA': self.EMA, 'MAX': self.MAX, 'MIN': self.MIN, 'STDEV': self.STDEV,
             'RSI': self.RSI, 'MACD': self.MACD, 'ATR': self.ATR, 'BBANDS': self.BBANDS,
-            'ADX': self.ADX, 'OBV': self.OBV, 'DIVERGENCE': self.DIVERGENCE,
+            'ADX': self.ADX, 'OBV': self.OBV, 'DIVERGENCE': self.DIVERGENCE, 'MEAN_REVERSION': self.MEAN_REVERSION,
         }
 
         try:

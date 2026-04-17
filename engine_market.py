@@ -273,7 +273,7 @@ def get_mtf_confluence(symbol: str) -> dict:
     }
 
 
-def build_technical_snapshot(symbol: str, interval: str = "1d") -> dict:
+def build_technical_snapshot(symbol: str, interval: str = "1d", mean_reversion_lookback: int = 60) -> dict:
     symbol = normalize_ticker(symbol)
     s = symbol.upper()
     if s.isdigit():
@@ -304,6 +304,7 @@ def build_technical_snapshot(symbol: str, interval: str = "1d") -> dict:
     obv_values = calc.OBV(close.values, volume.values)
     obv_signal = analyze_obv_signal(close.values, obv_values)
     mtf_rsi = get_mtf_confluence(s)
+    mean_reversion = calc.MEAN_REVERSION(close.values, lookback=mean_reversion_lookback)
 
     low_9 = low.rolling(window=9).min()
     high_9 = high.rolling(window=9).max()
@@ -371,6 +372,7 @@ def build_technical_snapshot(symbol: str, interval: str = "1d") -> dict:
             **obv_signal,
         },
         "mtf_rsi": mtf_rsi,
+        "mean_reversion": mean_reversion,
     }
 
 def get_asset_profile(symbol: str) -> dict:
@@ -858,6 +860,7 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
         adx = snapshot["adx"]
         obv = snapshot["obv"]
         mtf_rsi = snapshot.get("mtf_rsi", {})
+        mean_reversion = snapshot.get("mean_reversion", {})
         trend_regime = adx.get("trend_regime", "unknown")
         trend_label = "📈趨勢盤" if trend_regime == "trending" else "🌀震盪盤"
         mtf_scores = mtf_rsi.get("rsi_by_timeframe", {})
@@ -887,6 +890,14 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
         if obv.get("obv_ma20") is not None:
             report += f" | OBV20MA:{obv['obv_ma20']:.2f}"
         report += "\n"
+        zscore = mean_reversion.get("zscore")
+        zscore_text = f"{zscore:+.2f}" if isinstance(zscore, (int, float)) else "N/A"
+        half_life = mean_reversion.get("half_life_days")
+        half_life_text = f"{half_life:.1f} 期" if isinstance(half_life, (int, float)) else "N/A"
+        report += (
+            f"● 均值回歸: Z:{zscore_text} | 半衰期:{half_life_text} | "
+            f"{mean_reversion.get('signal_label', '⚪ 中性')}\n"
+        )
         report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
         
         # 戰術建議 (優化：結合 RSI, KDJ 與 MA 濾網)
@@ -926,6 +937,14 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
 
         if trend_regime == "ranging" and adx.get("value") is not None:
             report += f"🌀 補充：ADX 僅 {adx['value']:.2f}，當前偏震盪盤，均線突破需二次確認。\n"
+
+        if mean_reversion.get("reversion_candidate"):
+            if mean_reversion.get("signal") in {"strong_buy", "buy"}:
+                report += "🧲 補充：價格偏離均值過深且半衰期收斂，若出現止跌確認可留意回歸反彈。\n"
+            elif mean_reversion.get("signal") in {"strong_sell", "sell"}:
+                report += "🧲 補充：價格高於均值過多且半衰期收斂，追價風險正在上升。\n"
+        elif mean_reversion.get("signal") != "neutral" and mean_reversion.get("zscore") is not None:
+            report += "⚠️ 補充：雖有偏離均值，但半衰期不收斂，較像趨勢延伸而非穩定回歸 edge。\n"
         
         return report
     except Exception as e:
@@ -935,10 +954,46 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
 @tool()
 def get_technical_analysis(symbol: str, interval: str = "1d") -> str:
     """
-    Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands).
+    Performs multi-indicator technical analysis (RSI, MACD, KDJ, Bollinger Bands, mean reversion).
     Provides a strategic outlook based on indicator alignment.
     """
     return build_technical_report(symbol, interval)
+
+
+def build_mean_reversion_report(symbol: str, interval: str = "1d", lookback: int = 60) -> str:
+    try:
+        snapshot = build_technical_snapshot(symbol, interval, mean_reversion_lookback=lookback)
+        signal = snapshot.get("mean_reversion", {})
+        zscore = signal.get("zscore")
+        zscore_text = f"{zscore:+.2f}" if isinstance(zscore, (int, float)) else "N/A"
+        half_life = signal.get("half_life_days")
+        half_life_text = f"{half_life:.1f} 期" if isinstance(half_life, (int, float)) else "N/A"
+        lookback_used = signal.get("lookback_used") or lookback
+
+        report = f"🧲 === {snapshot['symbol']} 均值回歸信號 ===\n"
+        report += (
+            f"● Z-Score({lookback_used}): {zscore_text} | 半衰期: {half_life_text} | "
+            f"{signal.get('signal_label', '⚪ 中性')}\n"
+        )
+        report += f"● 解讀: {signal.get('details', 'N/A')}\n"
+
+        if signal.get("reversion_candidate"):
+            report += "● 結論: 偏離與回歸速度都達標，屬可交易的均值回歸候選。\n"
+        elif signal.get("zscore") is not None and abs(float(signal["zscore"])) >= 1:
+            report += "● 結論: 偏離存在，但半衰期不收斂，暫時更像趨勢延伸而非回歸 edge。\n"
+        else:
+            report += "● 結論: 目前偏離有限，沒有明顯均值回歸優勢。\n"
+
+        return report
+    except Exception as e:
+        logger.error(f"Mean reversion report failed for {symbol}: {e}")
+        return format_tool_error(f"❌ 均值回歸信號失敗: {e}", data_unavailable=True)
+
+
+@tool()
+def get_mean_reversion_signal(symbol: str, interval: str = "1d", lookback: int = 60) -> str:
+    """Evaluates price-vs-mean deviation and half-life for mean-reversion setups."""
+    return build_mean_reversion_report(symbol, interval, lookback)
 
 def build_movers_report() -> str:
     """Pure market-movers logic for direct callers and tests."""
