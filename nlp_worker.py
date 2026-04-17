@@ -354,6 +354,155 @@ def adjust_retail_score(raw_score, source_count):
         # 輕微偏多/偏空 -> 保留但權重降低，避免過度影響
         return raw_score * 0.5
 
+
+TRINITY_CATEGORY_ROUTING = {
+    "SEC": ("sec", "institutional"),
+    "Macro": ("macro", "institutional"),
+    "Retail": ("retail", "retail"),
+}
+
+TRINITY_BASE_WEIGHTS = {
+    "sec": 0.45,
+    "macro": 0.30,
+    "retail": 0.25,
+}
+
+# 一份 SEC filing 通常已足夠有份量；新聞與散戶訊號則需要更多來源才給滿信心。
+TRINITY_CONFIDENCE_TARGETS = {
+    "sec": 1,
+    "macro": 3,
+    "retail": 8,
+}
+
+TRINITY_SENT_MAP = {
+    "strong_bullish": 1.0,
+    "mild_bullish": 0.3,
+    "neutral": 0.0,
+    "mild_bearish": -0.3,
+    "strong_bearish": -1.0,
+}
+
+
+def score_sentiment_groups(groups, stock):
+    """
+    將 SEC / Macro / Retail 三類資料拆成真正獨立的維度分數。
+    SEC、Macro 只看 institutional；Retail 只看 retail。
+    """
+    categorized_tags = {"SEC": [], "Macro": [], "Retail": []}
+    dimension_scores = {"sec": 0.0, "macro": 0.0, "retail": 0.0}
+
+    for category, texts in groups.items():
+        if not texts:
+            continue
+
+        combined = "\n---\n".join([t[:500] for t in texts])[:4000]
+        logger.info(f"    🧠 分析 {category} ( {len(texts)} 篇合併 )...")
+
+        res_data = extract_insight_parallel(combined, stock)
+        target_dim, actor_key = TRINITY_CATEGORY_ROUTING[category]
+        actor_data = res_data.get(actor_key, {})
+        categorized_tags[category].extend(actor_data.get("insights", []))
+
+        sentiment = actor_data.get("sentiment", "neutral")
+        raw_score = TRINITY_SENT_MAP.get(sentiment, 0.0)
+
+        if target_dim == "retail":
+            dimension_scores[target_dim] += adjust_retail_score(raw_score, len(texts))
+        else:
+            dimension_scores[target_dim] += raw_score
+
+    return dimension_scores, categorized_tags
+
+
+def compose_alpha_signal(a_sec, n_sec, a_mac, n_mac, a_ret, n_ret):
+    """
+    將三個獨立維度做來源感知的加權合成。
+    與其硬套 Bayesian 先驗把單一 SEC 重大訊號過度稀釋，這裡採用：
+    1. 固定基礎權重（SEC > Macro > Retail）
+    2. 缺資料時自動重分配權重
+    3. 各維度依來源數量逐步拉滿信心，但不改變既有分數方向
+    """
+    weighted_sum = 0.0
+    total_weight = 0.0
+
+    for key, score, count in (
+        ("sec", a_sec, n_sec),
+        ("macro", a_mac, n_mac),
+        ("retail", a_ret, n_ret),
+    ):
+        count = max(0, int(count or 0))
+        if count == 0:
+            continue
+
+        target = TRINITY_CONFIDENCE_TARGETS[key]
+        confidence = min(1.0, count / target)
+        effective_weight = TRINITY_BASE_WEIGHTS[key] * confidence
+        weighted_sum += score * effective_weight
+        total_weight += effective_weight
+
+    if total_weight <= 0:
+        return 0.0
+
+    return max(-1.0, min(1.0, weighted_sum / total_weight))
+
+
+def _direction_for_score(score):
+    if score > 0.2:
+        return "bullish"
+    if score < -0.2:
+        return "bearish"
+    return "neutral"
+
+
+def _verify_nuclear_threat(stock, macro_sec_text, triggered_nukes):
+    if not triggered_nukes:
+        return False, ""
+
+    context_snippets = []
+    for kw in triggered_nukes:
+        idx = macro_sec_text.find(kw)
+        start = max(0, idx - 100)
+        end = min(len(macro_sec_text), idx + 200)
+        snippet = macro_sec_text[start:end].replace("\n", " ")
+        context_snippets.append(f"[{kw.upper()}]: ...{snippet}...")
+
+    verify_prompt = f"""
+        Identify if the following context indicates a SEVERE LEGAL or FINANCIAL THREAT (e.g., fraud, DOJ/SEC investigation INTO {stock}, delisting)
+        to {stock} itself, or if the keyword is used in a benign/common way (e.g., "investigating new markets", "won a lawsuit", "legal victory", "routine investigation").
+
+        Keywords detected: {triggered_nukes}
+        Context: {" | ".join(context_snippets[:3])}
+
+        Question: Is this a REAL catastrophic threat or just benign/positive news?
+        Answer ONLY with "REAL_THREAT" or "BENIGN".
+        """
+
+    try:
+        v_response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "gemma4:e4b-it-q8_0",
+                "prompt": verify_prompt,
+                "stream": False,
+                "options": {"temperature": 0.0, "num_predict": 10},
+            },
+            timeout=15,
+        )
+
+        if v_response.status_code == 200:
+            answer = v_response.json().get("response", "").strip().upper()
+            if "REAL_THREAT" in answer:
+                logger.warning(f"   ☢️ LLM 確認核彈級利空！字眼: {triggered_nukes}")
+                return True, f"☢️ 偵測到重大法律或會計風險 (經 LLM 核實: {triggered_nukes})"
+
+            logger.info(f"   ✅ LLM 判定為良性用法 ({triggered_nukes})，解除警報。")
+            return False, ""
+
+        return False, f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實服務超時，請人工確認。"
+    except Exception as ve:
+        logger.warning(f"   ⚠️ 核彈核實異常: {ve}")
+        return False, f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實過程異常，請人工確認。"
+
 def _fetch_sec_data(stock, raw_texts):
     """SEC 資料抓取，回傳 None 表示跳過"""
     cik = get_cik(stock)
@@ -690,141 +839,81 @@ def run_turbo_trinity_scout(stock="NVDA"):
     logger.info("\n--- 🧠 啟動 GPU 語意分析 ---")
 
     # --- 分組合併，只跑 3 次 LLM ( Map 階段 ) ---
-    categorized_tags = {"SEC": [], "Macro": [], "Retail": []}
-    
-    # 情緒對照表：放寬 Mild 權重，不再歸零
-    SENT_MAP = {
-        "strong_bullish": 1.0, 
-        "mild_bullish": 0.3,   # 讓 Mild 也能貢獻 Alpha
-        "neutral": 0.0, 
-        "mild_bearish": -0.3, 
-        "strong_bearish": -1.0
-    }
-
     groups = {
         "SEC":    [t for t in raw_texts if t.startswith("SEC")],
         "Macro":  [t for t in raw_texts if t.startswith("Macro")],
         "Retail": [t for t in raw_texts if t.startswith("Reddit") or t.startswith("StockTwits")],
     }
 
-    # 角色評分累積器
-    score_inst = 0.0
-    score_retail = 0.0
-    count_inst = 0
-    count_retail = 0
-
-    for category, texts in groups.items():
-        if not texts: continue
-            
-        combined = "\n---\n".join([t[:500] for t in texts])[:4000]
-        logger.info(f"    🧠 分析 {category} ( {len(texts)} 篇合併 )...")
-        
-        res_data = extract_insight_parallel(combined, stock)
-        
-        # A. 處理機構觀點 (不反轉)
-        inst_sent = res_data['institutional']['sentiment']
-        if inst_sent != 'neutral':
-            score_inst += SENT_MAP.get(inst_sent, 0.0)
-            count_inst += 1
-            categorized_tags[category].extend(res_data['institutional'].get('insights', []))
-        
-        # B. 處理散戶情緒 (視類別決定是否反轉)
-        ret_sent = res_data['retail']['sentiment']
-        if ret_sent != 'neutral':
-            raw_ret_score = SENT_MAP.get(ret_sent, 0.0)
-            if category == "Retail":
-                # 只有來自 Reddit/StockTwits 的散戶情緒才執行反向校正
-                score_retail += adjust_retail_score(raw_ret_score, len(texts))
-            else:
-                # 來自新聞/SEC 的散戶敘述（例如：消費者信心下降）不反轉
-                score_retail += raw_ret_score * 0.5 
-            count_retail += 1
-            categorized_tags[category].extend(res_data['retail'].get('insights', []))
-
-    # 計算最終 Alpha 分數
-    # 機構權重 0.7, 散戶權重 0.3 (可調)
-    a_inst = score_inst / max(count_inst, 1)
-    a_retail = score_retail / max(count_retail, 1)
-    
-    # 這裡的 a_sec, a_mac 僅為了存入資料庫相容性，暫時以 a_inst 代替官方維度
-    a_sec = a_inst if groups["SEC"] else 0.0
-    a_mac = a_inst if groups["Macro"] else 0.0
-
-    nlp_alpha = (a_inst * 0.7) + (a_retail * 0.3)
+    dimension_scores, categorized_tags = score_sentiment_groups(groups, stock)
+    a_sec = dimension_scores["sec"]
+    a_mac = dimension_scores["macro"]
+    a_retail = dimension_scores["retail"]
 
     # 🎯 矛盾偵測 (Divergence Detection)
-    # 使用新架構的角色情緒進行判定
     divergence_alert = ""
-    
-    # 判斷方向 (簡化邏輯)
-    inst_dir = "bullish" if a_inst > 0.2 else "bearish" if a_inst < -0.2 else "neutral"
-    ret_dir = "bullish" if a_retail > 0.2 else "bearish" if a_retail < -0.2 else "neutral"
+    sec_dir = _direction_for_score(a_sec)
+    mac_dir = _direction_for_score(a_mac)
+    ret_dir = _direction_for_score(a_retail)
 
-    if ret_dir == "bullish" and inst_dir == "bearish":
-        divergence_alert = "⚠️ 散戶情緒看多 vs 機構分析看空 -> 散戶陷阱風險"
-        nlp_alpha -= 0.15  # 額外懲罰
-    elif ret_dir == "bearish" and inst_dir == "bullish":
-        divergence_alert = "🔍 散戶情緒恐慌 vs 機構抄底加碼 -> 潛在反轉機會"
-        nlp_alpha += 0.1  # 額外獎勵
+    if ret_dir == "bullish" and sec_dir == "bearish":
+        divergence_alert = "⚠️ 散戶情緒看多 vs SEC 官方偏空 -> 散戶陷阱風險"
+    elif ret_dir == "bearish" and sec_dir == "bullish":
+        divergence_alert = "🔍 散戶恐慌 vs SEC 官方偏多 -> 潛在反轉機會"
+    elif ret_dir == "bullish" and mac_dir == "bearish":
+        divergence_alert = "⚠️ 散戶情緒看多 vs 宏觀新聞偏空 -> 注意逆風"
 
     # 🚨 核彈級利空熔斷機制 (Tail-Risk Override)
-    # 把所有新聞跟 SEC 的原始字串轉小寫，檢查是否有毀滅性字眼
-    macro_sec_text = " ".join([t.lower() for t in raw_texts if t.startswith("Macro") or t.startswith("SEC")])
+    macro_sec_text = " ".join(groups["Macro"] + groups["SEC"]).lower()
     nuclear_keywords = ['doj', 'indictment', 'subpoena', 'delist', 'fraud', 'accounting irregularity', 'investigation']
-    
-    triggered_nukes = [k for k in nuclear_keywords if k in macro_sec_text]
-    if triggered_nukes:
-        # 🎯 解決缺陷：由 LLM 判斷上下文，避免關鍵字誤殺 (例如 "investigating new markets")
-        context_snippets = []
-        for kw in triggered_nukes:
-            idx = macro_sec_text.find(kw)
-            # 抓取關鍵字前後 150 字作為上下文
-            start = max(0, idx - 100)
-            end = min(len(macro_sec_text), idx + 200)
-            snippet = macro_sec_text[start:end].replace("\n", " ")
-            context_snippets.append(f"[{kw.upper()}]: ...{snippet}...")
-            
-        verify_prompt = f"""
-            Identify if the following context indicates a SEVERE LEGAL or FINANCIAL THREAT (e.g., fraud, DOJ/SEC investigation INTO {stock}, delisting) 
-            to {stock} itself, or if the keyword is used in a benign/common way (e.g., "investigating new markets", "won a lawsuit", "legal victory", "routine investigation").
-            
-            Keywords detected: {triggered_nukes}
-            Context: {" | ".join(context_snippets[:3])}
-            
-            Question: Is this a REAL catastrophic threat or just benign/positive news?
-            Answer ONLY with "REAL_THREAT" or "BENIGN".
-            """
-        
-        try:
-            # 使用較強的模型進行二次確認
-            v_response = requests.post("http://localhost:11434/api/generate", json={
-                "model": "gemma2:9b", # 嘗試呼叫通用名稱，若失敗再 fallback
-                "prompt": verify_prompt,
-                "stream": False,
-                "options": {"temperature": 0.0, "num_predict": 10}
-            }, timeout=15)
-            
-            if v_response.status_code == 200:
-                answer = v_response.json().get("response", "").strip().upper()
-                if "REAL_THREAT" in answer:
-                    logger.warning(f"   ☢️ LLM 確認核彈級利空！字眼: {triggered_nukes}，觸發 Alpha 熔斷！")
-                    nlp_alpha = -0.95 # 強制給予極度悲觀的量化分數
-                    divergence_alert = f"☢️ 偵測到重大法律或會計風險 (經 LLM 核實: {triggered_nukes})"
-                else:
-                    logger.info(f"   ✅ LLM 判定為良性用法 ({triggered_nukes})，解除警報。")
-            else:
-                # 若較強模型失敗，不再強行熔斷，改為標註警告
-                divergence_alert = f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實服務超時，請人工確認。"
-        except Exception as ve:
-            logger.warning(f"   ⚠️ 核彈核實異常: {ve}")
-            divergence_alert = f"⚠️ 偵測到敏感關鍵字 {triggered_nukes}，但 LLM 核實過程異常，請人工確認。"
 
-    report_header = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f}\n"
+    triggered_nukes = [k for k in nuclear_keywords if k in macro_sec_text]
+    nuclear_confirmed, nuclear_alert = _verify_nuclear_threat(stock, macro_sec_text, triggered_nukes)
+    if nuclear_alert:
+        divergence_alert = nuclear_alert
+
+    nlp_alpha = compose_alpha_signal(
+        a_sec,
+        len(groups["SEC"]),
+        a_mac,
+        len(groups["Macro"]),
+        a_retail,
+        len(groups["Retail"]),
+    )
+    if nuclear_confirmed:
+        nlp_alpha = -0.95
+
+    signal_pack = {
+        "sec_stance": sec_dir,
+        "sec_score": round(a_sec, 3),
+        "sec_detail": categorized_tags["SEC"][:3],
+        "macro_stance": mac_dir,
+        "macro_score": round(a_mac, 3),
+        "macro_detail": categorized_tags["Macro"][:3],
+        "retail_stance": ret_dir,
+        "retail_score": round(a_retail, 3),
+        "retail_detail": categorized_tags["Retail"][:3],
+        "divergence": divergence_alert or "無",
+        "nuclear_alert": nuclear_confirmed,
+        "source_counts": {
+            "sec": len(groups["SEC"]),
+            "macro": len(groups["Macro"]),
+            "retail": len(groups["Retail"]),
+        },
+        "composite_alpha": round(nlp_alpha, 4),
+    }
+
+    semantic_summary = semantic_reduce(categorized_tags, stock, company_name, sector)
+    report_header = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f} | SEC:{sec_dir} Macro:{mac_dir} Retail:{ret_dir}\n"
     if divergence_alert:
         report_header += f"{divergence_alert}\n"
-        
-    report = report_header + semantic_reduce(categorized_tags, stock, company_name, sector)
-    save_to_db(stock, nlp_alpha, a_retail, a_mac, a_sec, total, report, "TRINITY")
+
+    report = report_header + semantic_summary
+    storage_payload = json.dumps(
+        {"signal_pack": signal_pack, "semantic_summary": semantic_summary},
+        ensure_ascii=False,
+    )
+    save_to_db(stock, nlp_alpha, a_retail, a_mac, a_sec, total, storage_payload, "TRINITY_V2")
     logger.info("\n%s", report)
 
 if __name__ == "__main__":

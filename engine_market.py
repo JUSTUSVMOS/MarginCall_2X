@@ -288,9 +288,20 @@ def build_realtime_insight(symbol: str) -> str:
         try:
             avg_vol = info.get('averageVolume')
             curr_vol = info.get('regularMarketVolume')
+            base_shares = next(
+                (
+                    value
+                    for value in (info.get('floatShares'), info.get('sharesOutstanding'))
+                    if value is not None and not pd.isna(value) and value > 0
+                ),
+                None,
+            )
 
             # 1. Volume Ratio (時間加權成交量能比) - 保持您原本的邏輯
-            if avg_vol and curr_vol and avg_vol > 0:
+            if (
+                avg_vol is not None and not pd.isna(avg_vol) and avg_vol > 0
+                and curr_vol is not None and not pd.isna(curr_vol) and curr_vol >= 0
+            ):
                 import pytz
                 est = pytz.timezone('US/Eastern')
                 now_est = datetime.datetime.now(est)
@@ -309,10 +320,8 @@ def build_realtime_insight(symbol: str) -> str:
                         vol_ratio_report = f"{vol_ratio:.2f}x"
                         
             # [新增] 2. 換手率 (Turnover Rate) 與 AI 訊號
-            if curr_vol and curr_vol > 0:
-                # 穩健容錯: 優先使用 floatShares，若無則降級使用 sharesOutstanding
-                base_shares = info.get('floatShares') or info.get('sharesOutstanding')
-                if base_shares and base_shares > 0:
+            if curr_vol is not None and not pd.isna(curr_vol) and curr_vol >= 0:
+                if base_shares:
                     turnover_rate = (curr_vol / base_shares) * 100
                     turnover_report = f"{turnover_rate:.2f}%"
                     if turnover_rate > 5.0:  # 訊號生成: 日換手 >5% 視為籌碼極度活躍

@@ -35,6 +35,15 @@ def get_fubon_technical(symbol: str) -> str:
         h52, l52 = stats.get('week52High', 0), stats.get('week52Low', 0)
         curr = stats.get('closePrice', 0)
 
+        # 補抓即時報價，避免盤中拿到昨收
+        try:
+            quote_data = reststock.intraday.quote(symbol=symbol)
+            live_price = quote_data.get('closePrice') or quote_data.get('lastPrice', 0)
+            if live_price:
+                curr = live_price
+        except Exception as e:
+            logger.warning(f"Quote fetch failed in technical: {e}")
+
         # 1.5 抓取分價量表 (Volume Profile)
         poc_price = 0
         vp_status = "N/A"
@@ -223,7 +232,11 @@ def get_fubon_bank_remain():
         return None
 
 def _normalize_tw_symbol(symbol: str) -> str:
-    return symbol.upper().replace('.TW', '').replace('.TWO', '')
+    clean_sym = symbol.upper().replace('.TW', '').replace('.TWO', '')
+    # 簡單防呆：台股代碼 (含期權) 必然包含數字，若全為英文字母 (如 CRWV, AAPL)，直接擋下
+    if not any(char.isdigit() for char in clean_sym):
+        raise ValueError(f"❌ 此工具僅支援台股 (Taiwan Stocks)，美股 {symbol} 請改用美股專用工具。")
+    return clean_sym
 
 
 def _get_stock_rest_client():
@@ -239,8 +252,8 @@ def build_market_trades_report(symbol: str, limit: int = 20) -> str:
     global fubon_ready
     if not fubon_ready:
         return "⚠️ 富邦引擎未啟動。"
-    symbol = _normalize_tw_symbol(symbol)
     try:
+        symbol = _normalize_tw_symbol(symbol)
         reststock = _get_stock_rest_client()
         res = reststock.intraday.trades(symbol=symbol, limit=limit)
         data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
@@ -265,8 +278,8 @@ def build_price_volumes_report(symbol: str) -> str:
     global fubon_ready
     if not fubon_ready:
         return "⚠️ 富邦引擎未啟動。"
-    symbol = _normalize_tw_symbol(symbol)
     try:
+        symbol = _normalize_tw_symbol(symbol)
         reststock = _get_stock_rest_client()
         res = reststock.intraday.volumes(symbol=symbol)
         data = res.get('data', []) if isinstance(res, dict) else getattr(res, 'data', [])
@@ -294,8 +307,8 @@ def build_historical_stats_report(symbol: str) -> str:
     global fubon_ready
     if not fubon_ready:
         return "⚠️ 富邦引擎未啟動。"
-    symbol = _normalize_tw_symbol(symbol)
     try:
+        symbol = _normalize_tw_symbol(symbol)
         reststock = _get_stock_rest_client()
         res = reststock.historical.stats(symbol=symbol)
 
@@ -304,10 +317,19 @@ def build_historical_stats_report(symbol: str) -> str:
         low52 = res.get('week52Low', 0)
         curr_close = res.get('closePrice', 0)
 
+        # 補抓即時報價，避免盤中拿到昨收
+        try:
+            quote_data = reststock.intraday.quote(symbol=symbol)
+            live_price = quote_data.get('closePrice') or quote_data.get('lastPrice', 0)
+            if live_price:
+                curr_close = live_price
+        except Exception as e:
+            logger.warning(f"Quote fetch failed in historical stats: {e}")
+
         report = f"🏛️ 【{symbol} {name} 52週戰略位階】\n"
         report += f"  ● 52週最高: {high52}\n"
         report += f"  ● 52週最低: {low52}\n"
-        report += f"  ● 最後收盤: {curr_close}\n"
+        report += f"  ● 目前現價/收盤: {curr_close}\n"
 
         pos = ((curr_close - low52) / (high52 - low52)) * 100 if (high52 - low52) != 0 else 0
         report += f"  ● 目前位階: {pos:.1f}% (0%為最低, 100%為最高)\n"
@@ -369,8 +391,8 @@ def build_quote_and_orderbook_report(symbol: str) -> str:
     if not fubon_ready:
         return "⚠️ 警告：富邦 V8 引擎未啟動。"
 
-    symbol = _normalize_tw_symbol(symbol)
     try:
+        symbol = _normalize_tw_symbol(symbol)
         reststock = _get_stock_rest_client()
         quote_data = reststock.intraday.quote(symbol=symbol)
 
@@ -465,8 +487,8 @@ def build_intraday_trend_report(symbol: str) -> str:
     if not fubon_ready:
         return "⚠️ 警告：富邦 V8 引擎未啟動。"
 
-    symbol = _normalize_tw_symbol(symbol)
     try:
+        symbol = _normalize_tw_symbol(symbol)
         reststock = _get_stock_rest_client()
         candles_data = reststock.intraday.candles(symbol=symbol, timeframe='5')
 

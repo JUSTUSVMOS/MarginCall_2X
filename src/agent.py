@@ -51,24 +51,73 @@ def ask_agent(user_text, tools, chat_history=None, system_prompt_override=None, 
     )
 
 
-def generate_final_report(symbol, strat_data, nlp_alpha):
-    alpha_official = nlp_alpha.get("alpha_official", 0)
+def _format_fact_list(items):
+    if not items:
+        return "無"
+    return "; ".join(str(item) for item in items if str(item).strip()) or "無"
+
+
+def generate_final_report(symbol, strat_data, nlp_data):
+    signal_pack = nlp_data.get("signal_pack")
+    if not isinstance(signal_pack, dict):
+        signal_pack = None
+
+    composite_alpha = nlp_data.get("nlp_alpha", 0)
+    leading = strat_data.get("leading_indicators", {})
+
+    if signal_pack:
+        source_counts = signal_pack.get("source_counts", {})
+        nlp_block = f"""
+- 綜合 Alpha: {composite_alpha:+.2f}
+- SEC/官方立場: {signal_pack.get('sec_stance', 'N/A')} ({source_counts.get('sec', 0)} 份來源)
+  事實: {_format_fact_list(signal_pack.get('sec_detail', []))}
+- 宏觀新聞立場: {signal_pack.get('macro_stance', 'N/A')} ({source_counts.get('macro', 0)} 篇來源)
+  事實: {_format_fact_list(signal_pack.get('macro_detail', []))}
+- 散戶情緒: {signal_pack.get('retail_stance', 'N/A')} ({source_counts.get('retail', 0)} 則來源)
+  事實: {_format_fact_list(signal_pack.get('retail_detail', []))}
+- 多空矛盾偵測: {signal_pack.get('divergence', '無')}
+""".strip()
+        nuclear_warning = (
+            "\n🚨 核彈級警報已核實：偵測到重大法律/會計風險，以下分析必須以風險控制為最高優先。\n"
+            if signal_pack.get("nuclear_alert")
+            else ""
+        )
+    else:
+        nlp_block = f"""
+- 綜合 Alpha: {composite_alpha:+.2f}
+- 官方/SEC 訊號: {nlp_data.get('alpha_official', 0):+.2f}
+- 散戶情緒: {nlp_data.get('alpha_retail', 0):+.2f}
+- 語意報告: {nlp_data.get('semantic_summary', '無資料')}
+""".strip()
+        nuclear_warning = ""
+
+    if leading:
+        pc_ratio = leading.get("pc_ratio")
+        pc_display = f"{pc_ratio:.2f}" if isinstance(pc_ratio, (int, float)) else "N/A"
+        leading_block = f"""
+3. 即時領先指標:
+- CVD: {leading.get('cvd', 'N/A')} {leading.get('cvd_signal', '')}
+- P/C Ratio: {pc_display} {leading.get('pc_signal', '')}
+""".strip()
+    else:
+        leading_block = ""
+
     analysis_prompt = f"""
 你是交易戰友「破產推進器」。請針對以下數據進行深度推論。
+{nuclear_warning}
 
-【📊 {symbol} 雙重視角數據集】
+【📊 {symbol} 多維數據集】
 1. 技術面/即時盤勢:
 {json.dumps(strat_data.get('metrics', {}), indent=2, ensure_ascii=False)}
 
-2. NLP 情緒因子 (Alpha Factors):
-- 綜合 Alpha: {nlp_alpha.get('nlp_alpha', 0):+.2f}
-- 官方/SEC 訊號: {alpha_official:+.2f}
-- 散戶情緒: {nlp_alpha.get('alpha_retail', 0):+.2f}
-- 語意報告: {nlp_alpha.get('semantic_summary', '無資料')}
+2. NLP 多維掃描:
+{nlp_block}
+{leading_block}
 
 【🧠 推論任務】
-- 你必須綜合技術面指標與 NLP Alpha 因子給出最終交易建議。
-- **🚨 強烈警告規則**: 若官方訊號 (alpha_official) 小於 -0.5，代表內部人拋售或重大利空公告，請在回覆開頭發出「強烈警告」。
+- 你必須綜合技術面、官方/宏觀/散戶三維訊號與即時領先指標給出最終交易建議。
+- 若 SEC 官方來源與散戶情緒方向相反，請把官方事實放在更高權重。
+- 若事實欄位提到法律風險、內部人減持、會計異常或已核實的核彈級警報，請在回覆開頭先給強烈風險警告。
 - 請給出具體的「戰略方向」（例如：多頭佈局、觀望、或空頭避險）。
 """
 

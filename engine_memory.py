@@ -48,6 +48,8 @@ FRONTAL_LOBE_WRITE_GUIDE = """When calling update_frontal_lobe, always write a p
 - Portfolio Health: whether current positions are healthy or over-risked
 - Next Round: if A happens, I will do B
 
+Low-quality placeholder notes will be rejected. Avoid vague one-liners like "觀望", "waiting for CPI", or unlabeled thoughts with no levels / plan.
+
 Example:
 Market View: Bearish - Market shows signs of reversal after SPX rejected 5250 resistance.
 Core Levels: Watch SPX 5200 support and 5250 resistance.
@@ -270,6 +272,18 @@ class Brain:
     負責追蹤工作記憶 (Frontal Lobe)、情緒狀態 (Emotion)、宏觀市場體感 (Market Regime) 的變化，
     並將每一次的異動建立 Commit 儲存為連貫的認知變化鏈。
     """
+    _PLACEHOLDER_PATTERNS = (
+        "暫無明確",
+        "觀望",
+        "no clear",
+        "not explicitly stated",
+        "thesis not explicitly",
+        "waiting for",
+        "尚未建立",
+        "re-check exposure before adding risk",
+        "wait for confirmation before re-entering",
+    )
+
     def __init__(self):
         self.state: Dict[str, Any] = _default_state()
         self.commits: List[Dict[str, Any]] = []
@@ -360,6 +374,30 @@ class Brain:
             })
         return normalized
 
+    def _contains_placeholder_phrase(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(pattern.lower() in lowered for pattern in self._PLACEHOLDER_PATTERNS)
+
+    def _is_placeholder_content(self, note: str) -> bool:
+        if not note or len(note.strip()) < 30:
+            return True
+
+        sections = parse_frontal_lobe_note(note)
+        meaningful_sections = sum(
+            1
+            for field in FRONTAL_LOBE_FIELDS
+            if sections.get(field, "").strip() and not self._contains_placeholder_phrase(sections[field])
+        )
+        if meaningful_sections < 2:
+            return True
+
+        placeholder_sections = sum(
+            1
+            for field in FRONTAL_LOBE_FIELDS
+            if self._contains_placeholder_phrase(sections.get(field, ""))
+        )
+        return placeholder_sections >= 2
+
     def _save(self):
         """將狀態持久化至本地端"""
         try:
@@ -373,6 +411,26 @@ class Brain:
             self._persist_views()
         except Exception as e:
             logger.error(f"Failed to save brain state: {e}")
+
+    def _read_persisted_head(self) -> Optional[str]:
+        if not BRAIN_FILE.exists():
+            return None
+        try:
+            with open(BRAIN_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.debug(f"Failed to read persisted brain head: {e}")
+            return self.head
+
+        if not isinstance(data, dict):
+            return self.head
+        if data.get("head"):
+            return data.get("head")
+
+        commits = data.get("commits", [])
+        if commits and isinstance(commits[-1], dict):
+            return commits[-1].get("hash")
+        return None
 
     def _persist_views(self):
         BRAIN_DIR.mkdir(exist_ok=True)
@@ -485,9 +543,26 @@ class Brain:
         delta: Optional[Dict[str, Any]] = None,
         key_signals: str = "",
         frontal_lobe_ref: str = "",
-        source: str = ""
-    ):
+        source: str = "",
+        expected_head: Optional[str] = None
+    ) -> bool:
         """建立新的認知變化節點 (Commit)"""
+        if expected_head is not None and expected_head != self.head:
+            logger.warning(
+                f"[Brain] Optimistic lock conflict! expected={expected_head}, actual={self.head}. "
+                "Another in-memory write landed first - aborting this commit."
+            )
+            return False
+
+        if expected_head is not None:
+            persisted_head = self._read_persisted_head()
+            if persisted_head != expected_head:
+                logger.warning(
+                    f"[Brain] Optimistic lock conflict! expected={expected_head}, actual={persisted_head}. "
+                    "Another persisted write landed first - aborting this commit."
+                )
+                return False
+
         payload = {
             "type": commit_type,
             "summary": summary,
@@ -517,6 +592,7 @@ class Brain:
         self.commits.append(commit)
         self.head = commit_hash
         self._save()
+        return True
 
     def _render_market_regime_markdown(self, market: Dict[str, Any], heartbeat: Dict[str, Any]) -> str:
         signal_labels = {
@@ -677,10 +753,15 @@ class Brain:
 
     def update_frontal_lobe(self, content: str) -> Dict[str, Any]:
         normalized_note = normalize_frontal_lobe_note(content)
+        if self._is_placeholder_content(normalized_note):
+            logger.warning("[Brain] Rejected placeholder-quality frontal lobe write.")
+            return {"success": False, "message": "Rejected: content is too vague to persist."}
+
+        snapshot_head = self.head
         self.state["frontalLobe"] = normalized_note
         sections = parse_frontal_lobe_note(normalized_note)
         summary = self._build_frontal_lobe_commit_summary(sections)
-        self._create_commit(
+        committed = self._create_commit(
             "frontal_lobe",
             summary,
             delta={
@@ -691,8 +772,12 @@ class Brain:
             },
             key_signals=self._compose_market_signal_summary(self.state.get("marketRegime")),
             frontal_lobe_ref=self._build_frontal_lobe_ref(normalized_note),
-            source="frontal_lobe_write"
+            source="frontal_lobe_write",
+            expected_head=snapshot_head
         )
+        if not committed:
+            self._load()
+            return {"success": False, "message": "Rejected: concurrent frontal lobe update detected."}
         return {"success": True, "message": "Frontal lobe updated successfully"}
 
     def update_emotion(self, emotion: str, reason: str) -> Dict[str, Any]:
@@ -841,6 +926,7 @@ def update_frontal_lobe(content: str) -> str:
     - Core Levels: key support / resistance / MA levels being watched
     - Portfolio Health: whether current positions are healthy or over-risked
     - Next Round: if A happens, you will do B
+    - Low-quality placeholder notes will be rejected instead of persisted
 
     This memory survives restarts. Keep it concise, structured, and decision-oriented.
     Example:
@@ -958,7 +1044,12 @@ def patch_frontal_lobe_section(section_name: str, content: str, source: str = "s
 if __name__ == "__main__":
     # 自檢測試
     print("1. 更新額葉記憶...")
-    print(update_frontal_lobe("市場剛經歷非農數據洗禮，目前處於震盪整理。計畫等待下週 CPI 數據公佈後再決定加碼方向。"))
+    print(update_frontal_lobe(
+        "Market View: Neutral - 非農後市場進入事件前整理，等待 CPI 提供方向。\n"
+        "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
+        "Portfolio Health: 槓桿偏低，部位可控，但不宜在數據前追價。\n"
+        "Next Round: If CPI 低於預期且 SPX 站回 5250，我會小幅加碼；若跌破 5200，先降風險。"
+    ))
     print("\n2. 更新情緒狀態...")
     print(update_emotion("cautious", "非農數據強勁，擔心聯準會延後降息，市場波動加劇。"))
     print("\n3. 更新市場狀態...")

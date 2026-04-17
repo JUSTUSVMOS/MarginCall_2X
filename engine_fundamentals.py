@@ -122,16 +122,26 @@ class FundamentalEngine:
         # [新增] 放空比率 (Short % of Float) 邏輯與 AI 訊號生成
         short_pct_float = "N/A"
         short_shares = info.get('sharesShort')
-        if short_shares:
-            # 穩健容錯: 優先使用 floatShares，若無則降級使用 sharesOutstanding
-            base_shares = info.get('floatShares') or info.get('sharesOutstanding')
-            if base_shares and base_shares > 0:
-                pct = (short_shares / base_shares) * 100
-                short_pct_float = f"{pct:.2f}%"
-                if pct > 15.0: # 訊號生成: >15% 視為高軋空潛力
-                    short_pct_float += " ⚠️高軋空潛力"
-        elif info.get('shortPercentOfFloat'):
-            short_pct_float = f"{info.get('shortPercentOfFloat') * 100:.2f}%"
+        base_shares = next(
+            (
+                value
+                for value in (info.get('floatShares'), info.get('sharesOutstanding'))
+                if value is not None and not pd.isna(value) and value > 0
+            ),
+            None,
+        )
+        short_pct = None
+        if short_shares is not None and not pd.isna(short_shares) and short_shares >= 0 and base_shares:
+            short_pct = (short_shares / base_shares) * 100
+        else:
+            short_percent_of_float = info.get('shortPercentOfFloat')
+            if short_percent_of_float is not None and not pd.isna(short_percent_of_float) and short_percent_of_float >= 0:
+                short_pct = short_percent_of_float * 100
+
+        if short_pct is not None:
+            short_pct_float = f"{short_pct:.2f}%"
+            if short_pct > 15.0:  # 訊號生成: >15% 視為高軋空潛力
+                short_pct_float += " ⚠️高軋空潛力"
 
         return {
             "市值": f"{info.get('marketCap', 0)/1e9:.2f}B" if info.get('marketCap') else 'N/A',

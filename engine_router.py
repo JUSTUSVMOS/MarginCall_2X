@@ -13,6 +13,33 @@ from src.database import db_lock, get_connection
 # 設定日誌
 logger = logging.getLogger(__name__)
 
+
+def _safe_round(value, digits=4):
+    return round(value, digits) if isinstance(value, (int, float)) else value
+
+
+def _decode_nlp_summary_payload(summary_text):
+    signal_pack = None
+    semantic_summary = summary_text
+
+    if not summary_text:
+        return signal_pack, semantic_summary
+
+    try:
+        payload = json.loads(summary_text)
+    except (TypeError, json.JSONDecodeError):
+        return signal_pack, semantic_summary
+
+    if isinstance(payload, dict):
+        if "signal_pack" in payload or "semantic_summary" in payload:
+            signal_pack = payload.get("signal_pack")
+            semantic_summary = payload.get("semantic_summary")
+        else:
+            signal_pack = payload
+            semantic_summary = None
+
+    return signal_pack, semantic_summary
+
 def get_my_user_id():
     val = os.getenv("TELEGRAM_USER_ID")
     return int(val) if val else 0
@@ -125,7 +152,7 @@ def _regex_fallback(text: str) -> list:
 def fetch_nlp_alpha(symbol: str) -> dict:
     """
     從資料庫讀取最新的 NLP Alpha 因子與語意報告。
-    增加時間檢查：若資料超過 10 分鐘則視為過期。
+    增加時間檢查：若資料超過 30 分鐘則視為過期。
     """
     try:
         with db_lock:
@@ -143,7 +170,7 @@ def fetch_nlp_alpha(symbol: str) -> dict:
                 conn.close()
         
         if row:
-            # 檢查時間新鮮度 (10 分鐘內)
+            # 檢查時間新鮮度 (30 分鐘內)
             try:
                 data_time = datetime.datetime.strptime(row[5], '%Y-%m-%d %H:%M:%S')
                 if (datetime.datetime.now() - data_time).total_seconds() > 1800:
@@ -152,12 +179,15 @@ def fetch_nlp_alpha(symbol: str) -> dict:
                 logger.debug(f"Cache time check error: {e}")
                 pass # 若格式不對則跳過時間檢查
 
+            signal_pack, semantic_summary = _decode_nlp_summary_payload(row[4])
+            nlp_alpha = _safe_round(row[0], 4)
             return {
-                "nlp_alpha": round(row[0], 4),
-                "alpha_retail": round(row[1], 4),
-                "alpha_macro": round(row[2], 4),
-                "alpha_official": round(row[3], 4),
-                "semantic_summary": row[4],
+                "nlp_alpha": nlp_alpha,
+                "alpha_retail": _safe_round(row[1], 4),
+                "alpha_macro": _safe_round(row[2], 4),
+                "alpha_official": _safe_round(row[3], 4),
+                "signal_pack": signal_pack,
+                "semantic_summary": semantic_summary,
                 "timestamp": row[5]
             }
         return {"error": "No NLP data found for this symbol. Please run nlp_worker."}
@@ -204,6 +234,7 @@ def parse_pc_ratio(insight_text: str) -> float:
 def fetch_strat_data(symbol: str) -> dict:
     """
     根據資產類型分流抓取數據，並實作 CVD & NLP 雙重熔斷中斷。
+    V2: NLP 分數保持唯讀，領先指標以獨立欄位輸出。
     """
     symbol = market.normalize_ticker(symbol)
     profile = market.get_asset_profile(symbol)
@@ -229,12 +260,24 @@ def fetch_strat_data(symbol: str) -> dict:
     }
 
     try:
-        # 【重要】情緒熔斷：如果 SEC 官方訊號低於 -0.7 (強烈利空/風險)
-        alpha_off = nlp_data.get("alpha_official", 0)
-        if isinstance(alpha_off, (int, float)) and alpha_off < -0.7 and bot:
-            alert_msg = f"🛑 【SEC 深度預警】{symbol} 偵測到官方重大風險！\n官方 Alpha: {alpha_off:.2f}\n語意摘要: {nlp_data.get('semantic_summary', '無')[:150]}..."
+        composite_alpha = nlp_data.get("nlp_alpha", 0)
+        signal_pack = nlp_data.get("signal_pack")
+        if not isinstance(signal_pack, dict):
+            signal_pack = None
+
+        if isinstance(composite_alpha, (int, float)) and composite_alpha < -0.7 and bot:
+            sec_facts = "; ".join(signal_pack.get("sec_detail", [])[:2]) if signal_pack else ""
+            macro_facts = "; ".join(signal_pack.get("macro_detail", [])[:2]) if signal_pack else ""
+            fact_summary = sec_facts or macro_facts or (nlp_data.get("semantic_summary", "無") or "無")
+            divergence = signal_pack.get("divergence", "無") if signal_pack else "無"
+            alert_prefix = "☢️ 【NLP 核心預警】" if signal_pack and signal_pack.get("nuclear_alert") else "🔴 【NLP 深度預警】"
+            alert_msg = (
+                f"{alert_prefix}{symbol} 綜合 Alpha = {composite_alpha:+.2f}\n"
+                f"事實摘要: {fact_summary[:180]}\n"
+                f"矛盾偵測: {divergence}"
+            )
             bot.send_message(get_my_user_id(), alert_msg)
-            logger.warning(f"SEC Sentiment Alert for {symbol}: {alpha_off}")
+            logger.warning(f"NLP Composite Alert for {symbol}: {composite_alpha}")
 
         if asset_type == 'Tech_Momentum':
             # 抓取 5分K CVD
@@ -251,32 +294,26 @@ def fetch_strat_data(symbol: str) -> dict:
             # 抓取技術面 (RSI, MACD 等)
             tech_report = market.build_technical_report(symbol)
             live_insight = market.build_realtime_insight(symbol)
-            
+            pc_ratio = parse_pc_ratio(live_insight)
+             
             data["metrics"] = {
                 "cvd": round(cvd, 4),
                 "technical_analysis": tech_report,
                 "live_insight": live_insight
             }
 
-            # 🎯 解決缺陷 7：整合領先指標修正 NLP Alpha
-            if "nlp_alpha" in nlp_data:
-                # 修正因子 1：CVD (資金流向)
-                if cvd < -0.5:
-                    nlp_data["nlp_alpha"] -= 0.15
-                    logger.info(f"Leading Indicator Correction: {symbol} CVD {cvd} -> Alpha -0.15")
-                elif cvd > 0.5:
-                    nlp_data["nlp_alpha"] += 0.1
-                    logger.info(f"Leading Indicator Correction: {symbol} CVD {cvd} -> Alpha +0.1")
-                
-                # 修正因子 2：P/C Ratio (市場避險情緒)
-                pc_ratio = parse_pc_ratio(live_insight)
-                if pc_ratio:
-                    if pc_ratio > 1.5:
-                        nlp_data["nlp_alpha"] -= 0.1
-                        logger.info(f"Leading Indicator Correction: {symbol} P/C {pc_ratio} -> Alpha -0.1")
-                    elif pc_ratio < 0.5:
-                        nlp_data["nlp_alpha"] += 0.1
-                        logger.info(f"Leading Indicator Correction: {symbol} P/C {pc_ratio} -> Alpha +0.1")
+            data["leading_indicators"] = {
+                "cvd": round(cvd, 4),
+                "pc_ratio": _safe_round(pc_ratio, 4),
+                "cvd_signal": "🔴 拋壓" if cvd < -0.5 else "🟢 買壓" if cvd > 0.5 else "⚪ 中性",
+                "pc_signal": (
+                    "🔴 避險"
+                    if isinstance(pc_ratio, (int, float)) and pc_ratio > 1.5
+                    else "🟢 貪婪"
+                    if isinstance(pc_ratio, (int, float)) and pc_ratio < 0.5
+                    else "⚪ 中性"
+                ),
+            }
 
         elif asset_type == 'Value_Holding':
             # 抓取深度基本面 (趨勢、ROE、債務)
@@ -322,6 +359,8 @@ def get_strat_context(user_text: str) -> str:
         # 整合技術指標與語意情緒
         combined_metrics = {
             "market_data": data.get('metrics', {}),
+            "leading_indicators": data.get('leading_indicators', {}),
+            "relative_move": data.get('relative_move', {}),
             "nlp_sentiment_alpha": data.get('nlp_insights', {})
         }
         context += json.dumps(combined_metrics, ensure_ascii=False, separators=(',', ':'))

@@ -135,8 +135,8 @@ def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
                         message_id=message_id,
                     )
                     strat_data = router.fetch_strat_data(symbol)
-                    nlp_alpha = strat_data.get("nlp_insights", {})
-                    generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id)
+                    nlp_data = strat_data.get("nlp_insights", {})
+                    generate_final_report(symbol, strat_data, nlp_data, chat_id, message_id)
             else:
                 logger.error(f"❌ [情報局] {symbol} 失敗: {stderr[:200]}")
                 if chat_id:
@@ -149,8 +149,8 @@ def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def generate_final_report(symbol, strat_data, nlp_alpha, chat_id, message_id=None):
-    final_text = agent_generate_final_report(symbol, strat_data, nlp_alpha)
+def generate_final_report(symbol, strat_data, nlp_data, chat_id, message_id=None):
+    final_text = agent_generate_final_report(symbol, strat_data, nlp_data)
     _send_or_edit(chat_id, final_text, message_id)
 
 
@@ -172,13 +172,13 @@ def handle_deep_analysis(message):
         bot_instance.send_chat_action(message.chat.id, "typing")
 
         strat_data = router.fetch_strat_data(symbol)
-        nlp_alpha = strat_data.get("nlp_insights", {})
+        nlp_data = strat_data.get("nlp_insights", {})
 
-        if "error" in nlp_alpha:
+        if "error" in nlp_data:
             trigger_nlp_and_callback(symbol, message.chat.id, sent_msg.message_id)
             return
 
-        generate_final_report(symbol, strat_data, nlp_alpha, message.chat.id, sent_msg.message_id)
+        generate_final_report(symbol, strat_data, nlp_data, message.chat.id, sent_msg.message_id)
     except Exception as exc:
         logger.exception(f"Deep analysis failed for message: {getattr(message, 'text', '')}")
         error_text = format_tool_error(f"⚠️ 分析失敗: {exc}", transient=True)
