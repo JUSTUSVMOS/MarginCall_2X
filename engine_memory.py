@@ -563,6 +563,7 @@ class Brain:
                 )
                 return False
 
+        timestamp = _utc_now_iso()
         payload = {
             "type": commit_type,
             "summary": summary,
@@ -570,7 +571,7 @@ class Brain:
             "key_signals": key_signals,
             "frontal_lobe_ref": frontal_lobe_ref,
             "parent_hash": self.head,
-            "timestamp": _utc_now_iso()
+            "timestamp": timestamp
         }
 
         commit_hash = generate_commit_hash(payload)
@@ -578,7 +579,7 @@ class Brain:
         commit = {
             "hash": commit_hash,
             "parent_hash": self.head,
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "timestamp": timestamp,
             "type": commit_type,
             "summary": summary,
             "key_signals": key_signals,
@@ -868,6 +869,21 @@ class Brain:
             watchpoints.append(
                 f"SPX: {signals['spx']} / MA20 {signals.get('spx20Ma', 'N/A')} / MA200 {signals.get('spx200Ma', 'N/A')}"
             )
+        if signals.get("spxTrendRegime"):
+            adx_note = signals.get("spxAdx", "N/A")
+            watchpoints.append(f"SPX 趨勢型態: {signals['spxTrendRegime']} (ADX {adx_note})")
+        if signals.get("sectorBreadth200") is not None:
+            watchpoints.append(
+                f"Sector Breadth: 50MA {signals.get('sectorBreadth50', 'N/A')}% / 200MA {signals['sectorBreadth200']}%"
+            )
+        if signals.get("spyGammaFlipLevel") is not None:
+            watchpoints.append(
+                f"SPY Gamma Flip: {signals['spyGammaFlipLevel']} / Spot {signals.get('spySpot', 'N/A')}"
+            )
+        if signals.get("spyMaxPain") is not None:
+            watchpoints.append(f"SPY Max Pain: {signals['spyMaxPain']}")
+        if signals.get("spyVrp") is not None:
+            watchpoints.append(f"SPY VRP: {signals['spyVrp']}pt ({signals.get('spyVolSignal', 'N/A')})")
         for reason in snapshot.get("reasons", [])[:2]:
             if reason not in watchpoints:
                 watchpoints.append(reason)
@@ -876,7 +892,7 @@ class Brain:
             summary=snapshot.get("summary", ""),
             regime=snapshot.get("state"),
             risk_score=snapshot.get("riskScore"),
-            watchpoints=watchpoints[:5],
+            watchpoints=watchpoints[:6],
             reasons=snapshot.get("reasons", []),
             signals=signals,
             source=source,

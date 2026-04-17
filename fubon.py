@@ -5,6 +5,7 @@ import logging
 import pandas as pd
 from fubon_neo.sdk import FubonSDK
 from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
+from engine_technical import IndicatorCalculator, analyze_obv_signal, summarize_divergence
 from src.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,11 @@ def get_fubon_technical(symbol: str) -> str:
         to_date = today
         from_date = start_date
         ma20, ma60 = 0, 0
+        divergence_label = "⚪ 資料不足"
+        divergence_details = "資料不足"
+        adx_val, plus_di, minus_di = 0, 0, 0
+        trend_regime = "ranging"
+        obv_signal = {"label": "走平", "signal": "⚪ 量價資料不足", "obv_ma20": None}
         try:
             candles = reststock.historical.candles(symbol=symbol, to=to_date, **{'from': from_date})
             if candles.get('data'):
@@ -76,6 +82,27 @@ def get_fubon_technical(symbol: str) -> str:
                 df_hist['ma60'] = df_hist['close'].rolling(window=60).mean()
                 ma20 = df_hist['ma20'].iloc[-1] if len(df_hist) >= 20 else 0
                 ma60 = df_hist['ma60'].iloc[-1] if len(df_hist) >= 60 else 0
+
+                calc = IndicatorCalculator()
+                close_values = df_hist['close'].astype(float).to_numpy()
+                high_values = df_hist['high'].astype(float).to_numpy()
+                low_values = df_hist['low'].astype(float).to_numpy()
+                rsi_series = calc.RSI(close_values)
+                divergence = calc.DIVERGENCE(close_values, rsi_series)
+                divergence_label, divergence_details = summarize_divergence(divergence)
+
+                adx_payload = calc.ADX(high_values, low_values, close_values)
+                adx_series = pd.Series(adx_payload['adx']).dropna()
+                plus_di_series = pd.Series(adx_payload['plus_di']).dropna()
+                minus_di_series = pd.Series(adx_payload['minus_di']).dropna()
+                adx_val = float(adx_series.iloc[-1]) if not adx_series.empty else 0
+                plus_di = float(plus_di_series.iloc[-1]) if not plus_di_series.empty else 0
+                minus_di = float(minus_di_series.iloc[-1]) if not minus_di_series.empty else 0
+                trend_regime = adx_payload.get('trend_regime', 'ranging')
+
+                if 'volume' in df_hist.columns:
+                    obv = calc.OBV(close_values, df_hist['volume'].astype(float).to_numpy())
+                    obv_signal = analyze_obv_signal(close_values, obv)
         except Exception as e:
             logger.warning(f"Candles fetch failed: {e}")
 
@@ -122,6 +149,15 @@ def get_fubon_technical(symbol: str) -> str:
         report += f"● KDJ(9,3,3): K:{vk:.1f} | D:{vd:.1f} | J:{vj:.1f}\n"
         report += f"● RSI(14): {rsi:.2f} ({'🔥極度超買' if rsi>75 else '❄️極度超跌' if rsi<25 else '⚖️中性'})\n"
         report += f"● MACD: DIF:{dif:.2f} | 柱狀體:{macd_hist:.2f} ({'📈多頭增強' if macd_hist>0 else '📉空頭衰退'})\n"
+        report += f"● ADX(14): {adx_val:.2f} | +DI:{plus_di:.2f} | -DI:{minus_di:.2f} ({'📈趨勢盤' if trend_regime == 'trending' else '🌀震盪盤'})\n"
+        report += f"● RSI 背離: {divergence_label}"
+        if divergence_details not in {"無明顯背離", "資料不足"}:
+            report += f" | {divergence_details}"
+        report += "\n"
+        report += f"● OBV 趨勢: {obv_signal['label']} | {obv_signal['signal']}"
+        if obv_signal.get('obv_ma20') is not None:
+            report += f" | OBV20MA:{obv_signal['obv_ma20']:.2f}"
+        report += "\n"
         report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
         
         # 戰術建議
@@ -136,6 +172,10 @@ def get_fubon_technical(symbol: str) -> str:
         elif curr > ma20 and curr > ma60: report += "📈 戰略：股價站上月線與季線，多頭排列建立，回檔即買點。\n"
         elif rsi < 30: report += "🔥 戰略：RSI 極度超跌，隨時可能暴力反彈。\n"
         else: report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
+        if divergence_label == "🟢 底背離":
+            report += "🟢 補充：RSI 底背離成立，賣壓動能開始修復。\n"
+        elif divergence_label == "🔴 頂背離":
+            report += "🔴 補充：RSI 頂背離成立，追價風險上升。\n"
         
         return report
     except Exception as e: return f"❌ 台股指標獲取失敗: {e}"
@@ -626,6 +666,9 @@ def get_exhaustion_analysis(symbol: str) -> str:
         if "❄️極度超跌" in tech_report or "RSI < 25" in tech_report:
             score += 25
             reasons.append("✅ [超跌信號] RSI 進入極度超跌區，賣壓動能已釋放過度。")
+        if "RSI 背離: 🟢 底背離" in tech_report:
+            score += 20
+            reasons.append("✅ [背離確認] RSI 底背離成立，價格創低但動能未再惡化，疑似空方力竭。")
         if "J 線極度耗竭" in tech_report:
             score += 15
             reasons.append("✅ [動能耗竭] KDJ-J 線 < 0，顯示空頭殺過頭，轉折將至。")

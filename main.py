@@ -26,10 +26,12 @@ def main():
     configure_runtime()
 
     import engine_portfolio as portfolio
+    from src.backup import backup_database
     from src.bot import init_bot, register_handlers, run_polling, trigger_nlp_and_callback, is_v_turn_active
     from src.scheduler import start_scheduler, setup_dependencies
 
     portfolio.init_db()
+    backup_database()
     bot_instance, user_id = init_bot()
     logger.info("🚀 MarginCall Express 已啟動！")
     register_handlers()

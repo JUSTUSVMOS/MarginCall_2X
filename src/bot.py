@@ -77,7 +77,13 @@ def initialize_bot_runtime():
     bot_instance = _require_bot()
     fubon.init_fubon()
     market.set_fubon_provider(fubon)
-    router.set_bot(bot_instance)
+
+    def _deliver_router_alert(message: str):
+        if AUTHORIZED_USER_ID is None:
+            raise RuntimeError("AUTHORIZED_USER_ID 尚未初始化")
+        bot_instance.send_message(AUTHORIZED_USER_ID, message)
+
+    router.set_alert_callback(_deliver_router_alert)
     _runtime_initialized = True
 
 

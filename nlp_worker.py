@@ -1,13 +1,15 @@
 import os
 import sys
 import logging
+import math
 import pandas as pd
 import requests
 import json
 import textwrap
 import concurrent.futures
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import Counter
+from typing import Optional
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import cloudscraper  # ⚠️ 新增：用於打穿 Cloudflare 防護
@@ -355,6 +357,54 @@ def adjust_retail_score(raw_score, source_count):
         return raw_score * 0.5
 
 
+def _time_decay_weight(published_at) -> tuple[float, Optional[float]]:
+    """將較新的新聞給更高權重，避免舊新聞稀釋當前市場語氣。回傳 (權重, 小時數)"""
+    if published_at in (None, ""):
+        return 0.5, None
+    try:
+        if isinstance(published_at, pd.Timestamp):
+            if published_at.tzinfo is None:
+                pub = published_at.tz_localize(timezone.utc).to_pydatetime()
+            else:
+                pub = published_at.tz_convert(timezone.utc).to_pydatetime()
+        elif isinstance(published_at, datetime):
+            pub = published_at if published_at.tzinfo else published_at.replace(tzinfo=timezone.utc)
+            pub = pub.astimezone(timezone.utc)
+        elif isinstance(published_at, (int, float)):
+            pub = datetime.fromtimestamp(float(published_at), tz=timezone.utc)
+        else:
+            text = str(published_at).strip()
+            pub = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            else:
+                pub = pub.astimezone(timezone.utc)
+
+        hours_old = (datetime.now(timezone.utc) - pub).total_seconds() / 3600
+        return round(math.exp(-0.05 * max(hours_old, 0)), 4), hours_old
+    except (TypeError, ValueError, AttributeError) as exc:
+        logger.debug(f"Time-decay parsing failed for {published_at}: {exc}")
+        return 0.5, None
+
+
+def _format_macro_news_item(source, headline, summary, published_at) -> str:
+    weight, age_hours = _time_decay_weight(published_at)
+
+    age_text = f"{age_hours:.1f}h" if isinstance(age_hours, (int, float)) else "N/A"
+    return f"Macro({source} | {age_text} | w={weight:.2f}): {headline} | {summary}"
+
+
+def _effective_group_count(texts) -> float:
+    total = 0.0
+    for text in texts:
+        match = re.search(r'w=(\d+(?:\.\d+)?)', str(text))
+        if match:
+            total += max(0.0, float(match.group(1)))
+        else:
+            total += 1.0
+    return round(total, 3)
+
+
 TRINITY_CATEGORY_ROUTING = {
     "SEC": ("sec", "institutional"),
     "Macro": ("macro", "institutional"),
@@ -430,7 +480,7 @@ def compose_alpha_signal(a_sec, n_sec, a_mac, n_mac, a_ret, n_ret):
         ("macro", a_mac, n_mac),
         ("retail", a_ret, n_ret),
     ):
-        count = max(0, int(count or 0))
+        count = max(0.0, float(count or 0.0))
         if count == 0:
             continue
 
@@ -811,7 +861,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
                     source = row.get('source', 'News')
                     headline = row.get('headline', '')
                     summary = row.get('summary', '')[:300]
-                    raw_texts.append(f"Macro({source}): {headline} | {summary}")
+                    raw_texts.append(_format_macro_news_item(source, headline, summary, row.get('datetime')))
                 logger.info(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
     except Exception as e: 
         logger.warning(f"   ⚠️ Finnhub 流程異常: {e}")
@@ -844,6 +894,11 @@ def run_turbo_trinity_scout(stock="NVDA"):
         "Macro":  [t for t in raw_texts if t.startswith("Macro")],
         "Retail": [t for t in raw_texts if t.startswith("Reddit") or t.startswith("StockTwits")],
     }
+    effective_counts = {
+        "sec": _effective_group_count(groups["SEC"]),
+        "macro": _effective_group_count(groups["Macro"]),
+        "retail": _effective_group_count(groups["Retail"]),
+    }
 
     dimension_scores, categorized_tags = score_sentiment_groups(groups, stock)
     a_sec = dimension_scores["sec"]
@@ -874,11 +929,11 @@ def run_turbo_trinity_scout(stock="NVDA"):
 
     nlp_alpha = compose_alpha_signal(
         a_sec,
-        len(groups["SEC"]),
+        effective_counts["sec"],
         a_mac,
-        len(groups["Macro"]),
+        effective_counts["macro"],
         a_retail,
-        len(groups["Retail"]),
+        effective_counts["retail"],
     )
     if nuclear_confirmed:
         nlp_alpha = -0.95
@@ -900,6 +955,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
             "macro": len(groups["Macro"]),
             "retail": len(groups["Retail"]),
         },
+        "effective_counts": effective_counts,
         "composite_alpha": round(nlp_alpha, 4),
     }
 

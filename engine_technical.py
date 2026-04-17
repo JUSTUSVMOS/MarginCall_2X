@@ -5,7 +5,7 @@ from yf_session import get_ticker, get_download
 import pandas as pd
 import numpy as np
 import logging
-from typing import List, Union, Dict, Tuple
+from typing import Any, List, Union, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,61 @@ def validate_formula_ast(formula: str, allowed_names):
     tree = ast.parse(formula, mode='eval')
     SafeFormulaValidator(allowed_names).visit(tree)
     return tree
+
+
+def summarize_divergence(divergence: Dict[str, Any]) -> Tuple[str, str]:
+    details = str(divergence.get("details", "") or "").strip()
+    if divergence.get("bullish_divergence"):
+        return "🟢 底背離", details
+    if divergence.get("bearish_divergence"):
+        return "🔴 頂背離", details
+    if details == "資料不足":
+        return "⚪ 資料不足", details
+    return "⚪ 無明顯背離", details or "無明顯背離"
+
+
+def analyze_obv_signal(closes: np.ndarray, obv: np.ndarray, window: int = 20) -> Dict[str, Any]:
+    close_series = pd.Series(np.asarray(closes, dtype=float))
+    obv_series = pd.Series(np.asarray(obv, dtype=float))
+    if close_series.empty or obv_series.empty:
+        return {"trend": "flat", "label": "走平", "signal": "⚪ 量價資料不足", "obv_ma20": None, "slope": 0.0}
+
+    ma_window = min(window, len(obv_series))
+    obv_ma = obv_series.rolling(window=ma_window).mean()
+    latest_ma = obv_ma.dropna().iloc[-1] if not obv_ma.dropna().empty else None
+
+    lookback = min(window, max(len(close_series) - 1, 1))
+    anchor_idx = max(0, len(close_series) - lookback - 1)
+    price_delta = close_series.iloc[-1] - close_series.iloc[anchor_idx]
+
+    slope_anchor_idx = max(0, len(obv_ma) - min(5, len(obv_ma)))
+    obv_slope = float(obv_ma.iloc[-1] - obv_ma.iloc[slope_anchor_idx]) if latest_ma is not None else 0.0
+
+    if obv_slope > 0:
+        trend, label = "up", "上升"
+    elif obv_slope < 0:
+        trend, label = "down", "下降"
+    else:
+        trend, label = "flat", "走平"
+
+    if price_delta > 0 and obv_slope > 0:
+        signal = "📈 價漲量增，趨勢健康"
+    elif price_delta > 0 and obv_slope < 0:
+        signal = "⚠️ 價漲量背離，留意主力出貨"
+    elif price_delta < 0 and obv_slope < 0:
+        signal = "📉 價跌量弱，空方主導"
+    elif price_delta < 0 and obv_slope > 0:
+        signal = "🟡 價跌量撐，留意止跌吸籌"
+    else:
+        signal = "⚪ 量價中性"
+
+    return {
+        "trend": trend,
+        "label": label,
+        "signal": signal,
+        "obv_ma20": round(float(latest_ma), 2) if latest_ma is not None and not pd.isna(latest_ma) else None,
+        "slope": round(obv_slope, 2),
+    }
 
 class IndicatorCalculator:
     """
@@ -180,6 +235,106 @@ class IndicatorCalculator:
         tr[0] = np.nan # 第一筆無前收盤價
         return pd.Series(tr).ewm(alpha=1/period, adjust=False).mean().values
 
+    def ADX(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> Dict[str, Any]:
+        high_series = pd.Series(np.asarray(highs, dtype=float))
+        low_series = pd.Series(np.asarray(lows, dtype=float))
+        close_series = pd.Series(np.asarray(closes, dtype=float))
+
+        up_move = high_series.diff()
+        down_move = -low_series.diff()
+        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+        tr_components = pd.concat(
+            [
+                high_series - low_series,
+                (high_series - close_series.shift(1)).abs(),
+                (low_series - close_series.shift(1)).abs(),
+            ],
+            axis=1,
+        )
+        tr = tr_components.max(axis=1)
+        atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+
+        atr_safe = atr.replace(0, np.nan)
+        plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_safe
+        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_safe
+        dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)) * 100
+        adx = dx.ewm(alpha=1 / period, adjust=False).mean().fillna(0.0)
+        latest_adx = adx.dropna().iloc[-1] if not adx.dropna().empty else 0.0
+
+        return {
+            "adx": adx.values,
+            "plus_di": plus_di.fillna(0.0).values,
+            "minus_di": minus_di.fillna(0.0).values,
+            "trend_regime": "trending" if latest_adx > 25 else "ranging",
+        }
+
+    def OBV(self, closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:
+        close_values = np.asarray(closes, dtype=float)
+        volume_values = np.asarray(volumes, dtype=float)
+        if len(close_values) != len(volume_values):
+            raise ValueError("OBV requires closes and volumes with the same length")
+        if close_values.size == 0:
+            return np.array([])
+        direction = np.sign(np.diff(close_values, prepend=close_values[0]))
+        return np.cumsum(direction * volume_values)
+
+    def DIVERGENCE(self, price: np.ndarray, indicator: np.ndarray, lookback: int = 50, order: int = 5) -> Dict[str, Any]:
+        """
+        偵測價格與指標之間的背離。
+        order: 用來判定 local min/max 的鄰域大小（左右各 order 根 K 棒）
+        """
+        from scipy.signal import argrelextrema
+
+        aligned = pd.DataFrame(
+            {
+                "price": pd.Series(np.asarray(price, dtype=float)),
+                "indicator": pd.Series(np.asarray(indicator, dtype=float)),
+            }
+        ).dropna()
+
+        result = {"bullish_divergence": False, "bearish_divergence": False, "details": "無明顯背離"}
+        if aligned.empty:
+            result["details"] = "資料不足"
+            return result
+
+        window = aligned.tail(lookback)
+        if len(window) < max(order * 2 + 3, 6):
+            result["details"] = "資料不足"
+            return result
+
+        price_values = window["price"].to_numpy()
+        indicator_values = window["indicator"].to_numpy()
+        details = []
+
+        price_lows = argrelextrema(price_values, np.less, order=order)[0]
+        price_highs = argrelextrema(price_values, np.greater, order=order)[0]
+
+        if len(price_lows) >= 2:
+            p1, p2 = price_lows[-2], price_lows[-1]
+            if price_values[p2] < price_values[p1] and indicator_values[p2] > indicator_values[p1]:
+                result["bullish_divergence"] = True
+                details.append(
+                    "底背離：價格從 "
+                    f"{price_values[p1]:.2f} 下探至 {price_values[p2]:.2f}，"
+                    f"但指標從 {indicator_values[p1]:.1f} 上升至 {indicator_values[p2]:.1f}"
+                )
+
+        if len(price_highs) >= 2:
+            p1, p2 = price_highs[-2], price_highs[-1]
+            if price_values[p2] > price_values[p1] and indicator_values[p2] < indicator_values[p1]:
+                result["bearish_divergence"] = True
+                details.append(
+                    "頂背離：價格從 "
+                    f"{price_values[p1]:.2f} 上升至 {price_values[p2]:.2f}，"
+                    f"但指標從 {indicator_values[p1]:.1f} 下降至 {indicator_values[p2]:.1f}"
+                )
+
+        if details:
+            result["details"] = " | ".join(details)
+        return result
+
     # ==========================================
     # 5. 形態分析 (Structure)
     # ==========================================
@@ -208,6 +363,7 @@ class IndicatorCalculator:
             'LOW': self.LOW, 'VOLUME': self.VOLUME,
             'SMA': self.SMA, 'EMA': self.EMA, 'MAX': self.MAX, 'MIN': self.MIN, 'STDEV': self.STDEV,
             'RSI': self.RSI, 'MACD': self.MACD, 'ATR': self.ATR, 'BBANDS': self.BBANDS,
+            'ADX': self.ADX, 'OBV': self.OBV, 'DIVERGENCE': self.DIVERGENCE,
         }
 
         try:
@@ -228,8 +384,19 @@ class IndicatorCalculator:
                 # 處理 MACD 或 BBANDS 回傳的 dict
                 res_str = ""
                 for k, v in result.items():
-                    vals = v[~np.isnan(v)][-1] if isinstance(v, (np.ndarray, pd.Series)) else v
-                    res_str += f"{k}: {round(float(vals), precision)} | "
+                    if isinstance(v, (np.ndarray, pd.Series)):
+                        series = pd.Series(v).dropna()
+                        vals = series.iloc[-1] if not series.empty else np.nan
+                    else:
+                        vals = v
+
+                    if isinstance(vals, (np.bool_, bool)):
+                        display = bool(vals)
+                    elif isinstance(vals, (np.floating, float, np.integer, int)):
+                        display = round(float(vals), precision)
+                    else:
+                        display = vals
+                    res_str += f"{k}: {display} | "
                 return f"字典結果 (最新值): {res_str.strip(' | ')}"
             elif isinstance(result, (np.bool_, bool)):
                 return f"邏輯判斷結果: {bool(result)}"
@@ -255,7 +422,7 @@ def calculate_indicator(formula: str) -> str:
     
     Data Primitives: CLOSE('AAPL', '1d'), OPEN, HIGH, LOW, VOLUME (Intervals: '1m', '1h', '1d', '1wk')
     Statistics: SMA(data, period), EMA, MAX, MIN, STDEV
-    Indicators: RSI(data, 14), MACD(data, fast, slow, sig), ATR(highs, lows, closes, 14), BBANDS(data, 20, 2)
+    Indicators: RSI(data, 14), MACD(data, fast, slow, sig), ATR(highs, lows, closes, 14), BBANDS(data, 20, 2), ADX(highs, lows, closes, 14), OBV(closes, volumes), DIVERGENCE(price, indicator)
     Logic & Slicing: Supports slicing [-1] and boolean logic (e.g., CLOSE(...) > SMA(...)).
     
     Example formula: "RSI(CLOSE('TSLA', '1h'), 14)[-1]"

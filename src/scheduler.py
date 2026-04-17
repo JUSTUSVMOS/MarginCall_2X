@@ -10,6 +10,7 @@ import engine_market as market
 import engine_memory as memory
 import engine_risk as risk
 from config import WATCH_LIST
+from src.backup import backup_database
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,14 @@ def start_scheduler():
         hour=8,
         minute=5,
         id="daily-portfolio-review",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        backup_database,
+        "cron",
+        hour=7,
+        minute=0,
+        id="daily-db-backup",
         replace_existing=True,
     )
     scheduler.add_job(daily_nlp_scout, "interval", hours=4, id="daily-nlp-scout", replace_existing=True)

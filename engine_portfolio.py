@@ -3,6 +3,9 @@ import time
 import os
 import csv
 import logging
+import threading
+import requests
+import pandas as pd
 import yfinance as yf
 import fubon
 from typing import Any, Dict, List
@@ -17,27 +20,93 @@ CSV_BACKUP = "my_portfolio.csv"
 
 # --- 匯率快取 ---
 _fx_cache = {"rate": 32.0, "timestamp": 0}
+_fx_cache_lock = threading.Lock()
 
 def fetch_exchange_rate() -> float:
     """Pure FX-rate logic for direct callers and tests."""
     global _fx_cache
     current_time = time.time()
-    if current_time - _fx_cache["timestamp"] < 600:
-        return _fx_cache["rate"]
+    with _fx_cache_lock:
+        if current_time - _fx_cache["timestamp"] < 600:
+            return _fx_cache["rate"]
     try:
         ticker = get_ticker("TWD=X")
-        rate = ticker.fast_info.get('last_price') or ticker.history(period="1d")['Close'].iloc[-1]
-        _fx_cache["rate"] = round(float(rate), 2)
-        _fx_cache["timestamp"] = current_time
-        return _fx_cache["rate"]
-    except Exception as e:
-        logger.warning(f"Exchange rate refresh failed, using cache: {e}")
+        fast_info = getattr(ticker, "fast_info", {}) or {}
+        rate = fast_info.get("last_price")
+        if rate is None:
+            hist = ticker.history(period="1d")
+            if hist.empty:
+                raise ValueError("TWD=X history is empty")
+            rate = hist["Close"].iloc[-1]
+        fresh_rate = round(float(rate), 2)
+    except requests.RequestException as e:
+        logger.warning(f"Exchange rate network refresh failed, using cache: {e}")
+        with _fx_cache_lock:
+            return _fx_cache["rate"]
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.error(f"Exchange rate payload parsing failed, using cache: {e}")
+        with _fx_cache_lock:
+            return _fx_cache["rate"]
+    except Exception:
+        logger.exception("Exchange rate refresh failed unexpectedly, using cache")
+        with _fx_cache_lock:
+            return _fx_cache["rate"]
+
+    with _fx_cache_lock:
+        if current_time >= _fx_cache["timestamp"]:
+            _fx_cache["rate"] = fresh_rate
+            _fx_cache["timestamp"] = time.time()
         return _fx_cache["rate"]
 
 
 @tool()
 def get_exchange_rate() -> float:
     return fetch_exchange_rate()
+
+
+def _upsert_portfolio_row(cursor, symbol: str, cost: float, shares: float, twd_cost: float, locked: int = 0):
+    cursor.execute(
+        "INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)",
+        (symbol, cost, shares, twd_cost, locked),
+    )
+
+
+def _record_trade_log(
+    cursor,
+    *,
+    symbol: str,
+    action: str,
+    price: float,
+    shares: float,
+    settle_currency: str | None = None,
+    settle_amount: float | None = None,
+    fx_rate: float | None = None,
+    realized_pnl: float | None = None,
+    cash_before: float | None = None,
+    cash_after: float | None = None,
+    note: str | None = None,
+):
+    cursor.execute(
+        """
+        INSERT INTO trade_log (
+            symbol, action, price, shares, settle_currency, settle_amount, fx_rate,
+            realized_pnl, cash_before, cash_after, note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            symbol,
+            action,
+            price,
+            shares,
+            settle_currency,
+            settle_amount,
+            fx_rate,
+            realized_pnl,
+            cash_before,
+            cash_after,
+            note,
+        ),
+    )
 
 # --- 資料庫初始化與遷移 ---
 def init_db():
@@ -53,6 +122,25 @@ def init_db():
                 locked INTEGER DEFAULT 0
             )
         """)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                price REAL NOT NULL,
+                shares REAL NOT NULL,
+                settle_currency TEXT,
+                settle_amount REAL,
+                fx_rate REAL,
+                realized_pnl REAL,
+                cash_before REAL,
+                cash_after REAL,
+                note TEXT
+            )
+            """
+        )
         # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
         try:
             cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
@@ -126,8 +214,22 @@ def execute_position_update(symbol: str, price: float, shares: float, action: st
                     new_shares = old_pos[1] + shares
                     new_twd_cost = old_pos[2] + actual_twd_total
                     new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
-                    cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, new_cost, new_shares, new_twd_cost, current_locked))
-                    cursor.execute("UPDATE portfolio SET shares = shares - ?, twd_cost = twd_cost - ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+                    cash_before = cash_pos[1]
+                    cash_after = cash_before - settle_amount
+                    _upsert_portfolio_row(cursor, symbol, new_cost, new_shares, new_twd_cost, current_locked)
+                    _upsert_portfolio_row(cursor, settle_currency, cash_pos[0], cash_after, cash_pos[2] - actual_twd_total, 0)
+                    _record_trade_log(
+                        cursor,
+                        symbol=symbol,
+                        action='buy',
+                        price=actual_unit_price,
+                        shares=shares,
+                        settle_currency=settle_currency,
+                        settle_amount=settle_amount,
+                        fx_rate=fx_rate,
+                        cash_before=cash_before,
+                        cash_after=cash_after,
+                    )
                     result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
                     should_refresh_memory = True
             
@@ -141,16 +243,44 @@ def execute_position_update(symbol: str, price: float, shares: float, action: st
                     realized_twd_cost = old_pos[2] * cost_ratio
                     realized_pnl = actual_twd_total - realized_twd_cost
                     new_shares = old_pos[1] - shares
+                    cash_before = cash_pos[1]
+                    cash_after = cash_before + settle_amount
                     if new_shares > 0:
                         cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
                     else:
                         cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
-                    cursor.execute("UPDATE portfolio SET shares = shares + ?, twd_cost = twd_cost + ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+                    _upsert_portfolio_row(cursor, settle_currency, cash_pos[0], cash_after, cash_pos[2] + actual_twd_total, 0)
+                    _record_trade_log(
+                        cursor,
+                        symbol=symbol,
+                        action='sell',
+                        price=actual_unit_price,
+                        shares=shares,
+                        settle_currency=settle_currency,
+                        settle_amount=settle_amount,
+                        fx_rate=fx_rate,
+                        realized_pnl=realized_pnl,
+                        cash_before=cash_before,
+                        cash_after=cash_after,
+                    )
                     result_message = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
                     should_refresh_memory = True
             
             elif action == 'set':
-                cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, actual_unit_price, shares, actual_twd_total, current_locked))
+                _upsert_portfolio_row(cursor, symbol, actual_unit_price, shares, actual_twd_total, current_locked)
+                _record_trade_log(
+                    cursor,
+                    symbol=symbol,
+                    action='set',
+                    price=actual_unit_price,
+                    shares=shares,
+                    settle_currency=symbol if is_cash else None,
+                    settle_amount=(shares - old_pos[1]) if is_cash else None,
+                    fx_rate=fx_rate,
+                    cash_before=old_pos[1] if is_cash else None,
+                    cash_after=shares if is_cash else None,
+                    note=f"manual set; locked={current_locked}",
+                )
                 result_message = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
                 should_refresh_memory = True
             else:
@@ -467,6 +597,90 @@ def calculate_position_pnl(symbol: str, current_price: float, shares: float, his
         "pnl_percent": round(pnl_percent, 2),
         "market": "UK" if is_uk_stock else "US" if is_us_stock else "TW"
     }
+
+
+def build_position_size_report(
+    symbol: str,
+    risk_pct: float = 2.0,
+    total_capital_twd: float = None,
+    stop_atr_multiple: float = 2.0,
+) -> str:
+    """以 ATR 估算風險預算下的建議倉位。"""
+    try:
+        if risk_pct <= 0 or stop_atr_multiple <= 0:
+            return format_tool_error("❌ risk_pct 與 stop_atr_multiple 必須大於 0。", data_unavailable=True)
+
+        symbol = normalize_ticker(symbol)
+        from engine_technical import IndicatorCalculator
+
+        calc = IndicatorCalculator()
+        highs = calc.HIGH(symbol, '1d')
+        lows = calc.LOW(symbol, '1d')
+        closes = calc.CLOSE(symbol, '1d')
+        atr_series = pd.Series(calc.ATR(highs, lows, closes)).dropna()
+        if atr_series.empty:
+            return format_tool_error(f"❌ {symbol} 無法計算 ATR。", data_unavailable=True)
+
+        atr = float(atr_series.iloc[-1])
+        price = float(closes[-1])
+        clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
+        is_taiwan = (any(char.isdigit() for char in clean_symbol) and len(clean_symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
+        fx_rate = 1.0 if is_taiwan or 'CASH' in symbol else fetch_exchange_rate()
+
+        if total_capital_twd is None:
+            total_capital_twd = float(build_portfolio_analysis().get("total_current") or 0.0)
+        else:
+            total_capital_twd = float(total_capital_twd)
+
+        if total_capital_twd <= 0:
+            return format_tool_error("❌ 無法取得有效總資金，請先確認 portfolio。", data_unavailable=True)
+
+        risk_budget_twd = total_capital_twd * (risk_pct / 100.0)
+        stop_distance_local = atr * stop_atr_multiple
+        stop_distance_twd = stop_distance_local * fx_rate
+        if stop_distance_twd <= 0 or price <= 0:
+            return format_tool_error(f"❌ {symbol} 的 ATR / 價格數據異常。", data_unavailable=True)
+
+        risk_shares = int(risk_budget_twd / stop_distance_twd)
+        affordable_shares = int(total_capital_twd / (price * fx_rate))
+        recommended_shares = max(0, min(risk_shares, affordable_shares))
+        capped_by_capital = risk_shares > affordable_shares
+        position_value_local = recommended_shares * price
+        position_value_twd = position_value_local * fx_rate
+
+        report = f"📐 【ATR 倉位計算】 {symbol}\n"
+        report += (
+            f"● ATR(14): {atr:.2f} | 建議止損距離: {stop_distance_local:.2f} "
+            f"({stop_atr_multiple:.1f}x ATR)\n"
+        )
+        report += f"● 風險預算: NT${risk_budget_twd:,.0f} ({risk_pct:.2f}% of NT${total_capital_twd:,.0f})\n"
+        report += (
+            f"● 建議股數: {recommended_shares} 股 | 部位市值: "
+            f"{position_value_local:,.0f}{' 原幣' if fx_rate > 1 else ' TWD'}"
+        )
+        if fx_rate > 1:
+            report += f" (~NT${position_value_twd:,.0f})"
+        report += "\n"
+        report += f"● 佔總資金: {(position_value_twd / total_capital_twd * 100) if total_capital_twd > 0 else 0:.1f}%"
+        if capped_by_capital:
+            report += " | ⚠️ 已受總資金上限限制"
+        return report
+    except Exception as e:
+        logger.error(f"ATR position sizing failed for {symbol}: {e}")
+        return format_tool_error(f"❌ 倉位計算失敗: {e}", data_unavailable=True)
+
+
+@tool()
+def calculate_position_size(
+    symbol: str,
+    risk_pct: float = 2.0,
+    total_capital_twd: float = None,
+    stop_atr_multiple: float = 2.0,
+) -> str:
+    """
+    Calculates a suggested position size using ATR-based stop distance and portfolio risk budget.
+    """
+    return build_position_size_report(symbol, risk_pct, total_capital_twd, stop_atr_multiple)
 
 
 @tool()

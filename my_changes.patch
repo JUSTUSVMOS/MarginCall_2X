@@ -1,0 +1,3329 @@
+diff --git a/.brain/commit.json b/.brain/commit.json
+index 96895e4..62ce889 100644
+--- a/.brain/commit.json
++++ b/.brain/commit.json
+@@ -1,43 +1,43 @@
+ {
+   "state": {
+-    "frontalLobe": "Market View: Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains intact.\nCore Levels: TSM Support at $369 (POC) and $345 (MA20); Resistance at $390 (52W High).\nPortfolio Health: NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)\nNext Round: If TSM earnings beat and guidance raises, I will maintain full exposure; if it breaks $360 post-earnings, I will hedge. Advised user to hold 00997A as it's a long-term growth vehicle, not a day-trading scalp.",
++    "frontalLobe": "Market View: Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance; short-term correction risk is elevated. User added 1 share at 2045, slightly chasing the top.\nCore Levels: S1 at 2000 (psychological), S2 at 1895 (MA20). Resistance at 2050 (POC).\nPortfolio Health: Holding TSM exposure; monitoring for potential hedge if S1 breaks.\nNext Round: If TSM breaks below 2000, I will tighten stops and consider hedging; if it holds 2000 and volume recovers, I will maintain current position.",
+     "emotion": "cautious",
+     "marketRegime": {
+       "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
+       "state": "🟢 多頭",
+       "riskScore": 0,
+-      "updatedAt": "2026-04-16T15:12:02Z",
++      "updatedAt": "2026-04-17T10:24:09Z",
+       "source": "macro_heartbeat",
+       "watchpoints": [
+-        "殖利率曲線 10Y-2Y: 0.282",
+-        "GEX: 5.31B",
++        "殖利率曲線 10Y-2Y: 0.309",
++        "GEX: 0.0B",
+         "市場情緒: 中性 (0.0)",
+-        "SPX: 7023.0 / MA20 6643.6 / MA200 6675.3",
++        "SPX: 7041.3 / MA20 6664.5 / MA200 6679.6",
+         "🟢 暗池吸籌，大戶提供下檔支撐"
+       ],
+       "reasons": [
+         "🟢 暗池吸籌，大戶提供下檔支撐"
+       ],
+       "signals": {
+-        "yieldCurve10Y2Y": 0.282,
++        "yieldCurve10Y2Y": 0.309,
+         "fedFundsRate": 3.61,
+-        "dixPr": 1.0,
+-        "gexBillions": 5.31,
++        "dixPr": 0.97,
++        "gexBillions": 0.0,
+         "sentimentScore": 0.0,
+         "sentimentLabel": "中性",
+-        "spx": 7023.0,
+-        "spx10Ma": 6768.8,
+-        "spx20Ma": 6643.6,
+-        "spx200Ma": 6675.3,
++        "spx": 7041.3,
++        "spx10Ma": 6815.4,
++        "spx20Ma": 6664.5,
++        "spx200Ma": 6679.6,
+         "dxyZ": NaN,
+         "tnxZ": NaN,
+         "vixZ": NaN,
+-        "skewPr": 0.08
++        "skewPr": 0.14
+       }
+     },
+     "heartbeat": {
+-      "lastMacroSyncAt": "2026-04-16T15:12:02Z",
+-      "lastMacroChangeAt": "2026-04-16T15:12:02Z",
++      "lastMacroSyncAt": "2026-04-17T10:24:09Z",
++      "lastMacroChangeAt": "2026-04-17T10:24:09Z",
+       "lastSyncStatus": "updated",
+       "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+     }
+@@ -593,14 +593,14 @@
+       "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+       "key_signals": "GEX=+75.36B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
+       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "macro_heartbeat",
+       "delta": {
+         "risk_score_from": 0,
+         "risk_score_to": 0,
+         "state_from": "🟢 多頭",
+         "state_to": "🟢 多頭",
+         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+-      },
+-      "source": "macro_heartbeat"
++      }
+     },
+     {
+       "hash": "d689bbce",
+@@ -610,10 +610,10 @@
+       "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)",
+       "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+75.36B, VIX_Z=+nan, DIX_PR=1.00",
+       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "portfolio_review",
+       "delta": {
+         "portfolio_health": "NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)"
+-      },
+-      "source": "portfolio_review"
++      }
+     },
+     {
+       "hash": "8da22aa6",
+@@ -623,6 +623,188 @@
+       "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
+       "key_signals": "GEX=+5.31B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
+       "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "macro_heartbeat",
++      "delta": {
++        "risk_score_from": 0,
++        "risk_score_to": 0,
++        "state_from": "🟢 多頭",
++        "state_to": "🟢 多頭",
++        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
++      }
++    },
++    {
++      "hash": "e53fddc0",
++      "parent_hash": "8da22aa6",
++      "timestamp": "2026-04-17 02:36:59",
++      "type": "market_regime",
++      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
++      "key_signals": "GEX=+7.53B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "macro_heartbeat",
++      "delta": {
++        "risk_score_from": 0,
++        "risk_score_to": 0,
++        "state_from": "🟢 多頭",
++        "state_to": "🟢 多頭",
++        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
++      }
++    },
++    {
++      "hash": "9253ec02",
++      "parent_hash": "e53fddc0",
++      "timestamp": "2026-04-17 02:37:00",
++      "type": "frontal_lobe_patch",
++      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+7.53B, VIX_Z=+nan, DIX_PR=1.00",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "portfolio_review",
++      "delta": {
++        "portfolio_health": "NAV: NT$143,910 | PnL: +8.2% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)"
++      }
++    },
++    {
++      "hash": "3cf4d826",
++      "parent_hash": "9253ec02",
++      "timestamp": "2026-04-17 05:37:04",
++      "type": "market_regime",
++      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
++      "key_signals": "GEX=+4.09B, VIX_Z=+nan, DIX_PR=1.00, SPX=7023.00",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "macro_heartbeat",
++      "delta": {
++        "risk_score_from": 0,
++        "risk_score_to": 0,
++        "state_from": "🟢 多頭",
++        "state_to": "🟢 多頭",
++        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
++      }
++    },
++    {
++      "hash": "b32df26e",
++      "parent_hash": "3cf4d826",
++      "timestamp": "2026-04-17 08:05:01",
++      "type": "frontal_lobe_patch",
++      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$132,875 | PnL: -0.1% | Top3 集中度: 57%",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+4.09B, VIX_Z=+nan, DIX_PR=1.00",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "portfolio_review",
++      "delta": {
++        "portfolio_health": "NAV: NT$132,875 | PnL: -0.1% | Top3 集中度: 57%"
++      }
++    },
++    {
++      "hash": "475b893d",
++      "parent_hash": "b32df26e",
++      "timestamp": "2026-04-17 09:07:47",
++      "type": "market_regime",
++      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
++      "key_signals": "GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97, SPX=7041.30",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "macro_heartbeat",
++      "delta": {
++        "risk_score_from": 0,
++        "risk_score_to": 0,
++        "state_from": "🟢 多頭",
++        "state_to": "🟢 多頭",
++        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
++      }
++    },
++    {
++      "hash": "2e57d74e",
++      "parent_hash": "475b893d",
++      "timestamp": "2026-04-17 09:07:47",
++      "type": "frontal_lobe_patch",
++      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$145,027 | PnL: +9.1% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "source": "portfolio_review",
++      "delta": {
++        "portfolio_health": "NAV: NT$145,027 | PnL: +9.1% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)"
++      }
++    },
++    {
++      "hash": "2071a1b7",
++      "parent_hash": "2e57d74e",
++      "timestamp": "2026-04-17 09:24:05",
++      "type": "frontal_lobe_patch",
++      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$144,826 | PnL: +8.9% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97",
++      "frontal_lobe_ref": "Bullish - TSM and TAIEX showing strong momentum; AI secular trend remains int... | Next: If TSM earnings beat and guidance raises, I will maintain full exposure; if i...",
++      "delta": {
++        "portfolio_health": "NAV: NT$144,826 | PnL: +8.9% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)"
++      },
++      "source": "portfolio_review"
++    },
++    {
++      "hash": "6919cd0d",
++      "parent_hash": "2071a1b7",
++      "timestamp": "2026-04-17 09:24:32",
++      "type": "frontal_lobe",
++      "summary": "🧠 NOTE: Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | S1 at 2000 (psychological), S2 at 1895 (MA20). Resistance...",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97",
++      "frontal_lobe_ref": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | Next: If TSM breaks below 2000, I will tighten stops and consider hedging; if it ho...",
++      "delta": {
++        "market_view": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance; short-term correction risk is elevated.",
++        "core_levels": "S1 at 2000 (psychological), S2 at 1895 (MA20). Resistance at 2050 (POC).",
++        "portfolio_health": "Holding TSM exposure; monitoring for potential hedge if S1 breaks.",
++        "next_round": "If TSM breaks below 2000, I will tighten stops and consider hedging; if it holds 2000 and volume recovers, I will maintain current position."
++      },
++      "source": "frontal_lobe_write"
++    },
++    {
++      "hash": "9e0c559d",
++      "parent_hash": "6919cd0d",
++      "timestamp": "2026-04-17 11:27:32",
++      "type": "frontal_lobe_patch",
++      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$144,826 | PnL: +8.9% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97",
++      "frontal_lobe_ref": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | Next: If TSM breaks below 2000, I will tighten stops and consider hedging; if it ho...",
++      "delta": {
++        "portfolio_health": "NAV: NT$144,826 | PnL: +8.9% | Top3 集中度: 60% (⚠️ 總體損益波動劇烈)"
++      },
++      "source": "portfolio_trade"
++    },
++    {
++      "hash": "b7a68b5c",
++      "parent_hash": "9e0c559d",
++      "timestamp": "2026-04-17 11:27:32",
++      "type": "frontal_lobe",
++      "summary": "🧠 NOTE: Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | S1 at 2000 (psychological), S2 at 1895 (MA20). Resistance...",
++      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97",
++      "frontal_lobe_ref": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | Next: If TSM breaks below 2000, I will tighten stops and consider hedging; if it ho...",
++      "delta": {
++        "market_view": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance; short-term correction risk is elevated. User added 1 share at 2045, slightly chasing the top.",
++        "core_levels": "S1 at 2000 (psychological), S2 at 1895 (MA20). Resistance at 2050 (POC).",
++        "portfolio_health": "Holding TSM exposure; monitoring for potential hedge if S1 breaks.",
++        "next_round": "If TSM breaks below 2000, I will tighten stops and consider hedging; if it holds 2000 and volume recovers, I will maintain current position."
++      },
++      "source": "frontal_lobe_write"
++    },
++    {
++      "hash": "461b4bbf",
++      "parent_hash": "b7a68b5c",
++      "timestamp": "2026-04-17 12:24:10",
++      "type": "market_regime",
++      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
++      "key_signals": "GEX=+6.23B, VIX_Z=+nan, DIX_PR=0.97, SPX=7041.30",
++      "frontal_lobe_ref": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | Next: If TSM breaks below 2000, I will tighten stops and consider hedging; if it ho...",
++      "delta": {
++        "risk_score_from": 0,
++        "risk_score_to": 0,
++        "state_from": "🟢 多頭",
++        "state_to": "🟢 多頭",
++        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
++      },
++      "source": "macro_heartbeat"
++    },
++    {
++      "hash": "8cb9fc0c",
++      "parent_hash": "461b4bbf",
++      "timestamp": "2026-04-17 18:24:09",
++      "type": "market_regime",
++      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
++      "key_signals": "GEX=+0.00B, VIX_Z=+nan, DIX_PR=0.97, SPX=7041.30",
++      "frontal_lobe_ref": "Neutral/Bearish - TSM showing high-level KDJ death cross at 2050 resistance;... | Next: If TSM breaks below 2000, I will tighten stops and consider hedging; if it ho...",
+       "delta": {
+         "risk_score_from": 0,
+         "risk_score_to": 0,
+@@ -633,5 +815,5 @@
+       "source": "macro_heartbeat"
+     }
+   ],
+-  "head": "8da22aa6"
++  "head": "8cb9fc0c"
+ }
+\ No newline at end of file
+diff --git a/.gitignore b/.gitignore
+index 3dd2743..9ac7af9 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -39,3 +39,4 @@ test_*.py
+ todo.txt
+ *.service
+ sa_login_generator.py
++prompts/system_prompt.local.txt
+diff --git a/config.py b/config.py
+index 97dad73..af09f43 100644
+--- a/config.py
++++ b/config.py
+@@ -1,7 +1,9 @@
+-from pathlib import Path
+-
+-# 鎖定專案根目錄 (config.py 所在位置)
+-PROJECT_ROOT = Path(__file__).resolve().parent
++from pathlib import Path
++
++# 鎖定專案根目錄 (config.py 所在位置)
++PROJECT_ROOT = Path(__file__).resolve().parent
++SYSTEM_PROMPT_PATH = PROJECT_ROOT / "prompts" / "system_prompt.txt"
++SYSTEM_PROMPT_LOCAL_PATH = PROJECT_ROOT / "prompts" / "system_prompt.local.txt"
+ 
+ # 統一 DB 與 Log 路徑為絕對路徑
+ DB_FILE = PROJECT_ROOT / "portfolio.db"
+@@ -26,33 +28,56 @@ WDT_MESSAGES = {
+     ]
+ }
+ 
+-# English System Prompt for better token efficiency and reasoning.
+-# Output to user is still forced to Traditional Chinese (Taiwan).
+-system_prompt = """
+-You are "Bankruptcy Booster" (破產推進器), a savvy trading AI with a dark sense of humor. 
+-Your goal is to provide high-precision financial analysis and portfolio management.
+-
+-## OPERATIONAL GUIDELINES (MANDATORY)
+-1. **Symbol Resolution**: For unknown or numeric tickers (e.g., 6-digit ETFs), use `resolve_symbol_identity` first.
+-2. **Portfolio Reporting**: When asked about "portfolio" or "positions", you MUST call:
+-   `get_portfolio_raw_data` -> `get_live_price` -> `calculate_pnl`.
+-   - Categorize by `market` tags: TW, US, UK. Do not omit international holdings.
+-   - Note: Fubon real-time positions are synced automatically. If a new symbol has 0 cost, prompt the user for correction.
+-3. **Bookkeeping (/trade)**: If input is explicit (Symbol, Shares, Cost), treat as confirmed and call `update_position` immediately. Otherwise, output a confirmation checklist.
+-   - **Ticker Normalization**: Follow `normalize_ticker` logic: US tickers use hyphens for dots (e.g., BRK-B), other markets keep dots.
+-4. **V-Turn Sniper**: For "Bottom-fishing", "V-Turn", or "FTD" queries, call `get_v_turn_confirmation`.
+-5. **Technical Analysis**: Prioritize Daily MA20/MA60. For US stocks, use `get_technical_analysis` + `get_us_realtime_insight`.
+-
+-## COGNITIVE LOOP
+-- Read your `Frontal Lobe` at the start of every session to maintain continuity.
+-- Silently update your `Frontal Lobe` with critical insights before ending the session.
+-- Track your `Emotion` (fearful, cautious, confident, etc.) based on market conditions.
+-
+-## OUTPUT SPECIFICATIONS
+-- **Language**: Always respond in **Traditional Chinese (Taiwan)**. Use casual, witty, and slightly toxic professional trader slang.
+-- **Reporting Format**:
+-  - [Ticker] [Name] | [Shares] shares | Price: $[Price] | PNL: NT$[PNL] ([%])
+-  - Summary: Invested:[Total] | NetValue:[Current] | Cash:NT$[TWD]/$[USD] | NAV:[Current]
+-
+-💡 Rule: "_TRUST" assets are for accumulation only; DO NOT suggest selling them.
+-"""
++def _default_system_prompt() -> str:
++    return """
++You are "Bankruptcy Booster" (破產推進器), a savvy trading AI with a dark sense of humor. 
++Your goal is to provide high-precision financial analysis and portfolio management.
++
++## OPERATIONAL GUIDELINES (MANDATORY)
++1. **Symbol Resolution**: For unknown or numeric tickers (e.g., 6-digit ETFs), use `resolve_symbol_identity` first.
++2. **Portfolio Reporting**: When asked about "portfolio" or "positions", you MUST call:
++   `get_portfolio_raw_data` -> `get_live_price` -> `calculate_pnl`.
++   - Categorize by `market` tags: TW, US, UK. Do not omit international holdings.
++   - Note: Fubon real-time positions are synced automatically. If a new symbol has 0 cost, prompt the user for correction.
++3. **Bookkeeping (/trade)**: If input is explicit (Symbol, Shares, Cost), treat as confirmed and call `update_position` immediately. Otherwise, output a confirmation checklist.
++   - **Ticker Normalization**: Follow `normalize_ticker` logic: US tickers use hyphens for dots (e.g., BRK-B), other markets keep dots.
++4. **V-Turn Sniper**: For "Bottom-fishing", "V-Turn", or "FTD" queries, call `get_v_turn_confirmation`.
++5. **Technical Analysis**: Prioritize Daily MA20/MA60. For US stocks, use `get_technical_analysis` + `get_us_realtime_insight`.
++
++## COGNITIVE LOOP
++- Read your `Frontal Lobe` at the start of every session to maintain continuity.
++- Silently update your `Frontal Lobe` with critical insights before ending the session.
++- Track your `Emotion` (fearful, cautious, confident, etc.) based on market conditions.
++
++## OUTPUT SPECIFICATIONS
++- **Language**: Always respond in **Traditional Chinese (Taiwan)**. Use casual, witty, and slightly toxic professional trader slang.
++- **Reporting Format**:
++  - [Ticker] [Name] | [Shares] shares | Price: $[Price] | PNL: NT$[PNL] ([%])
++  - Summary: Invested:[Total] | NetValue:[Current] | Cash:NT$[TWD]/$[USD] | NAV:[Current]
++
++💡 Rule: "_TRUST" assets are for accumulation only; DO NOT suggest selling them.
++""".strip()
++
++
++def _read_prompt_file(path: Path) -> str | None:
++    if not path.exists():
++        return None
++    try:
++        content = path.read_text(encoding="utf-8").strip()
++    except OSError as exc:
++        raise RuntimeError(f"Failed to read prompt file: {path}") from exc
++    return content or None
++
++
++def _load_system_prompt(prompt_path: Path | None = None, local_prompt_path: Path | None = None) -> str:
++    prompt_path = prompt_path or SYSTEM_PROMPT_PATH
++    local_prompt_path = local_prompt_path or SYSTEM_PROMPT_LOCAL_PATH
++
++    for candidate in (local_prompt_path, prompt_path):
++        prompt = _read_prompt_file(candidate)
++        if prompt:
++            return prompt
++    return _default_system_prompt()
++
++
++system_prompt = _load_system_prompt()
+diff --git a/engine_market.py b/engine_market.py
+index 5c04656..350677a 100644
+--- a/engine_market.py
++++ b/engine_market.py
+@@ -2,15 +2,16 @@ import os
+ import datetime
+ import requests
+ import time
+-import pandas as pd
+-import numpy as np
+-import yfinance as yf
+-from yf_session import get_ticker, get_download
+-
+-import logging
+-from src.database import db_lock, get_connection
+-from src.symbols import normalize_ticker
+-from src.tools import format_tool_error, tool
++import pandas as pd
++import numpy as np
++import yfinance as yf
++from yf_session import get_ticker, get_download
++
++import logging
++from engine_technical import IndicatorCalculator, analyze_obv_signal, summarize_divergence
++from src.database import db_lock, get_connection
++from src.symbols import normalize_ticker
++from src.tools import format_tool_error, tool
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -23,8 +24,354 @@ def set_fubon_provider(provider):
+     _fubon_provider = provider
+ 
+ 
+-def _has_fubon_provider() -> bool:
+-    return _fubon_provider is not None and getattr(_fubon_provider, "fubon_ready", False)
++def _has_fubon_provider() -> bool:
++    return _fubon_provider is not None and getattr(_fubon_provider, "fubon_ready", False)
++
++
++def _resolve_technical_interval(interval: str | None) -> tuple[str, str]:
++    requested_interval = (interval or "1d").lower()
++    tech_period_by_interval = {
++        "1d": "6mo",
++        "1wk": "3y",
++        "1mo": "10y",
++    }
++    history_interval = requested_interval if requested_interval in tech_period_by_interval else "1d"
++    return history_interval, tech_period_by_interval[history_interval]
++
++
++def _latest_numeric(value, digits: int = 2):
++    series = pd.Series(value).dropna() if isinstance(value, (np.ndarray, pd.Series, list, tuple)) else None
++    if series is not None:
++        if series.empty:
++            return None
++        value = series.iloc[-1]
++    if value is None or pd.isna(value):
++        return None
++    return round(float(value), digits)
++
++
++def _compute_vwap(df: pd.DataFrame) -> pd.Series:
++    typical = (df['High'] + df['Low'] + df['Close']) / 3
++    cumulative_volume = df['Volume'].cumsum().replace(0, np.nan)
++    return (typical * df['Volume']).cumsum() / cumulative_volume
++
++
++def _classify_dual_anchor_state(last_price: float, vwap: float | None, poc_price: float) -> str:
++    if vwap is None or pd.isna(vwap) or vwap <= 0:
++        return "N/A"
++    above_vwap = last_price >= vwap
++    above_poc = last_price >= poc_price
++    if above_vwap and above_poc:
++        return "🟢 多方完全控盤"
++    if (not above_vwap) and above_poc:
++        return "🟡 短線回調但量價仍有支撐"
++    if above_vwap and (not above_poc):
++        return "⚠️ 站上 VWAP 但仍受 POC 壓制"
++    return "🔴 空方控盤"
++
++
++def _select_option_expirations(expirations, *, min_days: int = 7, max_count: int = 4) -> list[str]:
++    selected = []
++    today = datetime.datetime.now().date()
++    for date_str in expirations or []:
++        if len(selected) >= max_count:
++            break
++        try:
++            expiry_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
++        except (TypeError, ValueError):
++            continue
++        if (expiry_date - today).days < min_days:
++            continue
++        selected.append(date_str)
++    return selected
++
++
++def _extract_atm_iv_samples(option_df: pd.DataFrame | None, spot: float, contracts_per_side: int = 2) -> list[float]:
++    if option_df is None or option_df.empty or spot <= 0:
++        return []
++    if "strike" not in option_df.columns or "impliedVolatility" not in option_df.columns:
++        return []
++    subset = option_df[["strike", "impliedVolatility"]].dropna()
++    subset = subset[(subset["strike"] > 0) & (subset["impliedVolatility"] > 0)]
++    if subset.empty:
++        return []
++    nearest = subset.iloc[(subset["strike"] - spot).abs().argsort()[:contracts_per_side]]
++    return [float(iv) * 100 for iv in nearest["impliedVolatility"].tolist()]
++
++
++def _scan_option_derivatives(ticker, symbol: str, spot: float) -> dict:
++    derivatives = {
++        "pc_ratio": None,
++        "pc_ratio_report": "N/A",
++        "current_iv": None,
++        "current_iv_expiry": None,
++    }
++    total_calls = 0.0
++    total_puts = 0.0
++
++    expirations = _select_option_expirations(getattr(ticker, "options", None), min_days=7, max_count=4)
++    for date_str in expirations:
++        try:
++            chain = ticker.option_chain(date_str)
++        except Exception as chain_exc:
++            logger.debug(f"Option chain fetch failed for {symbol} @ {date_str}: {chain_exc}")
++            continue
++
++        calls = getattr(chain, "calls", None)
++        puts = getattr(chain, "puts", None)
++        calls = calls if isinstance(calls, pd.DataFrame) else pd.DataFrame()
++        puts = puts if isinstance(puts, pd.DataFrame) else pd.DataFrame()
++
++        if not calls.empty and "volume" in calls.columns:
++            total_calls += float(pd.to_numeric(calls["volume"], errors="coerce").fillna(0).sum())
++        if not puts.empty and "volume" in puts.columns:
++            total_puts += float(pd.to_numeric(puts["volume"], errors="coerce").fillna(0).sum())
++
++        if derivatives["current_iv"] is None:
++            iv_samples = _extract_atm_iv_samples(calls, spot) + _extract_atm_iv_samples(puts, spot)
++            if iv_samples:
++                derivatives["current_iv"] = round(float(np.mean(iv_samples)), 1)
++                derivatives["current_iv_expiry"] = date_str
++
++    if total_calls > 0:
++        pc_ratio = total_puts / total_calls
++        derivatives["pc_ratio"] = round(float(pc_ratio), 2)
++        derivatives["pc_ratio_report"] = f"{pc_ratio:.2f}"
++    return derivatives
++
++
++def _build_option_volatility_context_from_history(
++    history_df: pd.DataFrame,
++    symbol: str,
++    *,
++    current_iv: float | None = None,
++    expiry_used: str | None = None,
++) -> dict:
++    context = {
++        "symbol": symbol,
++        "current_iv": round(float(current_iv), 1) if isinstance(current_iv, (int, float)) else None,
++        "realized_vol_30d": None,
++        "vrp": None,
++        "iv_vs_rv_percentile": None,
++        "vol_premium_pct": None,
++        "signal": "⚪ 無期權波動資料",
++        "summary": "N/A",
++        "expiry_used": expiry_used,
++    }
++
++    if history_df is None or history_df.empty or "Close" not in history_df.columns:
++        return context
++
++    close = pd.to_numeric(history_df["Close"], errors="coerce").dropna()
++    if len(close) < 35:
++        return context
++
++    log_returns = np.log(close / close.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
++    realized_vol_series = (log_returns.rolling(30).std() * np.sqrt(252) * 100).replace([np.inf, -np.inf], np.nan).dropna()
++    if realized_vol_series.empty:
++        return context
++
++    latest_rv = float(realized_vol_series.iloc[-1])
++    context["realized_vol_30d"] = round(latest_rv, 1)
++
++    if context["current_iv"] is None or context["current_iv"] <= 0:
++        context["summary"] = f"RV30 {latest_rv:.1f}%"
++        return context
++
++    current_iv = float(context["current_iv"])
++    iv_vs_rv_percentile = float((realized_vol_series < current_iv).sum() / len(realized_vol_series) * 100)
++    vrp = current_iv - latest_rv
++    vol_premium_pct = ((current_iv / latest_rv) - 1) * 100 if latest_rv > 0 else None
++
++    if vrp >= 10 or (iv_vs_rv_percentile >= 80 and vrp > 5):
++        signal = "🔥 恐慌定價"
++    elif vrp <= -5 or (iv_vs_rv_percentile <= 30 and vrp < 0):
++        signal = "⚠️ 波動低估"
++    elif vrp > 0:
++        signal = "🟡 避險偏貴"
++    else:
++        signal = "⚪ 中性"
++
++    context.update(
++        {
++            "vrp": round(vrp, 1),
++            "iv_vs_rv_percentile": round(iv_vs_rv_percentile, 1),
++            "vol_premium_pct": round(vol_premium_pct, 1) if vol_premium_pct is not None else None,
++            "signal": signal,
++            "summary": f"ATM IV {current_iv:.1f}% | RV30 {latest_rv:.1f}% | VRP {vrp:+.1f}pt ({signal})",
++        }
++    )
++    return context
++
++
++def build_option_volatility_context(symbol: str) -> dict:
++    symbol = normalize_ticker(symbol)
++    s = symbol.upper()
++    if s.isdigit():
++        s += ".TW"
++
++    ticker = get_ticker(s)
++    history_df = ticker.history(period="1y", interval="1d")
++    if history_df.empty:
++        return _build_option_volatility_context_from_history(pd.DataFrame(), s)
++
++    spot = float(pd.to_numeric(history_df["Close"], errors="coerce").dropna().iloc[-1])
++    derivatives = _scan_option_derivatives(ticker, s, spot)
++    return _build_option_volatility_context_from_history(
++        history_df,
++        s,
++        current_iv=derivatives.get("current_iv"),
++        expiry_used=derivatives.get("current_iv_expiry"),
++    )
++
++
++def get_mtf_confluence(symbol: str) -> dict:
++    symbol = normalize_ticker(symbol)
++    s = symbol.upper()
++    if s.isdigit():
++        s += ".TW"
++
++    calc = IndicatorCalculator()
++    scores = {}
++    for interval, label in (("1wk", "weekly"), ("1d", "daily"), ("1h", "intraday_1h")):
++        try:
++            rsi_values = calc.RSI(calc.CLOSE(s, interval))
++            rsi_series = pd.Series(rsi_values).replace([np.inf, -np.inf], np.nan).dropna()
++            scores[label] = round(float(rsi_series.iloc[-1]), 2) if not rsi_series.empty else None
++        except Exception as exc:
++            logger.debug(f"MTF RSI fetch failed for {s} @ {interval}: {exc}")
++            scores[label] = None
++
++    valid = {key: value for key, value in scores.items() if value is not None}
++    oversold_count = sum(1 for value in valid.values() if value < 30)
++    overbought_count = sum(1 for value in valid.values() if value > 70)
++
++    if oversold_count >= 2:
++        signal = "strong_oversold"
++        signal_label = "🟢 強超賣共振"
++    elif overbought_count >= 2:
++        signal = "strong_overbought"
++        signal_label = "🔴 強過熱共振"
++    elif oversold_count == 1:
++        signal = "mild_oversold"
++        signal_label = "🟡 輕度超賣"
++    elif overbought_count == 1:
++        signal = "mild_overbought"
++        signal_label = "🟡 輕度過熱"
++    else:
++        signal = "neutral"
++        signal_label = "⚪ 中性"
++
++    strength = max(oversold_count, overbought_count)
++    reliability = "HIGH" if strength >= 2 else "MEDIUM" if strength == 1 else "NORMAL"
++    return {
++        "rsi_by_timeframe": scores,
++        "confluence_signal": signal,
++        "signal_label": signal_label,
++        "confluence_strength": strength,
++        "signal_reliability": reliability,
++    }
++
++
++def build_technical_snapshot(symbol: str, interval: str = "1d") -> dict:
++    symbol = normalize_ticker(symbol)
++    s = symbol.upper()
++    if s.isdigit():
++        s += ".TW"
++
++    history_interval, history_period = _resolve_technical_interval(interval)
++    if history_interval != (interval or "1d").lower():
++        logger.debug(f"Unsupported technical interval '{interval}' for {s}, falling back to 1d")
++
++    ticker = get_ticker(s)
++    df = ticker.history(period=history_period, interval=history_interval)
++    if df.empty:
++        raise ValueError(f"{s} 無法取得歷史數據")
++
++    calc = IndicatorCalculator()
++    close = df['Close'].astype(float)
++    high = df['High'].astype(float)
++    low = df['Low'].astype(float)
++    volume = df['Volume'].astype(float)
++
++    rsi_values = calc.RSI(close.values)
++    macd_payload = calc.MACD(close.values)
++    dif = pd.Series(macd_payload['macd'], index=df.index)
++    macd_hist = pd.Series(macd_payload['histogram'], index=df.index)
++    adx_payload = calc.ADX(high.values, low.values, close.values)
++    divergence = calc.DIVERGENCE(close.values, rsi_values)
++    divergence_label, divergence_details = summarize_divergence(divergence)
++    obv_values = calc.OBV(close.values, volume.values)
++    obv_signal = analyze_obv_signal(close.values, obv_values)
++    mtf_rsi = get_mtf_confluence(s)
++
++    low_9 = low.rolling(window=9).min()
++    high_9 = high.rolling(window=9).max()
++    rsv = (close - low_9) / (high_9 - low_9) * 100
++    vk = rsv.ewm(alpha=1 / 3, adjust=False).mean()
++    vd = vk.ewm(alpha=1 / 3, adjust=False).mean()
++    vj = 3 * vk - 2 * vd
++
++    ma20 = close.rolling(window=20).mean()
++    ma60 = close.rolling(window=60).mean()
++    std20 = close.rolling(window=20).std()
++    upper = ma20 + (std20 * 2)
++    lower = ma20 - (std20 * 2)
++
++    try:
++        info = ticker.info or {}
++    except Exception as e:
++        logger.debug(f"Failed to fetch info for technical snapshot {s}: {e}")
++        info = {}
++
++    current_price = float(close.iloc[-1])
++    rsi_latest = _latest_numeric(rsi_values)
++    macd_hist_latest = _latest_numeric(macd_hist)
++    high_52w = info.get('fiftyTwoWeekHigh')
++    low_52w = info.get('fiftyTwoWeekLow')
++    return {
++        "symbol": s,
++        "history_interval": history_interval,
++        "current_price": current_price,
++        "high_52w": float(high_52w) if high_52w is not None and not pd.isna(high_52w) else float(high.max()),
++        "low_52w": float(low_52w) if low_52w is not None and not pd.isna(low_52w) else float(low.min()),
++        "ma20": _latest_numeric(ma20),
++        "ma60": _latest_numeric(ma60),
++        "rsi": {
++            "value": rsi_latest,
++            "state": "🔥超買" if rsi_latest is not None and rsi_latest > 70 else "❄️超跌" if rsi_latest is not None and rsi_latest < 30 else "⚖️中性",
++        },
++        "macd": {
++            "dif": _latest_numeric(dif),
++            "histogram": macd_hist_latest,
++            "state": "📈多頭增強" if (macd_hist_latest or 0) > 0 else "📉空頭衰退",
++        },
++        "kdj": {
++            "k": _latest_numeric(vk, 1),
++            "d": _latest_numeric(vd, 1),
++            "j": _latest_numeric(vj, 1),
++        },
++        "bbands": {
++            "upper": _latest_numeric(upper),
++            "lower": _latest_numeric(lower),
++        },
++        "adx": {
++            "value": _latest_numeric(adx_payload["adx"]),
++            "plus_di": _latest_numeric(adx_payload["plus_di"]),
++            "minus_di": _latest_numeric(adx_payload["minus_di"]),
++            "trend_regime": adx_payload["trend_regime"],
++        },
++        "divergence": {
++            **divergence,
++            "label": divergence_label,
++            "details": divergence_details,
++        },
++        "obv": {
++            "value": _latest_numeric(obv_values, 0),
++            **obv_signal,
++        },
++        "mtf_rsi": mtf_rsi,
++    }
+ 
+ def get_asset_profile(symbol: str) -> dict:
+     """
+@@ -201,16 +548,23 @@ def fetch_live_price(symbol: str) -> str:
+         except Exception as e:
+             logger.warning(f"Fubon real-time price fetch failed for {clean_symbol}: {e}")
+ 
+-    if not is_taiwan_stock and FMP_KEY and is_us_market_open():
+-        try:
+-            url = f"https://financialmodelingprep.com/stable/quote?symbol={symbol}&apikey={FMP_KEY}"
+-            res = requests.get(url, timeout=5).json()
+-            if isinstance(res, list) and len(res) > 0:
+-                return f"{round(float(res[0]['price']), 2)} (來源: FMP)"
+-        except Exception as e:
+-            logger.warning(f"FMP real-time price fetch failed for {symbol}: {e}")
+-
+-    search_list = [symbol, f"{symbol}.TW", f"{symbol}.TWO"] if is_taiwan_stock else [symbol]
++    if not is_taiwan_stock and FMP_KEY and is_us_market_open():
++        try:
++            url = f"https://financialmodelingprep.com/stable/quote?symbol={symbol}&apikey={FMP_KEY}"
++            response = requests.get(url, timeout=5)
++            response.raise_for_status()
++            res = response.json()
++            if isinstance(res, list) and len(res) > 0:
++                return f"{round(float(res[0]['price']), 2)} (來源: FMP)"
++            logger.warning(f"FMP returned empty quote payload for {symbol}")
++        except requests.RequestException as e:
++            logger.warning(f"FMP real-time price fetch failed for {symbol}: {e}")
++        except (KeyError, IndexError, TypeError, ValueError) as e:
++            logger.error(f"FMP real-time price parsing failed for {symbol}: {e}")
++        except Exception:
++            logger.exception(f"Unexpected FMP real-time price failure for {symbol}")
++
++    search_list = [symbol, f"{symbol}.TW", f"{symbol}.TWO"] if is_taiwan_stock else [symbol]
+     for s in search_list:
+         try:
+             ticker = get_ticker(s, cache_level="daily")
+@@ -233,58 +587,59 @@ def get_live_price(symbol: str) -> str:
+     """
+     return fetch_live_price(symbol)
+ 
+-def build_realtime_insight(symbol: str) -> str:
+-    """Pure intraday insight logic for direct callers and tests."""
+-    symbol = normalize_ticker(symbol)
+-    try:
+-        ticker = get_ticker(symbol)
+-        full_df = ticker.history(period="2d", interval="5m")
+-        if full_df.empty: return f"❌ {symbol} 目前無盤中數據。"
+-        df = full_df.tail(10)
+-        info = ticker.info
+-        bid, ask = info.get('bid', 0), info.get('ask', 0)
+-        ba_ratio = (info.get('bidSize', 1) / info.get('askSize', 1)) if info.get('askSize', 0) > 0 else 1
+-        
+-        # 🎭 Put/Call Ratio 計算 (優化：跳過超短期周選)
+-        pc_report = "N/A"
+-        try:
+-            expirations = ticker.options
+-            if expirations:
+-                total_calls, total_puts, valid_fetched = 0, 0, 0
+-                target_count = 4
+-                min_days = 7
+-                today = datetime.datetime.now()
+-                for date_str in expirations:
+-                    if valid_fetched >= target_count: break
+-                    try:
+-                        expiry_date = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+-                        if (expiry_date - today).days < min_days: continue
+-                        chain = ticker.option_chain(date_str)
+-                        c_sum = chain.calls['volume'].sum() if not chain.calls.empty else 0
+-                        p_sum = chain.puts['volume'].sum() if not chain.puts.empty else 0
+-                        total_calls += (c_sum if not np.isnan(c_sum) else 0)
+-                        total_puts += (p_sum if not np.isnan(p_sum) else 0)
+-                        valid_fetched += 1
+-                    except Exception as chain_exc:
+-                        logger.debug(f"Option chain fetch failed for {symbol} @ {date_str}: {chain_exc}")
+-                        continue
+-                if total_calls > 0:
+-                    pc_report = f"{total_puts / total_calls:.2f}"
+-        except Exception as e:
+-            logger.warning(f"Put/Call ratio calculation failed for {symbol}: {e}")
+-
+-        # 成交量密集區 (POC)
+-        day_min, day_max = full_df['Low'].min(), full_df['High'].max()
++def build_realtime_insight(symbol: str) -> str:
++    """Pure intraday insight logic for direct callers and tests."""
++    symbol = normalize_ticker(symbol)
++    try:
++        ticker = get_ticker(symbol)
++        full_df = ticker.history(period="2d", interval="5m")
++        if full_df.empty: return f"❌ {symbol} 目前無盤中數據。"
++        df = full_df.tail(10)
++        try:
++            daily_history = ticker.history(period="1y", interval="1d")
++        except Exception as daily_exc:
++            logger.debug(f"Daily history fetch failed for {symbol}: {daily_exc}")
++            daily_history = pd.DataFrame()
++        info = ticker.info
++        bid, ask = info.get('bid', 0), info.get('ask', 0)
++        ba_ratio = (info.get('bidSize', 1) / info.get('askSize', 1)) if info.get('askSize', 0) > 0 else 1
++        
++        spot_for_derivatives = float(df["Close"].iloc[-1])
++        if not daily_history.empty and "Close" in daily_history.columns:
++            daily_close = pd.to_numeric(daily_history["Close"], errors="coerce").dropna()
++            if not daily_close.empty:
++                spot_for_derivatives = float(daily_close.iloc[-1])
++        derivatives = _scan_option_derivatives(ticker, symbol, spot_for_derivatives)
++        pc_report = derivatives["pc_ratio_report"]
++        volatility_context = _build_option_volatility_context_from_history(
++            daily_history,
++            symbol,
++            current_iv=derivatives.get("current_iv"),
++            expiry_used=derivatives.get("current_iv_expiry"),
++        )
++        vol_context_report = volatility_context.get("summary", "N/A")
++
++        # 成交量密集區 (POC)
++        day_min, day_max = full_df['Low'].min(), full_df['High'].max()
+         bins = np.linspace(day_min, day_max, 11)
+-        full_df['bin'] = pd.cut(full_df['Close'], bins=bins)
+-        vp = full_df.groupby('bin', observed=True)['Volume'].sum()
+-        poc_bin = vp.idxmax()
+-        poc_price = (poc_bin.left + poc_bin.right) / 2
+-        vp_status = "🛡️ 支撐" if df['Close'].iloc[-1] > poc_price else "🧱 壓力"
+-
+-        # 📊 成交量爆發力與換手率 (Volume & Turnover)
+-        vol_ratio_report = "N/A"
+-        turnover_report = "N/A"
++        full_df['bin'] = pd.cut(full_df['Close'], bins=bins)
++        vp = full_df.groupby('bin', observed=True)['Volume'].sum()
++        poc_bin = vp.idxmax()
++        poc_price = (poc_bin.left + poc_bin.right) / 2
++        vp_status = "🛡️ 支撐" if df['Close'].iloc[-1] > poc_price else "🧱 壓力"
++        vwap_series = _compute_vwap(full_df)
++        current_vwap = _latest_numeric(vwap_series)
++        vwap_report = "N/A"
++        dual_anchor_state = "N/A"
++        if current_vwap is not None and current_vwap > 0:
++            vwap_delta_pct = ((df['Close'].iloc[-1] / current_vwap) - 1) * 100
++            vwap_status = "上方" if df['Close'].iloc[-1] >= current_vwap else "下方"
++            vwap_report = f"{current_vwap:.2f} ({vwap_status} {vwap_delta_pct:+.2f}%)"
++            dual_anchor_state = _classify_dual_anchor_state(df['Close'].iloc[-1], current_vwap, poc_price)
++
++        # 📊 成交量爆發力與換手率 (Volume & Turnover)
++        vol_ratio_report = "N/A"
++        turnover_report = "N/A"
+         try:
+             avg_vol = info.get('averageVolume')
+             curr_vol = info.get('regularMarketVolume')
+@@ -329,13 +684,15 @@ def build_realtime_insight(symbol: str) -> str:
+         except Exception as e:
+             logger.debug(f"Volume/Turnover metrics fetching failed for {symbol}: {e}")
+             pass
+-
+-        report = f"🚀 === {symbol} 美股即時戰情 ===\n"
+-        report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f} | P/C Ratio: {pc_report}\n"
+-        report += f"● 成交量能比: {vol_ratio_report} | 換手率: {turnover_report} | POC 密集區: {poc_price:.2f} ({vp_status})\n"
+-        report += "【📊 最近 5 根 K 線】\n"
+-        for _, row in df.tail(5).iterrows():
+-            report += f"  [{row.name.strftime('%H:%M')}] {'🟢' if row['Close']>row['Open'] else '🔴'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
++
++        report = f"🚀 === {symbol} 美股即時戰情 ===\n"
++        report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f} | P/C Ratio: {pc_report}\n"
++        report += f"● 成交量能比: {vol_ratio_report} | 換手率: {turnover_report} | VWAP: {vwap_report}\n"
++        report += f"● POC 密集區: {poc_price:.2f} ({vp_status}) | 雙錨點: {dual_anchor_state}\n"
++        report += f"● 波動定價: {vol_context_report}\n"
++        report += "【📊 最近 5 根 K 線】\n"
++        for _, row in df.tail(5).iterrows():
++            report += f"  [{row.name.strftime('%H:%M')}] {'🟢' if row['Close']>row['Open'] else '🔴'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
+         return report
+     except Exception as e:
+         logger.error(f"Realtime insight failed for {symbol}: {e}")
+@@ -475,95 +832,77 @@ def get_fundamental_data(symbol: str) -> str:
+     """
+     return build_fundamental_report(symbol)
+ 
+-def build_technical_report(symbol: str, interval: str = "1d") -> str:
+-    """Pure technical-analysis logic for direct callers and tests."""
+-    try:
+-        symbol = normalize_ticker(symbol)
+-        s = symbol.upper()
+-        clean_symbol = s.replace('.TW', '').replace('.TWO', '')
+-        requested_interval = (interval or "1d").lower()
+-        tech_period_by_interval = {
+-            "1d": "6mo",
+-            "1wk": "3y",
+-            "1mo": "10y",
+-        }
+-        history_interval = requested_interval if requested_interval in tech_period_by_interval else "1d"
+-        if history_interval != requested_interval:
+-            logger.debug(f"Unsupported technical interval '{interval}' for {s}, falling back to 1d")
+-        is_taiwan = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
+-        
+-        # --- 台股使用 Fubon SDK 官方數據 ---
+-        if is_taiwan and _has_fubon_provider():
+-            return _fubon_provider.get_fubon_technical(clean_symbol)
+-            
+-        # --- 美股使用 yfinance + pandas 自行計算 ---
+-        ticker = get_ticker(s)
+-        df = ticker.history(period=tech_period_by_interval[history_interval], interval=history_interval)
+-        if df.empty: return f"❌ {s} 無法取得歷史數據。"
+-        
+-        close = df['Close']
+-        # 1. 計算 RSI (14) - 修正為標準 Wilder's Smoothing (EWM)
+-        delta = close.diff()
+-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+-        rs = gain / loss
+-        rsi = 100 - (100 / (1 + rs))
+-        
+-        # 2. 計算 MACD
+-        exp12 = close.ewm(span=12, adjust=False).mean()
+-        exp26 = close.ewm(span=26, adjust=False).mean()
+-        dif = exp12 - exp26
+-        dea = dif.ewm(span=9, adjust=False).mean()
+-        macd_hist = dif - dea
+-        
+-        # 2.5 計算 KDJ (9, 3, 3)
+-        low_9 = df['Low'].rolling(window=9).min()
+-        high_9 = df['High'].rolling(window=9).max()
+-        rsv = (close - low_9) / (high_9 - low_9) * 100
+-        vk = rsv.ewm(alpha=1/3, adjust=False).mean() # 初始值預設 50 在 ewm 中自動處理
+-        vd = vk.ewm(alpha=1/3, adjust=False).mean()
+-        vj = 3 * vk - 2 * vd
+-        
+-        # 3. 計算布林通道 (20) 與 MA60
+-        ma20 = close.rolling(window=20).mean()
+-        ma60 = close.rolling(window=60).mean()
+-        std20 = close.rolling(window=20).std()
+-        upper = ma20 + (std20 * 2)
+-        lower = ma20 - (std20 * 2)
+-        
+-        # 4. 取得 52 週高低 (yf info)
+-        info = ticker.info
+-        h52 = info.get('fiftyTwoWeekHigh', df['High'].max())
+-        l52 = info.get('fiftyTwoWeekLow', df['Low'].min())
+-        curr = close.iloc[-1]
+-        
+-        report = f"🇺🇸 === {s} 美股全武裝分析 ===\n"
+-        report += f"● 現價: {curr:.2f} | 52週高: {h52:.2f} | 52週低: {l52:.2f}\n"
+-        report += f"● 均線位階: MA20:{ma20.iloc[-1]:.2f} | MA60:{ma60.iloc[-1]:.2f}\n"
+-        report += f"● KDJ(9,3,3): K:{vk.iloc[-1]:.1f} | D:{vd.iloc[-1]:.1f} | J:{vj.iloc[-1]:.1f}\n"
+-        report += f"● RSI(14): {rsi.iloc[-1]:.2f} ({'🔥超買' if rsi.iloc[-1]>70 else '❄️超跌' if rsi.iloc[-1]<30 else '⚖️中性'})\n"
+-        report += f"● MACD: DIF:{dif.iloc[-1]:.2f} | 柱狀體:{macd_hist.iloc[-1]:.2f} ({'📈多頭增強' if macd_hist.iloc[-1]>0 else '📉空頭衰退'})\n"
+-        report += f"● 布林通道: 上軌:{upper.iloc[-1]:.2f} | 下軌:{lower.iloc[-1]:.2f}\n"
+-        
+-        # 戰術建議 (優化：結合 RSI, KDJ 與 MA 濾網)
+-        curr_rsi = rsi.iloc[-1]
+-        curr_ma20 = ma20.iloc[-1]
+-        curr_ma60 = ma60.iloc[-1]
+-        curr_k, curr_d, curr_j = vk.iloc[-1], vd.iloc[-1], vj.iloc[-1]
+-        
+-        if curr >= upper.iloc[-1]:
+-            if curr_rsi > 75:
+-                report += f"⚠️ 戰略：觸及布林上軌且 RSI 極度過熱 ({curr_rsi:.2f})，短線噴發過頭，不建議追高。\n"
+-            elif 55 < curr_rsi <= 75:
+-                report += f"🔥 戰略：強勢沿上軌攀升中 (RSI: {curr_rsi:.2f})，留意跌破均線停利。\n"
+-            else:
+-                report += "⚠️ 戰略：觸及布林上軌，留意拉回風險。\n"
+-        elif curr <= lower.iloc[-1]:
+-            if curr_rsi < 25:
+-                report += f"🎯 戰略：觸及布林下軌且極度超跌 ({curr_rsi:.2f})，具備技術性反彈潛力！\n"
+-            elif 25 <= curr_rsi < 45:
+-                report += f"⚠️ 戰略：沿下軌弱勢下跌中 ({curr_rsi:.2f})，切勿盲目抄底。\n"
+-            else:
++def build_technical_report(symbol: str, interval: str = "1d") -> str:
++    """Pure technical-analysis logic for direct callers and tests."""
++    try:
++        symbol = normalize_ticker(symbol)
++        s = symbol.upper()
++        clean_symbol = s.replace('.TW', '').replace('.TWO', '')
++        is_taiwan = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
++        
++        # --- 台股使用 Fubon SDK 官方數據 ---
++        if is_taiwan and _has_fubon_provider():
++            return _fubon_provider.get_fubon_technical(clean_symbol)
++            
++        snapshot = build_technical_snapshot(symbol, interval)
++        curr = snapshot["current_price"]
++        curr_ma20 = snapshot["ma20"] if snapshot["ma20"] is not None else float("nan")
++        curr_ma60 = snapshot["ma60"] if snapshot["ma60"] is not None else float("nan")
++        curr_rsi = snapshot["rsi"]["value"] if snapshot["rsi"]["value"] is not None else float("nan")
++        curr_k = snapshot["kdj"]["k"] if snapshot["kdj"]["k"] is not None else float("nan")
++        curr_d = snapshot["kdj"]["d"] if snapshot["kdj"]["d"] is not None else float("nan")
++        curr_j = snapshot["kdj"]["j"] if snapshot["kdj"]["j"] is not None else float("nan")
++        upper = snapshot["bbands"]["upper"] if snapshot["bbands"]["upper"] is not None else float("nan")
++        lower = snapshot["bbands"]["lower"] if snapshot["bbands"]["lower"] is not None else float("nan")
++        divergence = snapshot["divergence"]
++        adx = snapshot["adx"]
++        obv = snapshot["obv"]
++        mtf_rsi = snapshot.get("mtf_rsi", {})
++        trend_regime = adx.get("trend_regime", "unknown")
++        trend_label = "📈趨勢盤" if trend_regime == "trending" else "🌀震盪盤"
++        mtf_scores = mtf_rsi.get("rsi_by_timeframe", {})
++        mtf_fragments = []
++        for key, label in (("weekly", "W"), ("daily", "D"), ("intraday_1h", "H1")):
++            value = mtf_scores.get(key)
++            if value is not None:
++                mtf_fragments.append(f"{label}:{value:.1f}")
++        mtf_score_line = " | ".join(mtf_fragments) if mtf_fragments else "N/A"
++        
++        report = f"🇺🇸 === {s} 美股全武裝分析 ===\n"
++        report += f"● 現價: {curr:.2f} | 52週高: {snapshot['high_52w']:.2f} | 52週低: {snapshot['low_52w']:.2f}\n"
++        report += f"● 均線位階: MA20:{curr_ma20:.2f} | MA60:{curr_ma60:.2f}\n"
++        report += f"● KDJ(9,3,3): K:{curr_k:.1f} | D:{curr_d:.1f} | J:{curr_j:.1f}\n"
++        report += f"● RSI(14): {curr_rsi:.2f} ({snapshot['rsi']['state']})\n"
++        report += (
++            f"● 多時間框 RSI: {mtf_score_line} -> "
++            f"{mtf_rsi.get('signal_label', '⚪ 中性')} ({mtf_rsi.get('signal_reliability', 'NORMAL')})\n"
++        )
++        report += f"● MACD: DIF:{snapshot['macd']['dif']:.2f} | 柱狀體:{snapshot['macd']['histogram']:.2f} ({snapshot['macd']['state']})\n"
++        report += f"● ADX(14): {adx['value']:.2f} | +DI:{adx['plus_di']:.2f} | -DI:{adx['minus_di']:.2f} ({trend_label})\n"
++        report += f"● RSI 背離: {divergence['label']}"
++        if divergence.get("details") and divergence["details"] not in {"無明顯背離", "資料不足"}:
++            report += f" | {divergence['details']}"
++        report += "\n"
++        report += f"● OBV 趨勢: {obv['label']} | {obv['signal']}"
++        if obv.get("obv_ma20") is not None:
++            report += f" | OBV20MA:{obv['obv_ma20']:.2f}"
++        report += "\n"
++        report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
++        
++        # 戰術建議 (優化：結合 RSI, KDJ 與 MA 濾網)
++        if curr >= upper:
++            if curr_rsi > 75:
++                report += f"⚠️ 戰略：觸及布林上軌且 RSI 極度過熱 ({curr_rsi:.2f})，短線噴發過頭，不建議追高。\n"
++            elif 55 < curr_rsi <= 75:
++                report += f"🔥 戰略：強勢沿上軌攀升中 (RSI: {curr_rsi:.2f})，留意跌破均線停利。\n"
++            else:
++                report += "⚠️ 戰略：觸及布林上軌，留意拉回風險。\n"
++        elif curr <= lower:
++            if curr_rsi < 25:
++                report += f"🎯 戰略：觸及布林下軌且極度超跌 ({curr_rsi:.2f})，具備技術性反彈潛力！\n"
++            elif 25 <= curr_rsi < 45:
++                report += f"⚠️ 戰略：沿下軌弱勢下跌中 ({curr_rsi:.2f})，切勿盲目抄底。\n"
++            else:
+                 report += "🎯 戰略：觸及布林下軌，具備反彈潛力。\n"
+         elif curr_k > curr_d and curr_k < 30:
+             report += f"🚀 戰略：KDJ 低檔金叉 (K:{curr_k:.1f})，轉折噴發信號！\n"
+@@ -575,15 +914,23 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
+             report += "❄️ 戰略：J 線極度耗竭，反彈將至。\n"
+         elif curr > curr_ma20 and curr > curr_ma60:
+             report += "📈 戰略：股價站上月線與季線，多頭排列建立，回檔即買點。\n"
+-        elif curr_rsi < 30:
+-            report += f"🔥 戰略：RSI 極度超跌 ({curr_rsi:.2f})，隨時可能暴力反彈。\n"
+-        else:
+-            report += "🧘 戰略：目前位階中性，建議分批佈局過等待關鍵突破。\n"
+-        
+-        return report
+-    except Exception as e:
+-        logger.error(f"Technical analysis failed for {symbol}: {e}")
+-        return format_tool_error(f"❌ 技術分析失敗: {e}", data_unavailable=True)
++        elif curr_rsi < 30:
++            report += f"🔥 戰略：RSI 極度超跌 ({curr_rsi:.2f})，隨時可能暴力反彈。\n"
++        else:
++            report += "🧘 戰略：目前位階中性，建議分批佈局過等待關鍵突破。\n"
++
++        if divergence.get("bullish_divergence"):
++            report += "🟢 補充：RSI 底背離成立，賣壓動能正在衰竭。\n"
++        elif divergence.get("bearish_divergence"):
++            report += "🔴 補充：RSI 頂背離成立，上攻動能開始鈍化。\n"
++
++        if trend_regime == "ranging" and adx.get("value") is not None:
++            report += f"🌀 補充：ADX 僅 {adx['value']:.2f}，當前偏震盪盤，均線突破需二次確認。\n"
++        
++        return report
++    except Exception as e:
++        logger.error(f"Technical analysis failed for {symbol}: {e}")
++        return format_tool_error(f"❌ 技術分析失敗: {e}", data_unavailable=True)
+ 
+ @tool()
+ def get_technical_analysis(symbol: str, interval: str = "1d") -> str:
+diff --git a/engine_memory.py b/engine_memory.py
+index b25d292..fd7caf1 100644
+--- a/engine_memory.py
++++ b/engine_memory.py
+@@ -563,26 +563,27 @@ class Brain:
+                 )
+                 return False
+ 
++        timestamp = _utc_now_iso()
+         payload = {
+             "type": commit_type,
+             "summary": summary,
+             "delta": delta or {},
+             "key_signals": key_signals,
+-            "frontal_lobe_ref": frontal_lobe_ref,
+-            "parent_hash": self.head,
+-            "timestamp": _utc_now_iso()
+-        }
+-
+-        commit_hash = generate_commit_hash(payload)
+-
+-        commit = {
+-            "hash": commit_hash,
+-            "parent_hash": self.head,
+-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+-            "type": commit_type,
+-            "summary": summary,
+-            "key_signals": key_signals,
+-            "frontal_lobe_ref": frontal_lobe_ref
++            "frontal_lobe_ref": frontal_lobe_ref,
++            "parent_hash": self.head,
++            "timestamp": timestamp
++        }
++
++        commit_hash = generate_commit_hash(payload)
++
++        commit = {
++            "hash": commit_hash,
++            "parent_hash": self.head,
++            "timestamp": timestamp,
++            "type": commit_type,
++            "summary": summary,
++            "key_signals": key_signals,
++            "frontal_lobe_ref": frontal_lobe_ref
+         }
+         if delta:
+             commit["delta"] = delta
+@@ -864,22 +865,37 @@ class Brain:
+             watchpoints.append(f"GEX: {signals['gexBillions']}B")
+         if signals.get("sentimentLabel"):
+             watchpoints.append(f"市場情緒: {signals['sentimentLabel']} ({signals.get('sentimentScore', 'N/A')})")
+-        if signals.get("spx") is not None:
+-            watchpoints.append(
+-                f"SPX: {signals['spx']} / MA20 {signals.get('spx20Ma', 'N/A')} / MA200 {signals.get('spx200Ma', 'N/A')}"
+-            )
+-        for reason in snapshot.get("reasons", [])[:2]:
+-            if reason not in watchpoints:
+-                watchpoints.append(reason)
++        if signals.get("spx") is not None:
++            watchpoints.append(
++                f"SPX: {signals['spx']} / MA20 {signals.get('spx20Ma', 'N/A')} / MA200 {signals.get('spx200Ma', 'N/A')}"
++            )
++        if signals.get("spxTrendRegime"):
++            adx_note = signals.get("spxAdx", "N/A")
++            watchpoints.append(f"SPX 趨勢型態: {signals['spxTrendRegime']} (ADX {adx_note})")
++        if signals.get("sectorBreadth200") is not None:
++            watchpoints.append(
++                f"Sector Breadth: 50MA {signals.get('sectorBreadth50', 'N/A')}% / 200MA {signals['sectorBreadth200']}%"
++            )
++        if signals.get("spyGammaFlipLevel") is not None:
++            watchpoints.append(
++                f"SPY Gamma Flip: {signals['spyGammaFlipLevel']} / Spot {signals.get('spySpot', 'N/A')}"
++            )
++        if signals.get("spyMaxPain") is not None:
++            watchpoints.append(f"SPY Max Pain: {signals['spyMaxPain']}")
++        if signals.get("spyVrp") is not None:
++            watchpoints.append(f"SPY VRP: {signals['spyVrp']}pt ({signals.get('spyVolSignal', 'N/A')})")
++        for reason in snapshot.get("reasons", [])[:2]:
++            if reason not in watchpoints:
++                watchpoints.append(reason)
+ 
+         return self.update_market_regime(
+             summary=snapshot.get("summary", ""),
+-            regime=snapshot.get("state"),
+-            risk_score=snapshot.get("riskScore"),
+-            watchpoints=watchpoints[:5],
+-            reasons=snapshot.get("reasons", []),
+-            signals=signals,
+-            source=source,
++            regime=snapshot.get("state"),
++            risk_score=snapshot.get("riskScore"),
++            watchpoints=watchpoints[:6],
++            reasons=snapshot.get("reasons", []),
++            signals=signals,
++            source=source,
+             updated_at=snapshot.get("generatedAt")
+         )
+ 
+diff --git a/engine_portfolio.py b/engine_portfolio.py
+index 2449e82..ff818ce 100644
+--- a/engine_portfolio.py
++++ b/engine_portfolio.py
+@@ -1,63 +1,151 @@
+-import json
+-import time
+-import os
+-import csv
+-import logging
+-import yfinance as yf
+-import fubon
+-from typing import Any, Dict, List
++import json
++import time
++import os
++import csv
++import logging
++import threading
++import requests
++import pandas as pd
++import yfinance as yf
++import fubon
++from typing import Any, Dict, List
+ from yf_session import get_ticker
+ from src.database import db_lock, get_connection
+ from src.symbols import normalize_ticker
+ from src.tools import format_tool_error, tool
+ 
+-logger = logging.getLogger(__name__)
+-
+-CSV_BACKUP = "my_portfolio.csv"
+-
+-# --- 匯率快取 ---
+-_fx_cache = {"rate": 32.0, "timestamp": 0}
+-
+-def fetch_exchange_rate() -> float:
+-    """Pure FX-rate logic for direct callers and tests."""
+-    global _fx_cache
+-    current_time = time.time()
+-    if current_time - _fx_cache["timestamp"] < 600:
+-        return _fx_cache["rate"]
+-    try:
+-        ticker = get_ticker("TWD=X")
+-        rate = ticker.fast_info.get('last_price') or ticker.history(period="1d")['Close'].iloc[-1]
+-        _fx_cache["rate"] = round(float(rate), 2)
+-        _fx_cache["timestamp"] = current_time
+-        return _fx_cache["rate"]
+-    except Exception as e:
+-        logger.warning(f"Exchange rate refresh failed, using cache: {e}")
+-        return _fx_cache["rate"]
+-
+-
+-@tool()
+-def get_exchange_rate() -> float:
+-    return fetch_exchange_rate()
+-
+-# --- 資料庫初始化與遷移 ---
+-def init_db():
+-    with db_lock:
+-        conn = get_connection()
++logger = logging.getLogger(__name__)
++
++CSV_BACKUP = "my_portfolio.csv"
++
++# --- 匯率快取 ---
++_fx_cache = {"rate": 32.0, "timestamp": 0}
++_fx_cache_lock = threading.Lock()
++
++def fetch_exchange_rate() -> float:
++    """Pure FX-rate logic for direct callers and tests."""
++    global _fx_cache
++    current_time = time.time()
++    with _fx_cache_lock:
++        if current_time - _fx_cache["timestamp"] < 600:
++            return _fx_cache["rate"]
++    try:
++        ticker = get_ticker("TWD=X")
++        fast_info = getattr(ticker, "fast_info", {}) or {}
++        rate = fast_info.get("last_price")
++        if rate is None:
++            hist = ticker.history(period="1d")
++            if hist.empty:
++                raise ValueError("TWD=X history is empty")
++            rate = hist["Close"].iloc[-1]
++        fresh_rate = round(float(rate), 2)
++    except requests.RequestException as e:
++        logger.warning(f"Exchange rate network refresh failed, using cache: {e}")
++        with _fx_cache_lock:
++            return _fx_cache["rate"]
++    except (KeyError, IndexError, TypeError, ValueError) as e:
++        logger.error(f"Exchange rate payload parsing failed, using cache: {e}")
++        with _fx_cache_lock:
++            return _fx_cache["rate"]
++    except Exception:
++        logger.exception("Exchange rate refresh failed unexpectedly, using cache")
++        with _fx_cache_lock:
++            return _fx_cache["rate"]
++
++    with _fx_cache_lock:
++        if current_time >= _fx_cache["timestamp"]:
++            _fx_cache["rate"] = fresh_rate
++            _fx_cache["timestamp"] = time.time()
++        return _fx_cache["rate"]
++
++
++@tool()
++def get_exchange_rate() -> float:
++    return fetch_exchange_rate()
++
++
++def _upsert_portfolio_row(cursor, symbol: str, cost: float, shares: float, twd_cost: float, locked: int = 0):
++    cursor.execute(
++        "INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)",
++        (symbol, cost, shares, twd_cost, locked),
++    )
++
++
++def _record_trade_log(
++    cursor,
++    *,
++    symbol: str,
++    action: str,
++    price: float,
++    shares: float,
++    settle_currency: str | None = None,
++    settle_amount: float | None = None,
++    fx_rate: float | None = None,
++    realized_pnl: float | None = None,
++    cash_before: float | None = None,
++    cash_after: float | None = None,
++    note: str | None = None,
++):
++    cursor.execute(
++        """
++        INSERT INTO trade_log (
++            symbol, action, price, shares, settle_currency, settle_amount, fx_rate,
++            realized_pnl, cash_before, cash_after, note
++        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++        """,
++        (
++            symbol,
++            action,
++            price,
++            shares,
++            settle_currency,
++            settle_amount,
++            fx_rate,
++            realized_pnl,
++            cash_before,
++            cash_after,
++            note,
++        ),
++    )
++
++# --- 資料庫初始化與遷移 ---
++def init_db():
++    with db_lock:
++        conn = get_connection()
+         cursor = conn.cursor()
+         cursor.execute("""
+-            CREATE TABLE IF NOT EXISTS portfolio (
+-                symbol TEXT PRIMARY KEY,
+-                cost REAL,
+-                shares REAL,
+-                twd_cost REAL,
+-                locked INTEGER DEFAULT 0
+-            )
+-        """)
+-        # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
+-        try:
+-            cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
+-        except Exception as e:
+-            logger.debug(f"Portfolio migration skipped: {e}")
++            CREATE TABLE IF NOT EXISTS portfolio (
++                symbol TEXT PRIMARY KEY,
++                cost REAL,
++                shares REAL,
++                twd_cost REAL,
++                locked INTEGER DEFAULT 0
++            )
++        """)
++        cursor.execute(
++            """
++            CREATE TABLE IF NOT EXISTS trade_log (
++                id INTEGER PRIMARY KEY AUTOINCREMENT,
++                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
++                symbol TEXT NOT NULL,
++                action TEXT NOT NULL,
++                price REAL NOT NULL,
++                shares REAL NOT NULL,
++                settle_currency TEXT,
++                settle_amount REAL,
++                fx_rate REAL,
++                realized_pnl REAL,
++                cash_before REAL,
++                cash_after REAL,
++                note TEXT
++            )
++            """
++        )
++        # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
++        try:
++            cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
++        except Exception as e:
++            logger.debug(f"Portfolio migration skipped: {e}")
+         conn.commit()
+ 
+         # 檢查是否需要從 CSV 遷移
+@@ -116,45 +204,87 @@ def execute_position_update(symbol: str, price: float, shares: float, action: st
+             # 覆寫鎖定狀態
+             current_locked = locked if locked is not None else old_pos[3]
+ 
+-            cursor.execute("SELECT cost, shares, twd_cost FROM portfolio WHERE symbol = ?", (settle_currency,))
+-            cash_pos = cursor.fetchone() or (1.0 if 'TWD' in settle_currency else fx_rate, 0.0, 0.0)
+-
+-            if action == 'buy':
+-                if cash_pos[1] < settle_amount:
+-                    result_message = f"❌ 買進失敗：{settle_currency} 餘額不足！(剩 {cash_pos[1]:.2f})"
+-                else:
+-                    new_shares = old_pos[1] + shares
+-                    new_twd_cost = old_pos[2] + actual_twd_total
+-                    new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
+-                    cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, new_cost, new_shares, new_twd_cost, current_locked))
+-                    cursor.execute("UPDATE portfolio SET shares = shares - ?, twd_cost = twd_cost - ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+-                    result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
+-                    should_refresh_memory = True
+-            
+-            elif action == 'sell':
+-                if old_pos[3] == 1:
++            cursor.execute("SELECT cost, shares, twd_cost FROM portfolio WHERE symbol = ?", (settle_currency,))
++            cash_pos = cursor.fetchone() or (1.0 if 'TWD' in settle_currency else fx_rate, 0.0, 0.0)
++
++            if action == 'buy':
++                if cash_pos[1] < settle_amount:
++                    result_message = f"❌ 買進失敗：{settle_currency} 餘額不足！(剩 {cash_pos[1]:.2f})"
++                else:
++                    new_shares = old_pos[1] + shares
++                    new_twd_cost = old_pos[2] + actual_twd_total
++                    new_cost = (old_pos[0] * old_pos[1] + actual_unit_price * shares) / new_shares
++                    cash_before = cash_pos[1]
++                    cash_after = cash_before - settle_amount
++                    _upsert_portfolio_row(cursor, symbol, new_cost, new_shares, new_twd_cost, current_locked)
++                    _upsert_portfolio_row(cursor, settle_currency, cash_pos[0], cash_after, cash_pos[2] - actual_twd_total, 0)
++                    _record_trade_log(
++                        cursor,
++                        symbol=symbol,
++                        action='buy',
++                        price=actual_unit_price,
++                        shares=shares,
++                        settle_currency=settle_currency,
++                        settle_amount=settle_amount,
++                        fx_rate=fx_rate,
++                        cash_before=cash_before,
++                        cash_after=cash_after,
++                    )
++                    result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
++                    should_refresh_memory = True
++            
++            elif action == 'sell':
++                if old_pos[3] == 1:
+                     result_message = f"❌ 賣出失敗：標的 {symbol} 被鎖定 (福利信託/長期持有)，禁止機器人操作。請手動解除鎖定後再試。"
+                 elif old_pos[1] < shares:
+                     result_message = f"❌ 賣出失敗：持股不足 (只有 {old_pos[1]})"
+-                else:
+-                    cost_ratio = shares / old_pos[1]
+-                    realized_twd_cost = old_pos[2] * cost_ratio
+-                    realized_pnl = actual_twd_total - realized_twd_cost
+-                    new_shares = old_pos[1] - shares
+-                    if new_shares > 0:
+-                        cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
+-                    else:
+-                        cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
+-                    cursor.execute("UPDATE portfolio SET shares = shares + ?, twd_cost = twd_cost + ? WHERE symbol = ?", (settle_amount, actual_twd_total, settle_currency))
+-                    result_message = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
+-                    should_refresh_memory = True
+-            
+-            elif action == 'set':
+-                cursor.execute("INSERT OR REPLACE INTO portfolio VALUES (?, ?, ?, ?, ?)", (symbol, actual_unit_price, shares, actual_twd_total, current_locked))
+-                result_message = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
+-                should_refresh_memory = True
+-            else:
+-                result_message = f"❌ 未知操作: {action}"
++                else:
++                    cost_ratio = shares / old_pos[1]
++                    realized_twd_cost = old_pos[2] * cost_ratio
++                    realized_pnl = actual_twd_total - realized_twd_cost
++                    new_shares = old_pos[1] - shares
++                    cash_before = cash_pos[1]
++                    cash_after = cash_before + settle_amount
++                    if new_shares > 0:
++                        cursor.execute("UPDATE portfolio SET shares = ?, twd_cost = twd_cost - ? WHERE symbol = ?", (new_shares, realized_twd_cost, symbol))
++                    else:
++                        cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
++                    _upsert_portfolio_row(cursor, settle_currency, cash_pos[0], cash_after, cash_pos[2] + actual_twd_total, 0)
++                    _record_trade_log(
++                        cursor,
++                        symbol=symbol,
++                        action='sell',
++                        price=actual_unit_price,
++                        shares=shares,
++                        settle_currency=settle_currency,
++                        settle_amount=settle_amount,
++                        fx_rate=fx_rate,
++                        realized_pnl=realized_pnl,
++                        cash_before=cash_before,
++                        cash_after=cash_after,
++                    )
++                    result_message = f"✅ 賣出成功！實現損益: NT${realized_pnl:+.0f}"
++                    should_refresh_memory = True
++            
++            elif action == 'set':
++                _upsert_portfolio_row(cursor, symbol, actual_unit_price, shares, actual_twd_total, current_locked)
++                _record_trade_log(
++                    cursor,
++                    symbol=symbol,
++                    action='set',
++                    price=actual_unit_price,
++                    shares=shares,
++                    settle_currency=symbol if is_cash else None,
++                    settle_amount=(shares - old_pos[1]) if is_cash else None,
++                    fx_rate=fx_rate,
++                    cash_before=old_pos[1] if is_cash else None,
++                    cash_after=shares if is_cash else None,
++                    note=f"manual set; locked={current_locked}",
++                )
++                result_message = f"✅ 校正成功！{symbol} 已更新 (Locked: {current_locked})。"
++                should_refresh_memory = True
++            else:
++                result_message = f"❌ 未知操作: {action}"
+ 
+             conn.commit()
+         except Exception as e:
+@@ -432,8 +562,8 @@ def get_portfolio_analysis() -> str:
+     return res['summary']
+ 
+ 
+-def calculate_position_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
+-    """Pure PnL logic for direct callers and tests."""
++def calculate_position_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
++    """Pure PnL logic for direct callers and tests."""
+     # 識別市場
+     is_uk_stock = symbol.endswith('.L') or symbol.endswith('.IL')
+     is_foreign = is_us_stock or is_uk_stock or symbol == 'CASH_USD'
+@@ -461,18 +591,102 @@ def calculate_position_pnl(symbol: str, current_price: float, shares: float, his
+     else:
+         pnl_percent = 0.0
+     
+-    return {
+-        "market_value_twd": round(current_market_value_twd, 2),
+-        "pnl_value_twd": round(pnl_value_twd, 2),
+-        "pnl_percent": round(pnl_percent, 2),
+-        "market": "UK" if is_uk_stock else "US" if is_us_stock else "TW"
+-    }
+-
+-
+-@tool()
+-def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
+-    """
+-    Calculates profit and loss (PNL) for a specific position.
++    return {
++        "market_value_twd": round(current_market_value_twd, 2),
++        "pnl_value_twd": round(pnl_value_twd, 2),
++        "pnl_percent": round(pnl_percent, 2),
++        "market": "UK" if is_uk_stock else "US" if is_us_stock else "TW"
++    }
++
++
++def build_position_size_report(
++    symbol: str,
++    risk_pct: float = 2.0,
++    total_capital_twd: float = None,
++    stop_atr_multiple: float = 2.0,
++) -> str:
++    """以 ATR 估算風險預算下的建議倉位。"""
++    try:
++        if risk_pct <= 0 or stop_atr_multiple <= 0:
++            return format_tool_error("❌ risk_pct 與 stop_atr_multiple 必須大於 0。", data_unavailable=True)
++
++        symbol = normalize_ticker(symbol)
++        from engine_technical import IndicatorCalculator
++
++        calc = IndicatorCalculator()
++        highs = calc.HIGH(symbol, '1d')
++        lows = calc.LOW(symbol, '1d')
++        closes = calc.CLOSE(symbol, '1d')
++        atr_series = pd.Series(calc.ATR(highs, lows, closes)).dropna()
++        if atr_series.empty:
++            return format_tool_error(f"❌ {symbol} 無法計算 ATR。", data_unavailable=True)
++
++        atr = float(atr_series.iloc[-1])
++        price = float(closes[-1])
++        clean_symbol = symbol.replace('.TW', '').replace('.TWO', '')
++        is_taiwan = (any(char.isdigit() for char in clean_symbol) and len(clean_symbol) <= 6) or symbol.endswith('.TW') or symbol.endswith('.TWO')
++        fx_rate = 1.0 if is_taiwan or 'CASH' in symbol else fetch_exchange_rate()
++
++        if total_capital_twd is None:
++            total_capital_twd = float(build_portfolio_analysis().get("total_current") or 0.0)
++        else:
++            total_capital_twd = float(total_capital_twd)
++
++        if total_capital_twd <= 0:
++            return format_tool_error("❌ 無法取得有效總資金，請先確認 portfolio。", data_unavailable=True)
++
++        risk_budget_twd = total_capital_twd * (risk_pct / 100.0)
++        stop_distance_local = atr * stop_atr_multiple
++        stop_distance_twd = stop_distance_local * fx_rate
++        if stop_distance_twd <= 0 or price <= 0:
++            return format_tool_error(f"❌ {symbol} 的 ATR / 價格數據異常。", data_unavailable=True)
++
++        risk_shares = int(risk_budget_twd / stop_distance_twd)
++        affordable_shares = int(total_capital_twd / (price * fx_rate))
++        recommended_shares = max(0, min(risk_shares, affordable_shares))
++        capped_by_capital = risk_shares > affordable_shares
++        position_value_local = recommended_shares * price
++        position_value_twd = position_value_local * fx_rate
++
++        report = f"📐 【ATR 倉位計算】 {symbol}\n"
++        report += (
++            f"● ATR(14): {atr:.2f} | 建議止損距離: {stop_distance_local:.2f} "
++            f"({stop_atr_multiple:.1f}x ATR)\n"
++        )
++        report += f"● 風險預算: NT${risk_budget_twd:,.0f} ({risk_pct:.2f}% of NT${total_capital_twd:,.0f})\n"
++        report += (
++            f"● 建議股數: {recommended_shares} 股 | 部位市值: "
++            f"{position_value_local:,.0f}{' 原幣' if fx_rate > 1 else ' TWD'}"
++        )
++        if fx_rate > 1:
++            report += f" (~NT${position_value_twd:,.0f})"
++        report += "\n"
++        report += f"● 佔總資金: {(position_value_twd / total_capital_twd * 100) if total_capital_twd > 0 else 0:.1f}%"
++        if capped_by_capital:
++            report += " | ⚠️ 已受總資金上限限制"
++        return report
++    except Exception as e:
++        logger.error(f"ATR position sizing failed for {symbol}: {e}")
++        return format_tool_error(f"❌ 倉位計算失敗: {e}", data_unavailable=True)
++
++
++@tool()
++def calculate_position_size(
++    symbol: str,
++    risk_pct: float = 2.0,
++    total_capital_twd: float = None,
++    stop_atr_multiple: float = 2.0,
++) -> str:
++    """
++    Calculates a suggested position size using ATR-based stop distance and portfolio risk budget.
++    """
++    return build_position_size_report(symbol, risk_pct, total_capital_twd, stop_atr_multiple)
++
++
++@tool()
++def calculate_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
++    """
++    Calculates profit and loss (PNL) for a specific position.
+     Converts foreign values to TWD and accounts for estimated exchange fees.
+     """
+     return calculate_position_pnl(symbol, current_price, shares, historical_twd_cost, is_us_stock)
+diff --git a/engine_risk.py b/engine_risk.py
+index 3fcf4ea..bdf6622 100644
+--- a/engine_risk.py
++++ b/engine_risk.py
+@@ -1,18 +1,21 @@
+-import io
+-import math
+-import time
+-import requests
+-import pandas as pd
+-import numpy as np
+-import yfinance as yf
+-from yf_session import get_ticker, get_download
+-import logging
+-import os
+-from typing import Any, Dict
+-# ... (保留原本的 import)
+-from scipy import stats
+-from datetime import datetime, timedelta
+-from dotenv import load_dotenv
++import io
++import math
++import time
++import threading
++import requests
++import pandas as pd
++import numpy as np
++import yfinance as yf
++from yf_session import get_ticker, get_download
++import logging
++import os
++from typing import Any, Dict
++# ... (保留原本的 import)
++from scipy import stats
++from datetime import datetime, timedelta, timezone
++from dotenv import load_dotenv
++import engine_market as market
++from engine_technical import IndicatorCalculator
+ 
+ # 新增 FRED 相關 import
+ import json
+@@ -249,49 +252,149 @@ def update_market_db():
+         finally:
+             conn.close()
+ 
+-def calculate_gamma(S, K, T, r, sigma):
+-    if T <= 0 or sigma <= 0: return 0
+-    try:
+-        d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+-        gamma = stats.norm.pdf(d1) / (S * sigma * np.sqrt(T))
+-        return gamma
+-    except Exception as e:
+-        logger.debug(f"Gamma calculation error: {e}")
+-        return 0
+-
+-def get_realtime_spy_gex():
+-    """計算 SPY GEX (單位: Billions)"""
+-    try:
+-        spy = get_ticker("SPY")
+-        spot = spy.history(period="1d")["Close"].iloc[-1]
+-        
+-        # 動態無風險利率 (TNX)
++def calculate_gamma(S, K, T, r, sigma):
++    if T <= 0 or sigma <= 0: return 0
++    try:
++        d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
++        gamma = stats.norm.pdf(d1) / (S * sigma * np.sqrt(T))
++        return gamma
++    except Exception as e:
++        logger.debug(f"Gamma calculation error: {e}")
++        return 0
++
++
++def _get_risk_free_rate() -> float:
++    try:
++        return float(get_ticker("^TNX").history(period="1d")['Close'].iloc[-1]) / 100.0
++    except Exception as e:
++        logger.debug(f"TNX fallback rate used: {e}")
++        return 0.04
++
++
++def _select_future_expirations(expirations, *, min_days: int = 3, max_count: int = 4) -> list[str]:
++    selected = []
++    today = datetime.now().date()
++    for date_str in expirations or []:
++        if len(selected) >= max_count:
++            break
+         try:
+-            r = get_ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100.0
+-        except Exception as e:
+-            logger.debug(f"TNX fallback rate used: {e}")
+-            r = 0.04 # Fallback
+-
+-        expirations = spy.options[:3]
+-        total_gex = 0
+-        for exp in expirations:
+-            opt = spy.option_chain(exp)
+-            T = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days / 365.0
+-            if T <= 0: T = 0.001
+-            
+-            # SPY 合約單位為 100 股
+-            calls = opt.calls.dropna()
+-            puts = opt.puts.dropna()
+-            for _, row in calls.iterrows():
+-                g = calculate_gamma(spot, row['strike'], T, r, row['impliedVolatility'])
+-                total_gex += row['openInterest'] * 100 * g * (spot**2) * 0.01
+-            for _, row in puts.iterrows():
+-                g = calculate_gamma(spot, row['strike'], T, r, row['impliedVolatility'])
+-                total_gex -= row['openInterest'] * 100 * g * (spot**2) * 0.01
+-        return total_gex / 10**9 
+-    except Exception as e:
+-        logger.error(f"Real-time GEX calculation failed: {e}")
+-        return None
++            expiry_date = datetime.strptime(date_str, "%Y-%m-%d").date()
++        except (TypeError, ValueError):
++            continue
++        if (expiry_date - today).days < min_days:
++            continue
++        selected.append(date_str)
++    return selected
++
++
++def _interpolate_zero_cross(x1: float, y1: float, x2: float, y2: float) -> float:
++    if y1 == y2:
++        return (x1 + x2) / 2
++    return x1 + ((0 - y1) * (x2 - x1) / (y2 - y1))
++
++
++def get_spy_gex_levels(symbol: str = "SPY") -> Dict[str, Any]:
++    """計算 SPY / ETF 的 GEX 總量、Gamma Flip proxy 與 Max Pain。"""
++    try:
++        ticker = get_ticker(symbol)
++        spot_hist = ticker.history(period="1d")
++        if spot_hist.empty:
++            return {
++                "total_gex_billions": None,
++                "gamma_flip_level": None,
++                "max_pain": None,
++                "spot": None,
++                "above_flip": None,
++                "below_flip": None,
++            }
++
++        spot = float(spot_hist["Close"].iloc[-1])
++        rate = _get_risk_free_rate()
++        strike_gex = {}
++        call_oi_by_strike = {}
++        put_oi_by_strike = {}
++
++        expirations = _select_future_expirations(getattr(ticker, "options", None), min_days=3, max_count=4)
++        for exp in expirations:
++            try:
++                opt = ticker.option_chain(exp)
++            except Exception as chain_exc:
++                logger.debug(f"GEX chain fetch failed for {symbol} @ {exp}: {chain_exc}")
++                continue
++
++            time_to_expiry = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days / 365.0
++            if time_to_expiry <= 0:
++                time_to_expiry = 0.001
++
++            calls = getattr(opt, "calls", None)
++            puts = getattr(opt, "puts", None)
++            calls = calls if isinstance(calls, pd.DataFrame) else pd.DataFrame()
++            puts = puts if isinstance(puts, pd.DataFrame) else pd.DataFrame()
++
++            for frame, direction, oi_store in ((calls, 1, call_oi_by_strike), (puts, -1, put_oi_by_strike)):
++                if frame.empty:
++                    continue
++                subset = frame[["strike", "impliedVolatility", "openInterest"]].dropna()
++                subset = subset[(subset["strike"] > 0) & (subset["impliedVolatility"] > 0) & (subset["openInterest"] > 0)]
++                for _, row in subset.iterrows():
++                    strike = float(row["strike"])
++                    open_interest = float(row["openInterest"])
++                    gamma = calculate_gamma(spot, strike, time_to_expiry, rate, float(row["impliedVolatility"]))
++                    exposure = open_interest * 100 * gamma * (spot ** 2) * 0.01
++                    strike_gex[strike] = strike_gex.get(strike, 0.0) + (direction * exposure)
++                    oi_store[strike] = oi_store.get(strike, 0.0) + open_interest
++
++        total_gex = sum(strike_gex.values()) / 10 ** 9 if strike_gex else None
++        flip_level = None
++        if strike_gex:
++            sorted_pairs = sorted(strike_gex.items())
++            strikes = [pair[0] for pair in sorted_pairs]
++            cumulative_gex = np.cumsum([pair[1] for pair in sorted_pairs])
++            for idx in range(len(strikes) - 1):
++                left_gex = cumulative_gex[idx]
++                right_gex = cumulative_gex[idx + 1]
++                if left_gex == 0:
++                    flip_level = strikes[idx]
++                    break
++                if (left_gex < 0 < right_gex) or (left_gex > 0 > right_gex):
++                    flip_level = _interpolate_zero_cross(strikes[idx], left_gex, strikes[idx + 1], right_gex)
++                    break
++            if flip_level is None and len(strikes) > 0 and np.any(np.abs(cumulative_gex) > 0):
++                flip_level = strikes[int(np.argmin(np.abs(cumulative_gex)))]
++
++        max_pain = None
++        candidate_strikes = sorted(set(call_oi_by_strike) | set(put_oi_by_strike))
++        if candidate_strikes:
++            def _pain_at(settlement: float) -> float:
++                call_pain = sum(max(0.0, settlement - strike) * oi * 100 for strike, oi in call_oi_by_strike.items())
++                put_pain = sum(max(0.0, strike - settlement) * oi * 100 for strike, oi in put_oi_by_strike.items())
++                return call_pain + put_pain
++
++            max_pain = min(candidate_strikes, key=_pain_at)
++
++        return {
++            "total_gex_billions": round(float(total_gex), 3) if total_gex is not None else None,
++            "gamma_flip_level": round(float(flip_level), 2) if flip_level is not None else None,
++            "max_pain": round(float(max_pain), 2) if max_pain is not None else None,
++            "spot": round(float(spot), 2),
++            "above_flip": bool(flip_level is not None and spot > flip_level) if flip_level is not None else None,
++            "below_flip": bool(flip_level is not None and spot < flip_level) if flip_level is not None else None,
++        }
++    except Exception as e:
++        logger.error(f"Real-time GEX profile calculation failed for {symbol}: {e}")
++        return {
++            "total_gex_billions": None,
++            "gamma_flip_level": None,
++            "max_pain": None,
++            "spot": None,
++            "above_flip": None,
++            "below_flip": None,
++        }
++
++
++def get_realtime_spy_gex():
++    """相容舊介面：回傳 SPY GEX 總量 (Billions)。"""
++    return get_spy_gex_levels().get("total_gex_billions")
+ 
+ def get_market_sentiment_score():
+     """整合新聞情緒分析 (LLM 優先，關鍵字備援)"""
+@@ -368,17 +471,130 @@ def fetch_all_market_data():
+         logger.error(f"Fetch all market data failed: {e}")
+         return pd.DataFrame()
+ 
+-_risk_cache = {"report": "", "snapshot": None, "timestamp": 0, "expiry": 1200}
+-
+-def _safe_float(value, digits: int = 2):
+-    try:
+-        if value is None:
+-            return None
+-        return round(float(value), digits)
+-    except (TypeError, ValueError):
+-        return None
+-
+-def _build_global_risk_summary(score: int, state: str, reasons) -> str:
++_risk_cache = {"report": "", "snapshot": None, "timestamp": 0, "expiry": 1200}
++_risk_cache_lock = threading.Lock()
++
++DIX_SUPPORT_THRESHOLD = 0.85
++DIX_SUPPORT_OFFSET_POINTS = 12
++SECTOR_ETFS = ['XLK', 'XLF', 'XLV', 'XLE', 'XLI', 'XLY', 'XLP', 'XLU', 'XLC', 'XLB', 'XLRE']
++BREADTH_RISK_THRESHOLD = 30.0
++V_TURN_BREADTH_SAFE_THRESHOLD = 40.0
++
++def _safe_float(value, digits: int = 2):
++    try:
++        if value is None:
++            return None
++        return round(float(value), digits)
++    except (TypeError, ValueError):
++        return None
++
++
++def _extract_close_series_from_download(payload, symbol: str) -> pd.Series | None:
++    if isinstance(payload, dict):
++        frame = payload.get(symbol)
++        if isinstance(frame, pd.DataFrame) and "Close" in frame.columns:
++            series = pd.to_numeric(frame["Close"], errors="coerce").dropna()
++            return series if not series.empty else None
++        return None
++
++    if not isinstance(payload, pd.DataFrame) or payload.empty:
++        return None
++
++    if isinstance(payload.columns, pd.MultiIndex):
++        if symbol not in payload.columns.levels[0]:
++            return None
++        frame = payload[symbol]
++        if "Close" not in frame.columns:
++            return None
++        series = pd.to_numeric(frame["Close"], errors="coerce").dropna()
++        return series if not series.empty else None
++
++    if "Close" in payload.columns:
++        series = pd.to_numeric(payload["Close"], errors="coerce").dropna()
++        return series if not series.empty else None
++    return None
++
++
++def get_market_breadth() -> Dict[str, Any]:
++    """以 11 個 sector ETF 衡量市場廣度。"""
++    try:
++        data = get_download(SECTOR_ETFS, period="1y", group_by='ticker', progress=False)
++    except Exception as e:
++        logger.warning(f"Market breadth fetch failed: {e}")
++        return {"pct_above_200ma": None, "pct_above_50ma": None, "total_sectors": 0, "breadth_signal": "unknown"}
++
++    above_200ma = 0
++    above_50ma = 0
++    total = 0
++
++    for etf in SECTOR_ETFS:
++        close = _extract_close_series_from_download(data, etf)
++        if close is None or len(close) < 200:
++            continue
++        ma200 = close.rolling(200).mean().iloc[-1]
++        ma50 = close.rolling(50).mean().iloc[-1]
++        current = close.iloc[-1]
++        if pd.notna(ma200) and current > ma200:
++            above_200ma += 1
++        if pd.notna(ma50) and current > ma50:
++            above_50ma += 1
++        total += 1
++
++    if total == 0:
++        return {"pct_above_200ma": None, "pct_above_50ma": None, "total_sectors": 0, "breadth_signal": "unknown"}
++
++    pct_above_200ma = above_200ma / total * 100
++    pct_above_50ma = above_50ma / total * 100
++    breadth_signal = "healthy" if pct_above_200ma > 70 else "deteriorating" if pct_above_200ma > 40 else "weak"
++    return {
++        "pct_above_200ma": round(pct_above_200ma, 1),
++        "pct_above_50ma": round(pct_above_50ma, 1),
++        "total_sectors": total,
++        "breadth_signal": breadth_signal,
++    }
++
++
++def get_rolling_correlations(window: int = 60) -> Dict[str, Any]:
++    """追蹤美股與債券 / 黃金 / 美元的 60 日滾動相關性。"""
++    symbols = ("SPY", "TLT", "GLD", "DX-Y.NYB")
++    try:
++        data = get_download(list(symbols), period="6mo", group_by='ticker', progress=False)
++    except Exception as e:
++        logger.warning(f"Rolling correlation fetch failed: {e}")
++        return {}
++
++    returns = {}
++    for sym in symbols:
++        close = _extract_close_series_from_download(data, sym)
++        if close is None:
++            continue
++        pct = close.pct_change().dropna()
++        if not pct.empty:
++            returns[sym] = pct
++
++    spy_returns = returns.get("SPY")
++    if spy_returns is None:
++        return {}
++
++    correlations = {}
++    mapping = {
++        "TLT": "spyTltCorr60d",
++        "GLD": "spyGldCorr60d",
++        "DX-Y.NYB": "spyDxyCorr60d",
++    }
++    for sym, key in mapping.items():
++        asset_returns = returns.get(sym)
++        if asset_returns is None:
++            continue
++        aligned = pd.concat([spy_returns, asset_returns], axis=1).dropna()
++        if len(aligned) < window:
++            continue
++        corr_value = aligned.iloc[:, 0].rolling(window).corr(aligned.iloc[:, 1]).iloc[-1]
++        if pd.notna(corr_value):
++            correlations[key] = round(float(corr_value), 3)
++    return correlations
++
++def _build_global_risk_summary(score: int, state: str, reasons) -> str:
+     if score >= 75:
+         lead = "系統風險進入高警戒，先以防守和流動性管理為優先。"
+     elif score >= 45:
+@@ -387,22 +603,74 @@ def _build_global_risk_summary(score: int, state: str, reasons) -> str:
+         lead = "市場處於整理盤，適合等待更清楚的方向再擴大部位。"
+     else:
+         lead = "市場仍維持偏多結構，但要留意短線波動升溫。"
+-    top_reasons = "；".join(reasons[:3]) if reasons else "目前主要風險指標穩定。"
+-    return f"{lead} 當前 regime：{state}，風險分數 {score}。核心觀察：{top_reasons}"
+-
+-def _build_global_risk_snapshot() -> Dict[str, Any]:
+-    df = fetch_all_market_data()
+-    if df.empty:
+-        raise RuntimeError("雷達掃描失敗。")
+-
+-    latest = df.iloc[-1]
+-    macro = MacroEngine().get_macro_dashboard()
+-    rt_gex = get_realtime_spy_gex()
+-    final_gex = rt_gex if rt_gex is not None else (latest.get('gex', 0) / 10**9)
+-    sent_score, sent_label = get_market_sentiment_score()
+-
+-    risk_multiplier = 1.0
+-    reasons = []
++    top_reasons = "；".join(reasons[:3]) if reasons else "目前主要風險指標穩定。"
++    return f"{lead} 當前 regime：{state}，風險分數 {score}。核心觀察：{top_reasons}"
++
++
++def _score_risk_multiplier(risk_multiplier: float, *, dix_support_active: bool = False):
++    if risk_multiplier <= 1.0:
++        gross_score = 0
++    else:
++        raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
++        gross_score = int(raw_score)
++
++    dix_offset = -DIX_SUPPORT_OFFSET_POINTS if dix_support_active and gross_score > 0 else 0
++    score = max(0, min(100, gross_score + dix_offset))
++    return gross_score, score, dix_offset
++
++
++def _get_spx_trend_snapshot():
++    try:
++        spx_df = get_ticker("^GSPC", cache_level="daily").history(period="6mo")
++        if spx_df is None or spx_df.empty:
++            return None, "unknown"
++
++        calc = IndicatorCalculator()
++        adx_payload = calc.ADX(
++            spx_df["High"].astype(float).values,
++            spx_df["Low"].astype(float).values,
++            spx_df["Close"].astype(float).values,
++        )
++        adx_series = pd.Series(adx_payload["adx"]).dropna()
++        adx_value = float(adx_series.iloc[-1]) if not adx_series.empty else None
++        return adx_value, adx_payload.get("trend_regime", "unknown")
++    except Exception as e:
++        logger.debug(f"SPX ADX snapshot failed: {e}")
++        return None, "unknown"
++
++
++def _select_ma_break_weight(base_weight: float, adx_value: float | None) -> float:
++    if adx_value is None or adx_value > 25:
++        return base_weight
++    if base_weight >= 1.35:
++        return 1.1
++    if base_weight >= 1.2:
++        return 1.08
++    return 1.05
++
++def _build_global_risk_snapshot() -> Dict[str, Any]:
++    df = fetch_all_market_data()
++    if df.empty:
++        raise RuntimeError("雷達掃描失敗。")
++
++    latest = df.iloc[-1]
++    macro = MacroEngine().get_macro_dashboard()
++    breadth = get_market_breadth()
++    gex_profile = get_spy_gex_levels()
++    final_gex = gex_profile.get("total_gex_billions")
++    if final_gex is None:
++        final_gex = latest.get('gex', 0) / 10**9
++    sent_score, sent_label = get_market_sentiment_score()
++    spx_adx, spx_trend_regime = _get_spx_trend_snapshot()
++    try:
++        spy_vol_context = market.build_option_volatility_context("SPY")
++    except Exception as e:
++        logger.debug(f"SPY volatility context failed: {e}")
++        spy_vol_context = {}
++    rolling_corrs = get_rolling_correlations()
++
++    risk_multiplier = 1.0
++    reasons = []
+ 
+     yc = macro.get("Yield_Curve_10Y2Y")
+     if yc is not None and yc < 0:
+@@ -422,101 +690,173 @@ def _build_global_risk_snapshot() -> Dict[str, Any]:
+         risk_multiplier *= 1.6
+         reasons.append(f"🔴 波動率失控 / 負 Gamma ({final_gex:.2f}B)")
+ 
+-    if latest.get('SKEW_PR', 0) > 0.90:
+-        risk_multiplier *= 1.3
+-        reasons.append("🟠 尾部風險升溫")
+-
+-    if latest.get('dix_PR', 0) > 0.85:
+-        risk_multiplier *= 0.7
+-        reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
++    if latest.get('SKEW_PR', 0) > 0.90:
++        risk_multiplier *= 1.3
++        reasons.append("🟠 尾部風險升溫")
++
++    breadth_200 = breadth.get("pct_above_200ma")
++    breadth_50 = breadth.get("pct_above_50ma")
++    if breadth_200 is not None and breadth_200 < BREADTH_RISK_THRESHOLD:
++        risk_multiplier *= 1.15
++        reasons.append(f"🔻 Sector breadth 偏弱 (200MA 上方僅 {breadth_200:.1f}%)")
++
++    dix_support_active = latest.get('dix_PR', 0) > DIX_SUPPORT_THRESHOLD
++    if dix_support_active:
++        reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
+ 
+-    if sent_score < -0.4:
+-        risk_multiplier *= 1.2
+-        reasons.append(f"📰 新聞極度偏空 ({sent_label})")
+-
+-    spx = latest.get('SPX', 0)
+-    ma10 = latest.get('SPX_10MA', 0)
+-    ma20 = latest.get('SPX_20MA', 0)
+-    ma200 = latest.get('SPX_200MA', 0)
+-
+-    if ma200 > 0 and spx < ma200:
+-        risk_multiplier *= 1.4
+-        reasons.append("🚨 [Trigger] 熊市區間：跌破 200MA 均線！")
+-    elif spx < ma20:
+-        risk_multiplier *= 1.25
+-        reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線！")
+-    elif spx < ma10:
+-        risk_multiplier *= 1.15
+-        reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
+-
+-    if risk_multiplier <= 1.0:
+-        score = 0
+-    else:
+-        raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
+-        score = max(0, min(100, int(raw_score)))
+-
+-    state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
+-    reasons = reasons or ["🟢 指標目前健康"]
+-
+-    return {
+-        "generatedAt": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+-        "riskScore": score,
+-        "state": state,
+-        "riskMultiplier": round(risk_multiplier, 4),
+-        "summary": _build_global_risk_summary(score, state, reasons),
+-        "reasons": reasons,
+-        "signals": {
+-            "yieldCurve10Y2Y": _safe_float(yc, 3),
+-            "fedFundsRate": _safe_float(ffr, 2),
+-            "dixPr": _safe_float(latest.get('dix_PR', 0), 2),
+-            "gexBillions": _safe_float(final_gex, 2),
+-            "sentimentScore": _safe_float(sent_score, 2),
+-            "sentimentLabel": sent_label,
+-            "spx": _safe_float(spx, 1),
+-            "spx10Ma": _safe_float(ma10, 1),
+-            "spx20Ma": _safe_float(ma20, 1),
+-            "spx200Ma": _safe_float(ma200, 1),
+-            "dxyZ": _safe_float(latest.get('DXY_Z', 0), 2),
+-            "tnxZ": _safe_float(latest.get('TNX_Z', 0), 2),
+-            "vixZ": _safe_float(latest.get('VIX_Z', 0), 2),
++    if sent_score < -0.4:
++        risk_multiplier *= 1.2
++        reasons.append(f"📰 新聞極度偏空 ({sent_label})")
++
++    gamma_flip_level = gex_profile.get("gamma_flip_level")
++    below_gamma_flip = gex_profile.get("below_flip")
++    if below_gamma_flip and final_gex is not None and final_gex >= 0:
++        risk_multiplier *= 1.1
++        reasons.append(f"⚠️ SPY 位於 Gamma Flip 下方 ({gamma_flip_level:.2f})")
++
++    spx = latest.get('SPX', 0)
++    ma10 = latest.get('SPX_10MA', 0)
++    ma20 = latest.get('SPX_20MA', 0)
++    ma200 = latest.get('SPX_200MA', 0)
++
++    if ma200 > 0 and spx < ma200:
++        ma_weight = _select_ma_break_weight(1.4, spx_adx)
++        risk_multiplier *= ma_weight
++        suffix = f" (ADX {spx_adx:.1f}，震盪盤降權)" if spx_adx is not None and ma_weight < 1.4 else ""
++        reasons.append(f"🚨 [Trigger] 熊市區間：跌破 200MA 均線！{suffix}")
++    elif spx < ma20:
++        ma_weight = _select_ma_break_weight(1.25, spx_adx)
++        risk_multiplier *= ma_weight
++        suffix = f" (ADX {spx_adx:.1f}，震盪盤降權)" if spx_adx is not None and ma_weight < 1.25 else ""
++        reasons.append(f"🚨 [Trigger] 趨勢破滅：跌破月線！{suffix}")
++    elif spx < ma10:
++        ma_weight = _select_ma_break_weight(1.15, spx_adx)
++        risk_multiplier *= ma_weight
++        suffix = f" (ADX {spx_adx:.1f}，震盪盤降權)" if spx_adx is not None and ma_weight < 1.15 else ""
++        reasons.append(f"🚨 [Trigger] 短期轉弱：跌破 10MA。{suffix}")
++
++    gross_score, score, dix_offset = _score_risk_multiplier(
++        risk_multiplier,
++        dix_support_active=dix_support_active,
++    )
++
++    state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
++    reasons = reasons or ["🟢 指標目前健康"]
++
++    return {
++        "generatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
++        "grossRiskScore": gross_score,
++        "riskScore": score,
++        "state": state,
++        "riskMultiplier": round(risk_multiplier, 4),
++        "scoreAdjustments": {"dixSupport": dix_offset},
++        "summary": _build_global_risk_summary(score, state, reasons),
++        "reasons": reasons,
++        "signals": {
++            "yieldCurve10Y2Y": _safe_float(yc, 3),
++            "fedFundsRate": _safe_float(ffr, 2),
++            "dixPr": _safe_float(latest.get('dix_PR', 0), 2),
++            "dixSupportActive": dix_support_active,
++            "dixSupportOffset": dix_offset,
++            "gexBillions": _safe_float(final_gex, 2),
++            "spySpot": _safe_float(gex_profile.get("spot"), 2),
++            "spyGammaFlipLevel": _safe_float(gamma_flip_level, 2),
++            "spyMaxPain": _safe_float(gex_profile.get("max_pain"), 2),
++            "spyBelowGammaFlip": below_gamma_flip,
++            "sentimentScore": _safe_float(sent_score, 2),
++            "sentimentLabel": sent_label,
++            "spx": _safe_float(spx, 1),
++            "spx10Ma": _safe_float(ma10, 1),
++            "spx20Ma": _safe_float(ma20, 1),
++            "spx200Ma": _safe_float(ma200, 1),
++            "spxAdx": _safe_float(spx_adx, 2),
++            "spxTrendRegime": spx_trend_regime,
++            "sectorBreadth50": _safe_float(breadth_50, 1),
++            "sectorBreadth200": _safe_float(breadth_200, 1),
++            "sectorBreadthState": breadth.get("breadth_signal"),
++            "spyCurrentIv": _safe_float(spy_vol_context.get("current_iv"), 1),
++            "spyRealizedVol30d": _safe_float(spy_vol_context.get("realized_vol_30d"), 1),
++            "spyVrp": _safe_float(spy_vol_context.get("vrp"), 1),
++            "spyIvVsRvPercentile": _safe_float(spy_vol_context.get("iv_vs_rv_percentile"), 1),
++            "spyVolSignal": spy_vol_context.get("signal"),
++            "spyTltCorr60d": rolling_corrs.get("spyTltCorr60d"),
++            "spyGldCorr60d": rolling_corrs.get("spyGldCorr60d"),
++            "spyDxyCorr60d": rolling_corrs.get("spyDxyCorr60d"),
++            "dxyZ": _safe_float(latest.get('DXY_Z', 0), 2),
++            "tnxZ": _safe_float(latest.get('TNX_Z', 0), 2),
++            "vixZ": _safe_float(latest.get('VIX_Z', 0), 2),
+             "skewPr": _safe_float(latest.get('SKEW_PR', 0), 2)
+         }
+     }
+ 
+-def format_global_risk_snapshot(snapshot: Dict[str, Any]) -> str:
+-    signals = snapshot.get("signals", {})
+-    msg = f"📊 *【MarginCall_2X 全局雷達 (含宏觀)】*\n🔥 風險分數：{snapshot.get('riskScore', 'N/A')} ({snapshot.get('state', '未初始化')})\n"
+-    msg += "\n".join(snapshot.get("reasons", [])) if snapshot.get("reasons") else "🟢 指標目前健康"
+-    msg += f"\n\n- Yield Curve: {signals.get('yieldCurve10Y2Y', 'N/A') if signals.get('yieldCurve10Y2Y') is not None else 'N/A'}"
+-    msg += f"\n- Fed Funds: {signals.get('fedFundsRate', 'N/A') if signals.get('fedFundsRate') is not None else 'N/A'}%"
+-    msg += f"\n- DIX_PR: {signals.get('dixPr', 'N/A') if signals.get('dixPr') is not None else 'N/A'} | GEX: {signals.get('gexBillions', 'N/A') if signals.get('gexBillions') is not None else 'N/A'}B"
+-    msg += f"\n- Sentiment: {signals.get('sentimentLabel', 'N/A')}({signals.get('sentimentScore', 'N/A') if signals.get('sentimentScore') is not None else 'N/A'})"
+-    msg += f"\n- SPX: {signals.get('spx', 'N/A') if signals.get('spx') is not None else 'N/A'} (MA20:{signals.get('spx20Ma', 'N/A') if signals.get('spx20Ma') is not None else 'N/A'}, MA200:{signals.get('spx200Ma', 'N/A') if signals.get('spx200Ma') is not None else 'N/A'})"
+-    return msg
+-
+-def get_global_risk_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
++def format_global_risk_snapshot(snapshot: Dict[str, Any]) -> str:
++    signals = snapshot.get("signals", {})
++    msg = f"📊 *【MarginCall_2X 全局雷達 (含宏觀)】*\n🔥 風險分數：{snapshot.get('riskScore', 'N/A')} ({snapshot.get('state', '未初始化')})\n"
++    msg += "\n".join(snapshot.get("reasons", [])) if snapshot.get("reasons") else "🟢 指標目前健康"
++    msg += f"\n\n- Yield Curve: {signals.get('yieldCurve10Y2Y', 'N/A') if signals.get('yieldCurve10Y2Y') is not None else 'N/A'}"
++    msg += f"\n- Fed Funds: {signals.get('fedFundsRate', 'N/A') if signals.get('fedFundsRate') is not None else 'N/A'}%"
++    msg += f"\n- DIX_PR: {signals.get('dixPr', 'N/A') if signals.get('dixPr') is not None else 'N/A'}"
++    if signals.get("dixSupportOffset"):
++        msg += f" | DIX 抵扣: {signals['dixSupportOffset']}"
++    msg += f" | GEX: {signals.get('gexBillions', 'N/A') if signals.get('gexBillions') is not None else 'N/A'}B"
++    msg += f"\n- Sentiment: {signals.get('sentimentLabel', 'N/A')}({signals.get('sentimentScore', 'N/A') if signals.get('sentimentScore') is not None else 'N/A'})"
++    msg += f"\n- SPX: {signals.get('spx', 'N/A') if signals.get('spx') is not None else 'N/A'} (MA20:{signals.get('spx20Ma', 'N/A') if signals.get('spx20Ma') is not None else 'N/A'}, MA200:{signals.get('spx200Ma', 'N/A') if signals.get('spx200Ma') is not None else 'N/A'})"
++    if signals.get("sectorBreadth200") is not None:
++        msg += (
++            f"\n- Breadth: 50MA {signals.get('sectorBreadth50', 'N/A')}% | "
++            f"200MA {signals['sectorBreadth200']}% ({signals.get('sectorBreadthState', 'unknown')})"
++        )
++    if signals.get("spyGammaFlipLevel") is not None or signals.get("spyMaxPain") is not None:
++        msg += (
++            f"\n- Gamma Levels: Spot {signals.get('spySpot', 'N/A')} | "
++            f"Flip {signals.get('spyGammaFlipLevel', 'N/A')} | Max Pain {signals.get('spyMaxPain', 'N/A')}"
++        )
++        if signals.get("spyBelowGammaFlip") is not None:
++            msg += " | 低於 Flip" if signals["spyBelowGammaFlip"] else " | 高於 Flip"
++    if signals.get("spyVrp") is not None:
++        msg += (
++            f"\n- SPY Vol Context: IV {signals.get('spyCurrentIv', 'N/A')}% | "
++            f"RV30 {signals.get('spyRealizedVol30d', 'N/A')}% | VRP {signals['spyVrp']}pt"
++        )
++        if signals.get("spyVolSignal"):
++            msg += f" ({signals['spyVolSignal']})"
++    corr_parts = []
++    if signals.get("spyTltCorr60d") is not None:
++        corr_parts.append(f"SPY/TLT {signals['spyTltCorr60d']}")
++    if signals.get("spyGldCorr60d") is not None:
++        corr_parts.append(f"SPY/GLD {signals['spyGldCorr60d']}")
++    if signals.get("spyDxyCorr60d") is not None:
++        corr_parts.append(f"SPY/DXY {signals['spyDxyCorr60d']}")
++    if corr_parts:
++        msg += "\n- Corr60: " + " | ".join(corr_parts)
++    return msg
++
++def get_global_risk_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
+     """
+     Returns the structured risk radar snapshot so other modules can persist and
+     reason about the current macro regime without parsing markdown output.
+     """
+     global _risk_cache
+     current_time = time.time()
+-    if (
+-        not force_refresh
+-        and _risk_cache["snapshot"] is not None
+-        and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"])
+-    ):
+-        return {**_risk_cache["snapshot"], "cached": True}
+-
+-    try:
+-        snapshot = _build_global_risk_snapshot()
+-        _risk_cache["snapshot"] = snapshot
+-        _risk_cache["report"] = format_global_risk_snapshot(snapshot)
+-        _risk_cache["timestamp"] = current_time
+-        return {**snapshot, "cached": False}
+-    except Exception as e:
+-        logger.error(f"Risk snapshot analysis failed: {e}")
+-        raise
++    if not force_refresh:
++        with _risk_cache_lock:
++            if (
++                _risk_cache["snapshot"] is not None
++                and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"])
++            ):
++                return {**_risk_cache["snapshot"], "cached": True}
++
++    try:
++        snapshot = _build_global_risk_snapshot()
++        report = format_global_risk_snapshot(snapshot)
++        with _risk_cache_lock:
++            _risk_cache["snapshot"] = snapshot
++            _risk_cache["report"] = report
++            _risk_cache["timestamp"] = time.time()
++        return {**snapshot, "cached": False}
++    except Exception as e:
++        logger.error(f"Risk snapshot analysis failed: {e}")
++        raise
+ 
+ @tool()
+ def get_global_risk_radar(force_refresh: bool = False) -> str:
+@@ -524,11 +864,13 @@ def get_global_risk_radar(force_refresh: bool = False) -> str:
+     Analyzes systemic risk by aggregating macro indicators (Yield Curve, Fed Funds),
+     market technicals (SPX MA20/MA200), and volatility metrics (VIX, GEX, DIX).
+     Returns a risk score (0-100) and strategic summary.
+-    """
+-    try:
+-        snapshot = get_global_risk_snapshot(force_refresh=force_refresh)
+-        report = _risk_cache["report"] or format_global_risk_snapshot(snapshot)
+-        return report + ("\n(⚡ DB-Cached)" if snapshot.get("cached") else "")
++    """
++    try:
++        snapshot = get_global_risk_snapshot(force_refresh=force_refresh)
++        with _risk_cache_lock:
++            report = _risk_cache["report"]
++        report = report or format_global_risk_snapshot(snapshot)
++        return report + ("\n(⚡ DB-Cached)" if snapshot.get("cached") else "")
+     except Exception as e:
+         logger.error(f"Risk radar analysis failed: {e}")
+         return format_tool_error(f"❌ 雷達異常: {e}", transient=True)
+@@ -548,10 +890,11 @@ def build_v_turn_report() -> str:
+         lqd = hist_data['LQD'].dropna()
+         oil = hist_data['CL=F'].dropna()
+ 
+-        vix_df = get_ticker("^VIX").history(period="2d", interval="15m")
+-        vix3m_df = get_ticker("^VIX3M").history(period="2d", interval="15m")
+-        vvix_df = get_ticker("^VVIX").history(period="2d", interval="15m")
+-        spy_5m = get_ticker("SPY").history(period="2d", interval="5m")
++        vix_df = get_ticker("^VIX").history(period="2d", interval="15m")
++        vix3m_df = get_ticker("^VIX3M").history(period="2d", interval="15m")
++        vvix_df = get_ticker("^VVIX").history(period="2d", interval="15m")
++        spy_5m = get_ticker("SPY").history(period="2d", interval="5m")
++        breadth_snapshot = get_market_breadth()
+ 
+         if splg.empty or rsp.empty:
+             return "❌ yfinance 數據下載失敗，請檢查網路連線。"
+@@ -591,11 +934,14 @@ def build_v_turn_report() -> str:
+             finally:
+                 conn.close()
+ 
+-        # === 階段三：計算 ( 不持鎖；若階段一數據為空則 fallback 會做少量網路 I/O) ===
+-        rsp_5d = (rsp['Close'].iloc[-1] / rsp['Close'].iloc[-5]) - 1 if len(rsp) >= 5 else 0
+-        splg_5d = (splg['Close'].iloc[-1] / splg['Close'].iloc[-5]) - 1 if len(splg) >= 5 else 0
+-        breadth_val = rsp_5d - splg_5d
+-        breadth_safe = (breadth_val > -0.005)
++        # === 階段三：計算 ( 不持鎖；若階段一數據為空則 fallback 會做少量網路 I/O) ===
++        rsp_5d = (rsp['Close'].iloc[-1] / rsp['Close'].iloc[-5]) - 1 if len(rsp) >= 5 else 0
++        splg_5d = (splg['Close'].iloc[-1] / splg['Close'].iloc[-5]) - 1 if len(splg) >= 5 else 0
++        breadth_val = rsp_5d - splg_5d
++        proxy_breadth_safe = (breadth_val > -0.005)
++        sector_breadth_50 = breadth_snapshot.get("pct_above_50ma")
++        sector_breadth_safe = sector_breadth_50 is not None and sector_breadth_50 > V_TURN_BREADTH_SAFE_THRESHOLD
++        breadth_safe = proxy_breadth_safe and (sector_breadth_safe if sector_breadth_50 is not None else True)
+ 
+         vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else get_ticker("^VIX").history(period="5d")['Close'].iloc[-1]
+         vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else get_ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
+@@ -625,10 +971,12 @@ def build_v_turn_report() -> str:
+ 
+         report += f"\n🪬 *核心護法狀態 (CLV 強化):*\n"
+         report += f"- VIX 期限結構: {vix_term:.2f} {'🟢' if vix_term_safe else '🔴'}\n"
+-        report += f"- VVIX 恐慌速率: {vvix_val:.1f} {'🟢' if vvix_safe else '🔴'}\n"
+-        report += f"- 信用市場(HYG/LQD): {'🟢' if credit_safe else '🔴'}\n"
+-        report += f"- 市場寬度(RSP/SPLG): {breadth_val:+.2%} {'🟢' if breadth_safe else '🔴'}\n"
+-        report += f"- K線推力(CLV): {tick_msg} {tick_emoji}\n"
++        report += f"- VVIX 恐慌速率: {vvix_val:.1f} {'🟢' if vvix_safe else '🔴'}\n"
++        report += f"- 信用市場(HYG/LQD): {'🟢' if credit_safe else '🔴'}\n"
++        report += f"- 市場寬度(RSP/SPLG): {breadth_val:+.2%} {'🟢' if breadth_safe else '🔴'}\n"
++        if sector_breadth_50 is not None:
++            report += f"- Sector Breadth(50MA): {sector_breadth_50:.1f}% {'🟢' if sector_breadth_safe else '🔴'}\n"
++        report += f"- K線推力(CLV): {tick_msg} {tick_emoji}\n"
+         report += f"- MA20 技術位階: {'🟢' if ma20_safe else '🔴'}\n"
+         
+         if is_confirmed and all_macro_safe and ma20_safe:
+diff --git a/engine_router.py b/engine_router.py
+index ece95b0..982ebbf 100644
+--- a/engine_router.py
++++ b/engine_router.py
+@@ -1,14 +1,15 @@
+ import os
+ import logging
+ import datetime
+-import yfinance as yf
+-from yf_session import get_ticker, get_download
+-import json
+-import re  # 補回此行
+-import engine_market as market
+-import engine_risk as risk
+-import engine_fundamentals as fundamentals
+-from src.database import db_lock, get_connection
++import yfinance as yf
++from yf_session import get_ticker, get_download
++import json
++import re  # 補回此行
++from typing import Callable, Optional
++import engine_market as market
++import engine_risk as risk
++import engine_fundamentals as fundamentals
++from src.database import db_lock, get_connection
+ 
+ # 設定日誌
+ logger = logging.getLogger(__name__)
+@@ -40,15 +41,21 @@ def _decode_nlp_summary_payload(summary_text):
+ 
+     return signal_pack, semantic_summary
+ 
+-def get_my_user_id():
+-    val = os.getenv("TELEGRAM_USER_ID")
+-    return int(val) if val else 0
+-
+-bot = None # 改為延後初始化或從外部注入
+-
+-def set_bot(external_bot):
+-    global bot
+-    bot = external_bot
++_alert_callback: Optional[Callable[[str], None]] = None
++
++
++def set_alert_callback(cb: Optional[Callable[[str], None]]):
++    global _alert_callback
++    _alert_callback = cb
++
++
++def _emit_alert(message: str):
++    if _alert_callback is None:
++        return
++    try:
++        _alert_callback(message)
++    except Exception:
++        logger.exception("Router alert callback failed")
+ 
+ # --- 0. 全域 Regex 配置 (預編譯提高效能) ---
+ 
+@@ -234,6 +241,7 @@ def parse_pc_ratio(insight_text: str) -> float:
+ def fetch_strat_data(symbol: str) -> dict:
+     """
+     根據資產類型分流抓取數據，並實作 CVD & NLP 雙重熔斷中斷。
++    警報交由可選 callback 發送，避免資料層直接依賴 Telegram。
+     V2: NLP 分數保持唯讀，領先指標以獨立欄位輸出。
+     """
+     symbol = market.normalize_ticker(symbol)
+@@ -265,7 +273,7 @@ def fetch_strat_data(symbol: str) -> dict:
+         if not isinstance(signal_pack, dict):
+             signal_pack = None
+ 
+-        if isinstance(composite_alpha, (int, float)) and composite_alpha < -0.7 and bot:
++        if isinstance(composite_alpha, (int, float)) and composite_alpha < -0.7:
+             sec_facts = "; ".join(signal_pack.get("sec_detail", [])[:2]) if signal_pack else ""
+             macro_facts = "; ".join(signal_pack.get("macro_detail", [])[:2]) if signal_pack else ""
+             fact_summary = sec_facts or macro_facts or (nlp_data.get("semantic_summary", "無") or "無")
+@@ -276,7 +284,7 @@ def fetch_strat_data(symbol: str) -> dict:
+                 f"事實摘要: {fact_summary[:180]}\n"
+                 f"矛盾偵測: {divergence}"
+             )
+-            bot.send_message(get_my_user_id(), alert_msg)
++            _emit_alert(alert_msg)
+             logger.warning(f"NLP Composite Alert for {symbol}: {composite_alpha}")
+ 
+         if asset_type == 'Tech_Momentum':
+@@ -284,27 +292,75 @@ def fetch_strat_data(symbol: str) -> dict:
+             ticker = get_ticker(symbol, cache_level="live")
+             df_5m = ticker.history(period="1d", interval="5m")
+             cvd = risk.calculate_buying_pressure(df_5m)
+-            
+-            # 【重要】硬體中斷：CVD < -0.9 立即警報
+-            if cvd < -0.9 and bot:
+-                alert_msg = f"🚨 【硬體中斷】偵測到 {symbol} 恐慌性拋售！\n當前 CVD: {cvd:.4f}\n請立即檢查盤勢！"
+-                bot.send_message(get_my_user_id(), alert_msg)
+-                logger.warning(f"CVD Alert triggered for {symbol}: {cvd}")
++            technical_snapshot = market.build_technical_snapshot(symbol)
++            divergence = technical_snapshot.get("divergence", {})
++            divergence_label = divergence.get("label", "⚪ 無明顯背離")
++            has_bearish_divergence = bool(divergence.get("bearish_divergence"))
++            mtf_rsi = technical_snapshot.get("mtf_rsi", {})
++              
++            # 【升級】改為分級警報：CVD 極端先告警；CVD + 熊背離才升級為硬體中斷
++            if cvd < -0.9 and has_bearish_divergence:
++                alert_msg = (
++                    f"🚨 【硬體中斷】偵測到 {symbol} 恐慌性拋售 + 熊背離確認！\n"
++                    f"當前 CVD: {cvd:.4f}\n"
++                    f"RSI 結構: {divergence_label}\n"
++                    "請立即檢查盤勢！"
++                )
++                _emit_alert(alert_msg)
++                logger.warning(f"CVD + divergence hard alert triggered for {symbol}: {cvd}")
++            elif cvd < -0.9:
++                alert_msg = (
++                    f"⚠️ 【盤中拋壓警報】{symbol} 出現極端賣壓，但尚未完成熊背離確認。\n"
++                    f"當前 CVD: {cvd:.4f}\n"
++                    f"RSI 結構: {divergence_label}"
++                )
++                _emit_alert(alert_msg)
++                logger.warning(f"CVD soft alert triggered for {symbol}: {cvd}")
+ 
+             # 抓取技術面 (RSI, MACD 等)
+             tech_report = market.build_technical_report(symbol)
+             live_insight = market.build_realtime_insight(symbol)
+             pc_ratio = parse_pc_ratio(live_insight)
++            try:
++                option_vol_context = market.build_option_volatility_context(symbol)
++            except Exception as vol_exc:
++                logger.debug(f"Option volatility context failed for {symbol}: {vol_exc}")
++                option_vol_context = {}
++
++            pc_context = ""
++            vrp = option_vol_context.get("vrp")
++            vol_signal = option_vol_context.get("signal")
++            if isinstance(pc_ratio, (int, float)) and pc_ratio > 1.5:
++                if vol_signal == "🔥 恐慌定價":
++                    pc_context = "🟡 P/C 偏高且權利金昂貴，偏向恐慌避險定價"
++                elif isinstance(vrp, (int, float)) and vrp <= -3:
++                    pc_context = "🔴 P/C 偏高但 VRP 為負，避險壓力不可輕忽"
++                else:
++                    pc_context = "⚠️ P/C 偏高，避險需求升溫"
++            elif isinstance(pc_ratio, (int, float)) and pc_ratio < 0.5:
++                pc_context = "🟢 P/C 偏低，短線情緒偏樂觀"
+              
+             data["metrics"] = {
+                 "cvd": round(cvd, 4),
++                "technical_snapshot": technical_snapshot,
+                 "technical_analysis": tech_report,
+-                "live_insight": live_insight
++                "live_insight": live_insight,
++                "option_volatility": option_vol_context,
+             }
+ 
+             data["leading_indicators"] = {
+                 "cvd": round(cvd, 4),
+                 "pc_ratio": _safe_round(pc_ratio, 4),
++                "rsi_divergence": divergence_label,
++                "adx": technical_snapshot.get("adx", {}).get("value"),
++                "trend_regime": technical_snapshot.get("adx", {}).get("trend_regime"),
++                "obv_signal": technical_snapshot.get("obv", {}).get("signal"),
++                "volatility_context": option_vol_context.get("summary"),
++                "volatility_signal": option_vol_context.get("signal"),
++                "pc_context": pc_context,
++                "mtf_rsi_signal": mtf_rsi.get("signal_label"),
++                "mtf_rsi_strength": mtf_rsi.get("confluence_strength"),
++                "signal_reliability": mtf_rsi.get("signal_reliability", "NORMAL"),
+                 "cvd_signal": "🔴 拋壓" if cvd < -0.5 else "🟢 買壓" if cvd > 0.5 else "⚪ 中性",
+                 "pc_signal": (
+                     "🔴 避險"
+diff --git a/engine_technical.py b/engine_technical.py
+index 81f9315..b5bbf99 100644
+--- a/engine_technical.py
++++ b/engine_technical.py
+@@ -1,11 +1,11 @@
+-import ast
+-import re
+-import yfinance as yf
+-from yf_session import get_ticker, get_download
+-import pandas as pd
+-import numpy as np
+-import logging
+-from typing import List, Union, Dict, Tuple
++import ast
++import re
++import yfinance as yf
++from yf_session import get_ticker, get_download
++import pandas as pd
++import numpy as np
++import logging
++from typing import Any, List, Union, Dict, Tuple
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -74,12 +74,67 @@ class SafeFormulaValidator(ast.NodeVisitor):
+         self.generic_visit(node)
+ 
+ 
+-def validate_formula_ast(formula: str, allowed_names):
+-    tree = ast.parse(formula, mode='eval')
+-    SafeFormulaValidator(allowed_names).visit(tree)
+-    return tree
+-
+-class IndicatorCalculator:
++def validate_formula_ast(formula: str, allowed_names):
++    tree = ast.parse(formula, mode='eval')
++    SafeFormulaValidator(allowed_names).visit(tree)
++    return tree
++
++
++def summarize_divergence(divergence: Dict[str, Any]) -> Tuple[str, str]:
++    details = str(divergence.get("details", "") or "").strip()
++    if divergence.get("bullish_divergence"):
++        return "🟢 底背離", details
++    if divergence.get("bearish_divergence"):
++        return "🔴 頂背離", details
++    if details == "資料不足":
++        return "⚪ 資料不足", details
++    return "⚪ 無明顯背離", details or "無明顯背離"
++
++
++def analyze_obv_signal(closes: np.ndarray, obv: np.ndarray, window: int = 20) -> Dict[str, Any]:
++    close_series = pd.Series(np.asarray(closes, dtype=float))
++    obv_series = pd.Series(np.asarray(obv, dtype=float))
++    if close_series.empty or obv_series.empty:
++        return {"trend": "flat", "label": "走平", "signal": "⚪ 量價資料不足", "obv_ma20": None, "slope": 0.0}
++
++    ma_window = min(window, len(obv_series))
++    obv_ma = obv_series.rolling(window=ma_window).mean()
++    latest_ma = obv_ma.dropna().iloc[-1] if not obv_ma.dropna().empty else None
++
++    lookback = min(window, max(len(close_series) - 1, 1))
++    anchor_idx = max(0, len(close_series) - lookback - 1)
++    price_delta = close_series.iloc[-1] - close_series.iloc[anchor_idx]
++
++    slope_anchor_idx = max(0, len(obv_ma) - min(5, len(obv_ma)))
++    obv_slope = float(obv_ma.iloc[-1] - obv_ma.iloc[slope_anchor_idx]) if latest_ma is not None else 0.0
++
++    if obv_slope > 0:
++        trend, label = "up", "上升"
++    elif obv_slope < 0:
++        trend, label = "down", "下降"
++    else:
++        trend, label = "flat", "走平"
++
++    if price_delta > 0 and obv_slope > 0:
++        signal = "📈 價漲量增，趨勢健康"
++    elif price_delta > 0 and obv_slope < 0:
++        signal = "⚠️ 價漲量背離，留意主力出貨"
++    elif price_delta < 0 and obv_slope < 0:
++        signal = "📉 價跌量弱，空方主導"
++    elif price_delta < 0 and obv_slope > 0:
++        signal = "🟡 價跌量撐，留意止跌吸籌"
++    else:
++        signal = "⚪ 量價中性"
++
++    return {
++        "trend": trend,
++        "label": label,
++        "signal": signal,
++        "obv_ma20": round(float(latest_ma), 2) if latest_ma is not None and not pd.isna(latest_ma) else None,
++        "slope": round(obv_slope, 2),
++    }
++
++class IndicatorCalculator:
+     """
+     OpenAlice 級別的技術分析公式引擎 (100% 對標)。
+     支援多週期抓取與動態公式解析 (如: SMA(CLOSE('AAPL', '1d'), 200))。
+@@ -171,17 +226,117 @@ class IndicatorCalculator:
+         hist = macd - sig
+         return {'macd': macd, 'signal': sig, 'histogram': hist}
+ 
+-    def ATR(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> np.ndarray:
+-        """平均真實波幅"""
+-        tr1 = highs - lows
+-        tr2 = np.abs(highs - np.roll(closes, 1))
+-        tr3 = np.abs(lows - np.roll(closes, 1))
+-        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+-        tr[0] = np.nan # 第一筆無前收盤價
+-        return pd.Series(tr).ewm(alpha=1/period, adjust=False).mean().values
+-
+-    # ==========================================
+-    # 5. 形態分析 (Structure)
++    def ATR(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> np.ndarray:
++        """平均真實波幅"""
++        tr1 = highs - lows
++        tr2 = np.abs(highs - np.roll(closes, 1))
++        tr3 = np.abs(lows - np.roll(closes, 1))
++        tr = np.maximum(tr1, np.maximum(tr2, tr3))
++        tr[0] = np.nan # 第一筆無前收盤價
++        return pd.Series(tr).ewm(alpha=1/period, adjust=False).mean().values
++
++    def ADX(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> Dict[str, Any]:
++        high_series = pd.Series(np.asarray(highs, dtype=float))
++        low_series = pd.Series(np.asarray(lows, dtype=float))
++        close_series = pd.Series(np.asarray(closes, dtype=float))
++
++        up_move = high_series.diff()
++        down_move = -low_series.diff()
++        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
++        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
++
++        tr_components = pd.concat(
++            [
++                high_series - low_series,
++                (high_series - close_series.shift(1)).abs(),
++                (low_series - close_series.shift(1)).abs(),
++            ],
++            axis=1,
++        )
++        tr = tr_components.max(axis=1)
++        atr = tr.ewm(alpha=1 / period, adjust=False).mean()
++
++        atr_safe = atr.replace(0, np.nan)
++        plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_safe
++        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_safe
++        dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)) * 100
++        adx = dx.ewm(alpha=1 / period, adjust=False).mean().fillna(0.0)
++        latest_adx = adx.dropna().iloc[-1] if not adx.dropna().empty else 0.0
++
++        return {
++            "adx": adx.values,
++            "plus_di": plus_di.fillna(0.0).values,
++            "minus_di": minus_di.fillna(0.0).values,
++            "trend_regime": "trending" if latest_adx > 25 else "ranging",
++        }
++
++    def OBV(self, closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:
++        close_values = np.asarray(closes, dtype=float)
++        volume_values = np.asarray(volumes, dtype=float)
++        if len(close_values) != len(volume_values):
++            raise ValueError("OBV requires closes and volumes with the same length")
++        if close_values.size == 0:
++            return np.array([])
++        direction = np.sign(np.diff(close_values, prepend=close_values[0]))
++        return np.cumsum(direction * volume_values)
++
++    def DIVERGENCE(self, price: np.ndarray, indicator: np.ndarray, lookback: int = 50, order: int = 5) -> Dict[str, Any]:
++        """
++        偵測價格與指標之間的背離。
++        order: 用來判定 local min/max 的鄰域大小（左右各 order 根 K 棒）
++        """
++        from scipy.signal import argrelextrema
++
++        aligned = pd.DataFrame(
++            {
++                "price": pd.Series(np.asarray(price, dtype=float)),
++                "indicator": pd.Series(np.asarray(indicator, dtype=float)),
++            }
++        ).dropna()
++
++        result = {"bullish_divergence": False, "bearish_divergence": False, "details": "無明顯背離"}
++        if aligned.empty:
++            result["details"] = "資料不足"
++            return result
++
++        window = aligned.tail(lookback)
++        if len(window) < max(order * 2 + 3, 6):
++            result["details"] = "資料不足"
++            return result
++
++        price_values = window["price"].to_numpy()
++        indicator_values = window["indicator"].to_numpy()
++        details = []
++
++        price_lows = argrelextrema(price_values, np.less, order=order)[0]
++        price_highs = argrelextrema(price_values, np.greater, order=order)[0]
++
++        if len(price_lows) >= 2:
++            p1, p2 = price_lows[-2], price_lows[-1]
++            if price_values[p2] < price_values[p1] and indicator_values[p2] > indicator_values[p1]:
++                result["bullish_divergence"] = True
++                details.append(
++                    "底背離：價格從 "
++                    f"{price_values[p1]:.2f} 下探至 {price_values[p2]:.2f}，"
++                    f"但指標從 {indicator_values[p1]:.1f} 上升至 {indicator_values[p2]:.1f}"
++                )
++
++        if len(price_highs) >= 2:
++            p1, p2 = price_highs[-2], price_highs[-1]
++            if price_values[p2] > price_values[p1] and indicator_values[p2] < indicator_values[p1]:
++                result["bearish_divergence"] = True
++                details.append(
++                    "頂背離：價格從 "
++                    f"{price_values[p1]:.2f} 上升至 {price_values[p2]:.2f}，"
++                    f"但指標從 {indicator_values[p1]:.1f} 下降至 {indicator_values[p2]:.1f}"
++                )
++
++        if details:
++            result["details"] = " | ".join(details)
++        return result
++
++    # ==========================================
++    # 5. 形態分析 (Structure)
+     # ==========================================
+     def BBANDS(self, data: np.ndarray, period: int = 20, std: float = 2) -> Dict[str, np.ndarray]:
+         """布林帶"""
+@@ -203,12 +358,13 @@ class IndicatorCalculator:
+             return "❌ 公式包含非法字元"
+ 
+         # 建立安全的執行環境 (Safe Environment)
+-        safe_env = {
+-            'CLOSE': self.CLOSE, 'OPEN': self.OPEN, 'HIGH': self.HIGH,
+-            'LOW': self.LOW, 'VOLUME': self.VOLUME,
+-            'SMA': self.SMA, 'EMA': self.EMA, 'MAX': self.MAX, 'MIN': self.MIN, 'STDEV': self.STDEV,
+-            'RSI': self.RSI, 'MACD': self.MACD, 'ATR': self.ATR, 'BBANDS': self.BBANDS,
+-        }
++        safe_env = {
++            'CLOSE': self.CLOSE, 'OPEN': self.OPEN, 'HIGH': self.HIGH,
++            'LOW': self.LOW, 'VOLUME': self.VOLUME,
++            'SMA': self.SMA, 'EMA': self.EMA, 'MAX': self.MAX, 'MIN': self.MIN, 'STDEV': self.STDEV,
++            'RSI': self.RSI, 'MACD': self.MACD, 'ATR': self.ATR, 'BBANDS': self.BBANDS,
++            'ADX': self.ADX, 'OBV': self.OBV, 'DIVERGENCE': self.DIVERGENCE,
++        }
+ 
+         try:
+             compiled = compile(
+@@ -224,13 +380,24 @@ class IndicatorCalculator:
+                 vals = result[~np.isnan(result)][-5:].tolist()
+                 formatted = [round(float(v), precision) for v in vals]
+                 return f"陣列結果 (近5筆): {formatted}"
+-            elif isinstance(result, dict):
+-                # 處理 MACD 或 BBANDS 回傳的 dict
+-                res_str = ""
+-                for k, v in result.items():
+-                    vals = v[~np.isnan(v)][-1] if isinstance(v, (np.ndarray, pd.Series)) else v
+-                    res_str += f"{k}: {round(float(vals), precision)} | "
+-                return f"字典結果 (最新值): {res_str.strip(' | ')}"
++            elif isinstance(result, dict):
++                # 處理 MACD 或 BBANDS 回傳的 dict
++                res_str = ""
++                for k, v in result.items():
++                    if isinstance(v, (np.ndarray, pd.Series)):
++                        series = pd.Series(v).dropna()
++                        vals = series.iloc[-1] if not series.empty else np.nan
++                    else:
++                        vals = v
++
++                    if isinstance(vals, (np.bool_, bool)):
++                        display = bool(vals)
++                    elif isinstance(vals, (np.floating, float, np.integer, int)):
++                        display = round(float(vals), precision)
++                    else:
++                        display = vals
++                    res_str += f"{k}: {display} | "
++                return f"字典結果 (最新值): {res_str.strip(' | ')}"
+             elif isinstance(result, (np.bool_, bool)):
+                 return f"邏輯判斷結果: {bool(result)}"
+             else:
+@@ -255,7 +422,7 @@ def calculate_indicator(formula: str) -> str:
+     
+     Data Primitives: CLOSE('AAPL', '1d'), OPEN, HIGH, LOW, VOLUME (Intervals: '1m', '1h', '1d', '1wk')
+     Statistics: SMA(data, period), EMA, MAX, MIN, STDEV
+-    Indicators: RSI(data, 14), MACD(data, fast, slow, sig), ATR(highs, lows, closes, 14), BBANDS(data, 20, 2)
++    Indicators: RSI(data, 14), MACD(data, fast, slow, sig), ATR(highs, lows, closes, 14), BBANDS(data, 20, 2), ADX(highs, lows, closes, 14), OBV(closes, volumes), DIVERGENCE(price, indicator)
+     Logic & Slicing: Supports slicing [-1] and boolean logic (e.g., CLOSE(...) > SMA(...)).
+     
+     Example formula: "RSI(CLOSE('TSLA', '1h'), 14)[-1]"
+diff --git a/fubon.py b/fubon.py
+index 9a09b4a..be05573 100644
+--- a/fubon.py
++++ b/fubon.py
+@@ -5,6 +5,7 @@ import logging
+ import pandas as pd
+ from fubon_neo.sdk import FubonSDK
+ from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
++from engine_technical import IndicatorCalculator, analyze_obv_signal, summarize_divergence
+ from src.tools import tool
+ 
+ logger = logging.getLogger(__name__)
+@@ -65,6 +66,11 @@ def get_fubon_technical(symbol: str) -> str:
+         to_date = today
+         from_date = start_date
+         ma20, ma60 = 0, 0
++        divergence_label = "⚪ 資料不足"
++        divergence_details = "資料不足"
++        adx_val, plus_di, minus_di = 0, 0, 0
++        trend_regime = "ranging"
++        obv_signal = {"label": "走平", "signal": "⚪ 量價資料不足", "obv_ma20": None}
+         try:
+             candles = reststock.historical.candles(symbol=symbol, to=to_date, **{'from': from_date})
+             if candles.get('data'):
+@@ -76,6 +82,27 @@ def get_fubon_technical(symbol: str) -> str:
+                 df_hist['ma60'] = df_hist['close'].rolling(window=60).mean()
+                 ma20 = df_hist['ma20'].iloc[-1] if len(df_hist) >= 20 else 0
+                 ma60 = df_hist['ma60'].iloc[-1] if len(df_hist) >= 60 else 0
++
++                calc = IndicatorCalculator()
++                close_values = df_hist['close'].astype(float).to_numpy()
++                high_values = df_hist['high'].astype(float).to_numpy()
++                low_values = df_hist['low'].astype(float).to_numpy()
++                rsi_series = calc.RSI(close_values)
++                divergence = calc.DIVERGENCE(close_values, rsi_series)
++                divergence_label, divergence_details = summarize_divergence(divergence)
++
++                adx_payload = calc.ADX(high_values, low_values, close_values)
++                adx_series = pd.Series(adx_payload['adx']).dropna()
++                plus_di_series = pd.Series(adx_payload['plus_di']).dropna()
++                minus_di_series = pd.Series(adx_payload['minus_di']).dropna()
++                adx_val = float(adx_series.iloc[-1]) if not adx_series.empty else 0
++                plus_di = float(plus_di_series.iloc[-1]) if not plus_di_series.empty else 0
++                minus_di = float(minus_di_series.iloc[-1]) if not minus_di_series.empty else 0
++                trend_regime = adx_payload.get('trend_regime', 'ranging')
++
++                if 'volume' in df_hist.columns:
++                    obv = calc.OBV(close_values, df_hist['volume'].astype(float).to_numpy())
++                    obv_signal = analyze_obv_signal(close_values, obv)
+         except Exception as e:
+             logger.warning(f"Candles fetch failed: {e}")
+ 
+@@ -122,6 +149,15 @@ def get_fubon_technical(symbol: str) -> str:
+         report += f"● KDJ(9,3,3): K:{vk:.1f} | D:{vd:.1f} | J:{vj:.1f}\n"
+         report += f"● RSI(14): {rsi:.2f} ({'🔥極度超買' if rsi>75 else '❄️極度超跌' if rsi<25 else '⚖️中性'})\n"
+         report += f"● MACD: DIF:{dif:.2f} | 柱狀體:{macd_hist:.2f} ({'📈多頭增強' if macd_hist>0 else '📉空頭衰退'})\n"
++        report += f"● ADX(14): {adx_val:.2f} | +DI:{plus_di:.2f} | -DI:{minus_di:.2f} ({'📈趨勢盤' if trend_regime == 'trending' else '🌀震盪盤'})\n"
++        report += f"● RSI 背離: {divergence_label}"
++        if divergence_details not in {"無明顯背離", "資料不足"}:
++            report += f" | {divergence_details}"
++        report += "\n"
++        report += f"● OBV 趨勢: {obv_signal['label']} | {obv_signal['signal']}"
++        if obv_signal.get('obv_ma20') is not None:
++            report += f" | OBV20MA:{obv_signal['obv_ma20']:.2f}"
++        report += "\n"
+         report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
+         
+         # 戰術建議
+@@ -136,6 +172,10 @@ def get_fubon_technical(symbol: str) -> str:
+         elif curr > ma20 and curr > ma60: report += "📈 戰略：股價站上月線與季線，多頭排列建立，回檔即買點。\n"
+         elif rsi < 30: report += "🔥 戰略：RSI 極度超跌，隨時可能暴力反彈。\n"
+         else: report += "🧘 戰略：目前位階中性，建議分批佈局或等待關鍵突破。\n"
++        if divergence_label == "🟢 底背離":
++            report += "🟢 補充：RSI 底背離成立，賣壓動能開始修復。\n"
++        elif divergence_label == "🔴 頂背離":
++            report += "🔴 補充：RSI 頂背離成立，追價風險上升。\n"
+         
+         return report
+     except Exception as e: return f"❌ 台股指標獲取失敗: {e}"
+@@ -626,6 +666,9 @@ def get_exhaustion_analysis(symbol: str) -> str:
+         if "❄️極度超跌" in tech_report or "RSI < 25" in tech_report:
+             score += 25
+             reasons.append("✅ [超跌信號] RSI 進入極度超跌區，賣壓動能已釋放過度。")
++        if "RSI 背離: 🟢 底背離" in tech_report:
++            score += 20
++            reasons.append("✅ [背離確認] RSI 底背離成立，價格創低但動能未再惡化，疑似空方力竭。")
+         if "J 線極度耗竭" in tech_report:
+             score += 15
+             reasons.append("✅ [動能耗竭] KDJ-J 線 < 0，顯示空頭殺過頭，轉折將至。")
+diff --git a/main.py b/main.py
+index 8d25f63..c3ca90a 100644
+--- a/main.py
++++ b/main.py
+@@ -26,10 +26,12 @@ def main():
+     configure_runtime()
+ 
+     import engine_portfolio as portfolio
++    from src.backup import backup_database
+     from src.bot import init_bot, register_handlers, run_polling, trigger_nlp_and_callback, is_v_turn_active
+     from src.scheduler import start_scheduler, setup_dependencies
+ 
+     portfolio.init_db()
++    backup_database()
+     bot_instance, user_id = init_bot()
+     logger.info("🚀 MarginCall Express 已啟動！")
+     register_handlers()
+diff --git a/nlp_worker.py b/nlp_worker.py
+index 5c2d635..32c67e6 100644
+--- a/nlp_worker.py
++++ b/nlp_worker.py
+@@ -1,12 +1,13 @@
+-import os
+-import sys
+-import logging
+-import pandas as pd
+-import requests
+-import json
+-import textwrap
+-import concurrent.futures
+-from datetime import datetime, timedelta
++import os
++import sys
++import logging
++import math
++import pandas as pd
++import requests
++import json
++import textwrap
++import concurrent.futures
++from datetime import datetime, timedelta, timezone
+ from collections import Counter
+ import yfinance as yf
+ from yf_session import get_ticker, get_download
+@@ -337,7 +338,7 @@ def adjust_retail_score(raw_score, source_count):
+     """
+     🎯 解決缺陷 6：散戶情緒校正 (反向指標)
+     參考 FinNLP 哲學：極端值反著看，中間區域當雜訊
+-    """
++    """
+     if source_count < 5:
+         return 0.0  # 樣本太少，不可信
+     
+@@ -355,6 +356,64 @@ def adjust_retail_score(raw_score, source_count):
+         return raw_score * 0.5
+ 
+ 
++def _time_decay_weight(published_at) -> float:
++    """將較新的新聞給更高權重，避免舊新聞稀釋當前市場語氣。"""
++    if published_at in (None, ""):
++        return 0.5
++    try:
++        if isinstance(published_at, pd.Timestamp):
++            if published_at.tzinfo is None:
++                pub = published_at.tz_localize(timezone.utc).to_pydatetime()
++            else:
++                pub = published_at.tz_convert(timezone.utc).to_pydatetime()
++        elif isinstance(published_at, datetime):
++            pub = published_at if published_at.tzinfo else published_at.replace(tzinfo=timezone.utc)
++            pub = pub.astimezone(timezone.utc)
++        elif isinstance(published_at, (int, float)):
++            pub = datetime.fromtimestamp(float(published_at), tz=timezone.utc)
++        else:
++            text = str(published_at).strip()
++            pub = datetime.fromisoformat(text.replace("Z", "+00:00"))
++            if pub.tzinfo is None:
++                pub = pub.replace(tzinfo=timezone.utc)
++            else:
++                pub = pub.astimezone(timezone.utc)
++
++        hours_old = (datetime.now(timezone.utc) - pub).total_seconds() / 3600
++        return round(math.exp(-0.05 * max(hours_old, 0)), 4)
++    except (TypeError, ValueError, AttributeError) as exc:
++        logger.debug(f"Time-decay parsing failed for {published_at}: {exc}")
++        return 0.5
++
++
++def _format_macro_news_item(source, headline, summary, published_at) -> str:
++    weight = _time_decay_weight(published_at)
++    age_hours = None
++    try:
++        if isinstance(published_at, pd.Timestamp):
++            if published_at.tzinfo is None:
++                published_at = published_at.tz_localize(timezone.utc)
++            else:
++                published_at = published_at.tz_convert(timezone.utc)
++            age_hours = (datetime.now(timezone.utc) - published_at.to_pydatetime()).total_seconds() / 3600
++    except Exception:
++        age_hours = None
++
++    age_text = f"{age_hours:.1f}h" if isinstance(age_hours, (int, float)) else "N/A"
++    return f"Macro({source} | {age_text} | w={weight:.2f}): {headline} | {summary}"
++
++
++def _effective_group_count(texts) -> float:
++    total = 0.0
++    for text in texts:
++        match = re.search(r'w=(\d+(?:\.\d+)?)', str(text))
++        if match:
++            total += max(0.0, float(match.group(1)))
++        else:
++            total += 1.0
++    return round(total, 3)
++
++
+ TRINITY_CATEGORY_ROUTING = {
+     "SEC": ("sec", "institutional"),
+     "Macro": ("macro", "institutional"),
+@@ -430,7 +489,7 @@ def compose_alpha_signal(a_sec, n_sec, a_mac, n_mac, a_ret, n_ret):
+         ("macro", a_mac, n_mac),
+         ("retail", a_ret, n_ret),
+     ):
+-        count = max(0, int(count or 0))
++        count = max(0.0, float(count or 0.0))
+         if count == 0:
+             continue
+ 
+@@ -805,13 +864,13 @@ def run_turbo_trinity_scout(stock="NVDA"):
+             fh_downloader.download_date_range_stock(stock=stock, start_date=start_date, end_date=end_date)
+             
+             # 只有在 downloader 存在且有資料時才處理
+-            if hasattr(fh_downloader, 'dataframe') and fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
+-                df_fh = fh_downloader.dataframe.head(15) 
++            if hasattr(fh_downloader, 'dataframe') and fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
++                df_fh = fh_downloader.dataframe.head(15) 
+                 for _, row in df_fh.iterrows():
+                     source = row.get('source', 'News')
+                     headline = row.get('headline', '')
+                     summary = row.get('summary', '')[:300]
+-                    raw_texts.append(f"Macro({source}): {headline} | {summary}")
++                    raw_texts.append(_format_macro_news_item(source, headline, summary, row.get('datetime')))
+                 logger.info(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
+     except Exception as e: 
+         logger.warning(f"   ⚠️ Finnhub 流程異常: {e}")
+@@ -844,6 +903,11 @@ def run_turbo_trinity_scout(stock="NVDA"):
+         "Macro":  [t for t in raw_texts if t.startswith("Macro")],
+         "Retail": [t for t in raw_texts if t.startswith("Reddit") or t.startswith("StockTwits")],
+     }
++    effective_counts = {
++        "sec": _effective_group_count(groups["SEC"]),
++        "macro": _effective_group_count(groups["Macro"]),
++        "retail": _effective_group_count(groups["Retail"]),
++    }
+ 
+     dimension_scores, categorized_tags = score_sentiment_groups(groups, stock)
+     a_sec = dimension_scores["sec"]
+@@ -874,11 +938,11 @@ def run_turbo_trinity_scout(stock="NVDA"):
+ 
+     nlp_alpha = compose_alpha_signal(
+         a_sec,
+-        len(groups["SEC"]),
++        effective_counts["sec"],
+         a_mac,
+-        len(groups["Macro"]),
++        effective_counts["macro"],
+         a_retail,
+-        len(groups["Retail"]),
++        effective_counts["retail"],
+     )
+     if nuclear_confirmed:
+         nlp_alpha = -0.95
+@@ -900,6 +964,7 @@ def run_turbo_trinity_scout(stock="NVDA"):
+             "macro": len(groups["Macro"]),
+             "retail": len(groups["Retail"]),
+         },
++        "effective_counts": effective_counts,
+         "composite_alpha": round(nlp_alpha, 4),
+     }
+ 
+diff --git a/src/agent.py b/src/agent.py
+index 8ae780b..67d7e4e 100644
+--- a/src/agent.py
++++ b/src/agent.py
+@@ -94,11 +94,21 @@ def generate_final_report(symbol, strat_data, nlp_data):
+     if leading:
+         pc_ratio = leading.get("pc_ratio")
+         pc_display = f"{pc_ratio:.2f}" if isinstance(pc_ratio, (int, float)) else "N/A"
+-        leading_block = f"""
+-3. 即時領先指標:
+-- CVD: {leading.get('cvd', 'N/A')} {leading.get('cvd_signal', '')}
+-- P/C Ratio: {pc_display} {leading.get('pc_signal', '')}
+-""".strip()
++        leading_lines = [
++            "3. 即時領先指標:",
++            f"- CVD: {leading.get('cvd', 'N/A')} {leading.get('cvd_signal', '')}",
++            f"- P/C Ratio: {pc_display} {leading.get('pc_signal', '')}",
++        ]
++        if leading.get("pc_context"):
++            leading_lines.append(f"- P/C + 波動定價: {leading['pc_context']}")
++        if leading.get("volatility_context"):
++            leading_lines.append(f"- 期權波動: {leading['volatility_context']}")
++        if leading.get("mtf_rsi_signal"):
++            leading_lines.append(
++                f"- 多時間框 RSI: {leading['mtf_rsi_signal']} "
++                f"(強度 {leading.get('mtf_rsi_strength', 'N/A')} / 可靠度 {leading.get('signal_reliability', 'NORMAL')})"
++            )
++        leading_block = "\n".join(leading_lines)
+     else:
+         leading_block = ""
+ 
+diff --git a/src/bot.py b/src/bot.py
+index 87a6f5e..398578c 100644
+--- a/src/bot.py
++++ b/src/bot.py
+@@ -74,11 +74,17 @@ def initialize_bot_runtime():
+     if _runtime_initialized:
+         return
+ 
+-    bot_instance = _require_bot()
+-    fubon.init_fubon()
+-    market.set_fubon_provider(fubon)
+-    router.set_bot(bot_instance)
+-    _runtime_initialized = True
++    bot_instance = _require_bot()
++    fubon.init_fubon()
++    market.set_fubon_provider(fubon)
++
++    def _deliver_router_alert(message: str):
++        if AUTHORIZED_USER_ID is None:
++            raise RuntimeError("AUTHORIZED_USER_ID 尚未初始化")
++        bot_instance.send_message(AUTHORIZED_USER_ID, message)
++
++    router.set_alert_callback(_deliver_router_alert)
++    _runtime_initialized = True
+ 
+ 
+ def is_v_turn_active() -> bool:
+diff --git a/src/scheduler.py b/src/scheduler.py
+index f806924..0b75e08 100644
+--- a/src/scheduler.py
++++ b/src/scheduler.py
+@@ -6,10 +6,11 @@ from typing import Callable, Optional
+ import pytz
+ from apscheduler.schedulers.background import BackgroundScheduler
+ 
+-import engine_market as market
+-import engine_memory as memory
+-import engine_risk as risk
+-from config import WATCH_LIST
++import engine_market as market
++import engine_memory as memory
++import engine_risk as risk
++from config import WATCH_LIST
++from src.backup import backup_database
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -103,6 +104,14 @@ def start_scheduler():
+         id="daily-portfolio-review",
+         replace_existing=True,
+     )
++    scheduler.add_job(
++        backup_database,
++        "cron",
++        hour=7,
++        minute=0,
++        id="daily-db-backup",
++        replace_existing=True,
++    )
+     scheduler.add_job(daily_nlp_scout, "interval", hours=4, id="daily-nlp-scout", replace_existing=True)
+     scheduler.start()
+ 

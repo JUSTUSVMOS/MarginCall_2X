@@ -1,6 +1,7 @@
 import io
 import math
 import time
+import threading
 import requests
 import pandas as pd
 import numpy as np
@@ -11,8 +12,10 @@ import os
 from typing import Any, Dict
 # ... (保留原本的 import)
 from scipy import stats
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
+import engine_market as market
+from engine_technical import IndicatorCalculator
 
 # 新增 FRED 相關 import
 import json
@@ -259,39 +262,139 @@ def calculate_gamma(S, K, T, r, sigma):
         logger.debug(f"Gamma calculation error: {e}")
         return 0
 
-def get_realtime_spy_gex():
-    """計算 SPY GEX (單位: Billions)"""
-    try:
-        spy = get_ticker("SPY")
-        spot = spy.history(period="1d")["Close"].iloc[-1]
-        
-        # 動態無風險利率 (TNX)
-        try:
-            r = get_ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100.0
-        except Exception as e:
-            logger.debug(f"TNX fallback rate used: {e}")
-            r = 0.04 # Fallback
 
-        expirations = spy.options[:3]
-        total_gex = 0
-        for exp in expirations:
-            opt = spy.option_chain(exp)
-            T = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days / 365.0
-            if T <= 0: T = 0.001
-            
-            # SPY 合約單位為 100 股
-            calls = opt.calls.dropna()
-            puts = opt.puts.dropna()
-            for _, row in calls.iterrows():
-                g = calculate_gamma(spot, row['strike'], T, r, row['impliedVolatility'])
-                total_gex += row['openInterest'] * 100 * g * (spot**2) * 0.01
-            for _, row in puts.iterrows():
-                g = calculate_gamma(spot, row['strike'], T, r, row['impliedVolatility'])
-                total_gex -= row['openInterest'] * 100 * g * (spot**2) * 0.01
-        return total_gex / 10**9 
+def _get_risk_free_rate() -> float:
+    try:
+        return float(get_ticker("^TNX").history(period="1d")['Close'].iloc[-1]) / 100.0
     except Exception as e:
-        logger.error(f"Real-time GEX calculation failed: {e}")
-        return None
+        logger.debug(f"TNX fallback rate used: {e}")
+        return 0.04
+
+
+def _select_future_expirations(expirations, *, min_days: int = 3, max_count: int = 4) -> list[str]:
+    selected = []
+    today = datetime.now().date()
+    for date_str in expirations or []:
+        if len(selected) >= max_count:
+            break
+        try:
+            expiry_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if (expiry_date - today).days < min_days:
+            continue
+        selected.append(date_str)
+    return selected
+
+
+def _interpolate_zero_cross(x1: float, y1: float, x2: float, y2: float) -> float:
+    if y1 == y2:
+        return (x1 + x2) / 2
+    return x1 + ((0 - y1) * (x2 - x1) / (y2 - y1))
+
+
+def get_spy_gex_levels(symbol: str = "SPY") -> Dict[str, Any]:
+    """計算 SPY / ETF 的 GEX 總量、Gamma Flip proxy 與 Max Pain。"""
+    try:
+        ticker = get_ticker(symbol)
+        spot_hist = ticker.history(period="1d")
+        if spot_hist.empty:
+            return {
+                "total_gex_billions": None,
+                "gamma_flip_level": None,
+                "max_pain": None,
+                "spot": None,
+                "above_flip": None,
+                "below_flip": None,
+            }
+
+        spot = float(spot_hist["Close"].iloc[-1])
+        rate = _get_risk_free_rate()
+        strike_gex = {}
+        call_oi_by_strike = {}
+        put_oi_by_strike = {}
+
+        expirations = _select_future_expirations(getattr(ticker, "options", None), min_days=3, max_count=4)
+        for exp in expirations:
+            try:
+                opt = ticker.option_chain(exp)
+            except Exception as chain_exc:
+                logger.debug(f"GEX chain fetch failed for {symbol} @ {exp}: {chain_exc}")
+                continue
+
+            time_to_expiry = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days / 365.0
+            if time_to_expiry <= 0:
+                time_to_expiry = 0.001
+
+            calls = getattr(opt, "calls", None)
+            puts = getattr(opt, "puts", None)
+            calls = calls if isinstance(calls, pd.DataFrame) else pd.DataFrame()
+            puts = puts if isinstance(puts, pd.DataFrame) else pd.DataFrame()
+
+            for frame, direction, oi_store in ((calls, 1, call_oi_by_strike), (puts, -1, put_oi_by_strike)):
+                if frame.empty:
+                    continue
+                subset = frame[["strike", "impliedVolatility", "openInterest"]].dropna()
+                subset = subset[(subset["strike"] > 0) & (subset["impliedVolatility"] > 0) & (subset["openInterest"] > 0)]
+                for _, row in subset.iterrows():
+                    strike = float(row["strike"])
+                    open_interest = float(row["openInterest"])
+                    gamma = calculate_gamma(spot, strike, time_to_expiry, rate, float(row["impliedVolatility"]))
+                    exposure = open_interest * 100 * gamma * (spot ** 2) * 0.01
+                    strike_gex[strike] = strike_gex.get(strike, 0.0) + (direction * exposure)
+                    oi_store[strike] = oi_store.get(strike, 0.0) + open_interest
+
+        total_gex = sum(strike_gex.values()) / 10 ** 9 if strike_gex else None
+        flip_level = None
+        if strike_gex:
+            sorted_pairs = sorted(strike_gex.items())
+            strikes = [pair[0] for pair in sorted_pairs]
+            cumulative_gex = np.cumsum([pair[1] for pair in sorted_pairs])
+            for idx in range(len(strikes) - 1):
+                left_gex = cumulative_gex[idx]
+                right_gex = cumulative_gex[idx + 1]
+                if left_gex == 0:
+                    flip_level = strikes[idx]
+                    break
+                if (left_gex < 0 < right_gex) or (left_gex > 0 > right_gex):
+                    flip_level = _interpolate_zero_cross(strikes[idx], left_gex, strikes[idx + 1], right_gex)
+                    break
+            if flip_level is None and len(strikes) > 0 and np.any(np.abs(cumulative_gex) > 0):
+                flip_level = strikes[int(np.argmin(np.abs(cumulative_gex)))]
+
+        max_pain = None
+        candidate_strikes = sorted(set(call_oi_by_strike) | set(put_oi_by_strike))
+        if candidate_strikes:
+            def _pain_at(settlement: float) -> float:
+                call_pain = sum(max(0.0, settlement - strike) * oi * 100 for strike, oi in call_oi_by_strike.items())
+                put_pain = sum(max(0.0, strike - settlement) * oi * 100 for strike, oi in put_oi_by_strike.items())
+                return call_pain + put_pain
+
+            max_pain = min(candidate_strikes, key=_pain_at)
+
+        return {
+            "total_gex_billions": round(float(total_gex), 3) if total_gex is not None else None,
+            "gamma_flip_level": round(float(flip_level), 2) if flip_level is not None else None,
+            "max_pain": round(float(max_pain), 2) if max_pain is not None else None,
+            "spot": round(float(spot), 2),
+            "above_flip": bool(flip_level is not None and spot > flip_level) if flip_level is not None else None,
+            "below_flip": bool(flip_level is not None and spot < flip_level) if flip_level is not None else None,
+        }
+    except Exception as e:
+        logger.error(f"Real-time GEX profile calculation failed for {symbol}: {e}")
+        return {
+            "total_gex_billions": None,
+            "gamma_flip_level": None,
+            "max_pain": None,
+            "spot": None,
+            "above_flip": None,
+            "below_flip": None,
+        }
+
+
+def get_realtime_spy_gex():
+    """相容舊介面：回傳 SPY GEX 總量 (Billions)。"""
+    return get_spy_gex_levels().get("total_gex_billions")
 
 def get_market_sentiment_score():
     """整合新聞情緒分析 (LLM 優先，關鍵字備援)"""
@@ -369,14 +472,130 @@ def fetch_all_market_data():
         return pd.DataFrame()
 
 _risk_cache = {"report": "", "snapshot": None, "timestamp": 0, "expiry": 1200}
+_risk_cache_lock = threading.Lock()
+
+DIX_SUPPORT_THRESHOLD = 0.85
+DIX_SUPPORT_OFFSET_POINTS = 12
+SECTOR_ETFS = ['XLK', 'XLF', 'XLV', 'XLE', 'XLI', 'XLY', 'XLP', 'XLU', 'XLC', 'XLB', 'XLRE']
+BREADTH_RISK_THRESHOLD = 30.0
+V_TURN_BREADTH_SAFE_THRESHOLD = 40.0
 
 def _safe_float(value, digits: int = 2):
     try:
         if value is None:
             return None
-        return round(float(value), digits)
+        val = float(value)
+        if not math.isfinite(val):
+            return None
+        return round(val, digits)
     except (TypeError, ValueError):
         return None
+
+
+def _extract_close_series_from_download(payload, symbol: str) -> pd.Series | None:
+    if isinstance(payload, dict):
+        frame = payload.get(symbol)
+        if isinstance(frame, pd.DataFrame) and "Close" in frame.columns:
+            series = pd.to_numeric(frame["Close"], errors="coerce").dropna()
+            return series if not series.empty else None
+        return None
+
+    if not isinstance(payload, pd.DataFrame) or payload.empty:
+        return None
+
+    if isinstance(payload.columns, pd.MultiIndex):
+        if symbol not in payload.columns.levels[0]:
+            return None
+        frame = payload[symbol]
+        if "Close" not in frame.columns:
+            return None
+        series = pd.to_numeric(frame["Close"], errors="coerce").dropna()
+        return series if not series.empty else None
+
+    if "Close" in payload.columns:
+        series = pd.to_numeric(payload["Close"], errors="coerce").dropna()
+        return series if not series.empty else None
+    return None
+
+
+def get_market_breadth() -> Dict[str, Any]:
+    """以 11 個 sector ETF 衡量市場廣度。"""
+    try:
+        data = get_download(SECTOR_ETFS, period="1y", group_by='ticker', progress=False)
+    except Exception as e:
+        logger.warning(f"Market breadth fetch failed: {e}")
+        return {"pct_above_200ma": None, "pct_above_50ma": None, "total_sectors": 0, "breadth_signal": "unknown"}
+
+    above_200ma = 0
+    above_50ma = 0
+    total = 0
+
+    for etf in SECTOR_ETFS:
+        close = _extract_close_series_from_download(data, etf)
+        if close is None or len(close) < 200:
+            continue
+        ma200 = close.rolling(200).mean().iloc[-1]
+        ma50 = close.rolling(50).mean().iloc[-1]
+        current = close.iloc[-1]
+        if pd.notna(ma200) and current > ma200:
+            above_200ma += 1
+        if pd.notna(ma50) and current > ma50:
+            above_50ma += 1
+        total += 1
+
+    if total == 0:
+        return {"pct_above_200ma": None, "pct_above_50ma": None, "total_sectors": 0, "breadth_signal": "unknown"}
+
+    pct_above_200ma = above_200ma / total * 100
+    pct_above_50ma = above_50ma / total * 100
+    breadth_signal = "healthy" if pct_above_200ma > 70 else "deteriorating" if pct_above_200ma > 40 else "weak"
+    return {
+        "pct_above_200ma": round(pct_above_200ma, 1),
+        "pct_above_50ma": round(pct_above_50ma, 1),
+        "total_sectors": total,
+        "breadth_signal": breadth_signal,
+    }
+
+
+def get_rolling_correlations(window: int = 60) -> Dict[str, Any]:
+    """追蹤美股與債券 / 黃金 / 美元的 60 日滾動相關性。"""
+    symbols = ("SPY", "TLT", "GLD", "DX-Y.NYB")
+    try:
+        data = get_download(list(symbols), period="6mo", group_by='ticker', progress=False)
+    except Exception as e:
+        logger.warning(f"Rolling correlation fetch failed: {e}")
+        return {}
+
+    returns = {}
+    for sym in symbols:
+        close = _extract_close_series_from_download(data, sym)
+        if close is None:
+            continue
+        pct = close.pct_change().dropna()
+        if not pct.empty:
+            returns[sym] = pct
+
+    spy_returns = returns.get("SPY")
+    if spy_returns is None:
+        return {}
+
+    correlations = {}
+    mapping = {
+        "TLT": "spyTltCorr60d",
+        "GLD": "spyGldCorr60d",
+        "DX-Y.NYB": "spyDxyCorr60d",
+    }
+    for sym, key in mapping.items():
+        asset_returns = returns.get(sym)
+        if asset_returns is None:
+            continue
+        aligned = pd.concat([spy_returns, asset_returns], axis=1).dropna()
+        if len(aligned) < window:
+            continue
+        corr_value = aligned.iloc[:, 0].rolling(window).corr(aligned.iloc[:, 1]).iloc[-1]
+        if pd.notna(corr_value):
+            correlations[key] = round(float(corr_value), 3)
+    return correlations
 
 def _build_global_risk_summary(score: int, state: str, reasons) -> str:
     if score >= 75:
@@ -390,6 +609,48 @@ def _build_global_risk_summary(score: int, state: str, reasons) -> str:
     top_reasons = "；".join(reasons[:3]) if reasons else "目前主要風險指標穩定。"
     return f"{lead} 當前 regime：{state}，風險分數 {score}。核心觀察：{top_reasons}"
 
+
+def _score_risk_multiplier(risk_multiplier: float, *, dix_support_active: bool = False):
+    if risk_multiplier <= 1.0:
+        gross_score = 0
+    else:
+        raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
+        gross_score = int(raw_score)
+
+    dix_offset = -DIX_SUPPORT_OFFSET_POINTS if dix_support_active and gross_score > 0 else 0
+    score = max(0, min(100, gross_score + dix_offset))
+    return gross_score, score, dix_offset
+
+
+def _get_spx_trend_snapshot():
+    try:
+        spx_df = get_ticker("^GSPC", cache_level="daily").history(period="6mo")
+        if spx_df is None or spx_df.empty:
+            return None, "unknown"
+
+        calc = IndicatorCalculator()
+        adx_payload = calc.ADX(
+            spx_df["High"].astype(float).values,
+            spx_df["Low"].astype(float).values,
+            spx_df["Close"].astype(float).values,
+        )
+        adx_series = pd.Series(adx_payload["adx"]).dropna()
+        adx_value = float(adx_series.iloc[-1]) if not adx_series.empty else None
+        return adx_value, adx_payload.get("trend_regime", "unknown")
+    except Exception as e:
+        logger.debug(f"SPX ADX snapshot failed: {e}")
+        return None, "unknown"
+
+
+def _select_ma_break_weight(base_weight: float, adx_value: float | None) -> float:
+    if adx_value is None or adx_value > 25:
+        return base_weight
+    if base_weight >= 1.35:
+        return 1.1
+    if base_weight >= 1.2:
+        return 1.08
+    return 1.05
+
 def _build_global_risk_snapshot() -> Dict[str, Any]:
     df = fetch_all_market_data()
     if df.empty:
@@ -397,9 +658,19 @@ def _build_global_risk_snapshot() -> Dict[str, Any]:
 
     latest = df.iloc[-1]
     macro = MacroEngine().get_macro_dashboard()
-    rt_gex = get_realtime_spy_gex()
-    final_gex = rt_gex if rt_gex is not None else (latest.get('gex', 0) / 10**9)
+    breadth = get_market_breadth()
+    gex_profile = get_spy_gex_levels()
+    final_gex = gex_profile.get("total_gex_billions")
+    if final_gex is None:
+        final_gex = latest.get('gex', 0) / 10**9
     sent_score, sent_label = get_market_sentiment_score()
+    spx_adx, spx_trend_regime = _get_spx_trend_snapshot()
+    try:
+        spy_vol_context = market.build_option_volatility_context("SPY")
+    except Exception as e:
+        logger.debug(f"SPY volatility context failed: {e}")
+        spy_vol_context = {}
+    rolling_corrs = get_rolling_correlations()
 
     risk_multiplier = 1.0
     reasons = []
@@ -426,13 +697,25 @@ def _build_global_risk_snapshot() -> Dict[str, Any]:
         risk_multiplier *= 1.3
         reasons.append("🟠 尾部風險升溫")
 
-    if latest.get('dix_PR', 0) > 0.85:
-        risk_multiplier *= 0.7
+    breadth_200 = breadth.get("pct_above_200ma")
+    breadth_50 = breadth.get("pct_above_50ma")
+    if breadth_200 is not None and breadth_200 < BREADTH_RISK_THRESHOLD:
+        risk_multiplier *= 1.15
+        reasons.append(f"🔻 Sector breadth 偏弱 (200MA 上方僅 {breadth_200:.1f}%)")
+
+    dix_support_active = latest.get('dix_PR', 0) > DIX_SUPPORT_THRESHOLD
+    if dix_support_active:
         reasons.append("🟢 暗池吸籌，大戶提供下檔支撐")
 
     if sent_score < -0.4:
         risk_multiplier *= 1.2
         reasons.append(f"📰 新聞極度偏空 ({sent_label})")
+
+    gamma_flip_level = gex_profile.get("gamma_flip_level")
+    below_gamma_flip = gex_profile.get("below_flip")
+    if below_gamma_flip and final_gex is not None and final_gex >= 0:
+        risk_multiplier *= 1.1
+        reasons.append(f"⚠️ SPY 位於 Gamma Flip 下方 ({gamma_flip_level:.2f})")
 
     spx = latest.get('SPX', 0)
     ma10 = latest.get('SPX_10MA', 0)
@@ -440,42 +723,68 @@ def _build_global_risk_snapshot() -> Dict[str, Any]:
     ma200 = latest.get('SPX_200MA', 0)
 
     if ma200 > 0 and spx < ma200:
-        risk_multiplier *= 1.4
-        reasons.append("🚨 [Trigger] 熊市區間：跌破 200MA 均線！")
+        ma_weight = _select_ma_break_weight(1.4, spx_adx)
+        risk_multiplier *= ma_weight
+        suffix = f" (ADX {spx_adx:.1f}，震盪盤降權)" if spx_adx is not None and ma_weight < 1.4 else ""
+        reasons.append(f"🚨 [Trigger] 熊市區間：跌破 200MA 均線！{suffix}")
     elif spx < ma20:
-        risk_multiplier *= 1.25
-        reasons.append("🚨 [Trigger] 趨勢破滅：跌破月線！")
+        ma_weight = _select_ma_break_weight(1.25, spx_adx)
+        risk_multiplier *= ma_weight
+        suffix = f" (ADX {spx_adx:.1f}，震盪盤降權)" if spx_adx is not None and ma_weight < 1.25 else ""
+        reasons.append(f"🚨 [Trigger] 趨勢破滅：跌破月線！{suffix}")
     elif spx < ma10:
-        risk_multiplier *= 1.15
-        reasons.append("🚨 [Trigger] 短期轉弱：跌破 10MA。")
+        ma_weight = _select_ma_break_weight(1.15, spx_adx)
+        risk_multiplier *= ma_weight
+        suffix = f" (ADX {spx_adx:.1f}，震盪盤降權)" if spx_adx is not None and ma_weight < 1.15 else ""
+        reasons.append(f"🚨 [Trigger] 短期轉弱：跌破 10MA。{suffix}")
 
-    if risk_multiplier <= 1.0:
-        score = 0
-    else:
-        raw_score = (math.log(risk_multiplier) / math.log(3.0)) * 100
-        score = max(0, min(100, int(raw_score)))
+    gross_score, score, dix_offset = _score_risk_multiplier(
+        risk_multiplier,
+        dix_support_active=dix_support_active,
+    )
 
     state = "🟢 多頭" if score < 30 else "🟡 整理" if score < 45 else "🔴 警戒" if score < 75 else "💀 系統風險"
     reasons = reasons or ["🟢 指標目前健康"]
 
     return {
-        "generatedAt": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "generatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "grossRiskScore": gross_score,
         "riskScore": score,
         "state": state,
         "riskMultiplier": round(risk_multiplier, 4),
+        "scoreAdjustments": {"dixSupport": dix_offset},
         "summary": _build_global_risk_summary(score, state, reasons),
         "reasons": reasons,
         "signals": {
             "yieldCurve10Y2Y": _safe_float(yc, 3),
             "fedFundsRate": _safe_float(ffr, 2),
             "dixPr": _safe_float(latest.get('dix_PR', 0), 2),
+            "dixSupportActive": dix_support_active,
+            "dixSupportOffset": dix_offset,
             "gexBillions": _safe_float(final_gex, 2),
+            "spySpot": _safe_float(gex_profile.get("spot"), 2),
+            "spyGammaFlipLevel": _safe_float(gamma_flip_level, 2),
+            "spyMaxPain": _safe_float(gex_profile.get("max_pain"), 2),
+            "spyBelowGammaFlip": below_gamma_flip,
             "sentimentScore": _safe_float(sent_score, 2),
             "sentimentLabel": sent_label,
             "spx": _safe_float(spx, 1),
             "spx10Ma": _safe_float(ma10, 1),
             "spx20Ma": _safe_float(ma20, 1),
             "spx200Ma": _safe_float(ma200, 1),
+            "spxAdx": _safe_float(spx_adx, 2),
+            "spxTrendRegime": spx_trend_regime,
+            "sectorBreadth50": _safe_float(breadth_50, 1),
+            "sectorBreadth200": _safe_float(breadth_200, 1),
+            "sectorBreadthState": breadth.get("breadth_signal"),
+            "spyCurrentIv": _safe_float(spy_vol_context.get("current_iv"), 1),
+            "spyRealizedVol30d": _safe_float(spy_vol_context.get("realized_vol_30d"), 1),
+            "spyVrp": _safe_float(spy_vol_context.get("vrp"), 1),
+            "spyIvVsRvPercentile": _safe_float(spy_vol_context.get("iv_vs_rv_percentile"), 1),
+            "spyVolSignal": spy_vol_context.get("signal"),
+            "spyTltCorr60d": rolling_corrs.get("spyTltCorr60d"),
+            "spyGldCorr60d": rolling_corrs.get("spyGldCorr60d"),
+            "spyDxyCorr60d": rolling_corrs.get("spyDxyCorr60d"),
             "dxyZ": _safe_float(latest.get('DXY_Z', 0), 2),
             "tnxZ": _safe_float(latest.get('TNX_Z', 0), 2),
             "vixZ": _safe_float(latest.get('VIX_Z', 0), 2),
@@ -489,9 +798,40 @@ def format_global_risk_snapshot(snapshot: Dict[str, Any]) -> str:
     msg += "\n".join(snapshot.get("reasons", [])) if snapshot.get("reasons") else "🟢 指標目前健康"
     msg += f"\n\n- Yield Curve: {signals.get('yieldCurve10Y2Y', 'N/A') if signals.get('yieldCurve10Y2Y') is not None else 'N/A'}"
     msg += f"\n- Fed Funds: {signals.get('fedFundsRate', 'N/A') if signals.get('fedFundsRate') is not None else 'N/A'}%"
-    msg += f"\n- DIX_PR: {signals.get('dixPr', 'N/A') if signals.get('dixPr') is not None else 'N/A'} | GEX: {signals.get('gexBillions', 'N/A') if signals.get('gexBillions') is not None else 'N/A'}B"
+    msg += f"\n- DIX_PR: {signals.get('dixPr', 'N/A') if signals.get('dixPr') is not None else 'N/A'}"
+    if signals.get("dixSupportOffset"):
+        msg += f" | DIX 抵扣: {signals['dixSupportOffset']}"
+    msg += f" | GEX: {signals.get('gexBillions', 'N/A') if signals.get('gexBillions') is not None else 'N/A'}B"
     msg += f"\n- Sentiment: {signals.get('sentimentLabel', 'N/A')}({signals.get('sentimentScore', 'N/A') if signals.get('sentimentScore') is not None else 'N/A'})"
     msg += f"\n- SPX: {signals.get('spx', 'N/A') if signals.get('spx') is not None else 'N/A'} (MA20:{signals.get('spx20Ma', 'N/A') if signals.get('spx20Ma') is not None else 'N/A'}, MA200:{signals.get('spx200Ma', 'N/A') if signals.get('spx200Ma') is not None else 'N/A'})"
+    if signals.get("sectorBreadth200") is not None:
+        msg += (
+            f"\n- Breadth: 50MA {signals.get('sectorBreadth50', 'N/A')}% | "
+            f"200MA {signals['sectorBreadth200']}% ({signals.get('sectorBreadthState', 'unknown')})"
+        )
+    if signals.get("spyGammaFlipLevel") is not None or signals.get("spyMaxPain") is not None:
+        msg += (
+            f"\n- Gamma Levels: Spot {signals.get('spySpot', 'N/A')} | "
+            f"Flip {signals.get('spyGammaFlipLevel', 'N/A')} | Max Pain {signals.get('spyMaxPain', 'N/A')}"
+        )
+        if signals.get("spyBelowGammaFlip") is not None:
+            msg += " | 低於 Flip" if signals["spyBelowGammaFlip"] else " | 高於 Flip"
+    if signals.get("spyVrp") is not None:
+        msg += (
+            f"\n- SPY Vol Context: IV {signals.get('spyCurrentIv', 'N/A')}% | "
+            f"RV30 {signals.get('spyRealizedVol30d', 'N/A')}% | VRP {signals['spyVrp']}pt"
+        )
+        if signals.get("spyVolSignal"):
+            msg += f" ({signals['spyVolSignal']})"
+    corr_parts = []
+    if signals.get("spyTltCorr60d") is not None:
+        corr_parts.append(f"SPY/TLT {signals['spyTltCorr60d']}")
+    if signals.get("spyGldCorr60d") is not None:
+        corr_parts.append(f"SPY/GLD {signals['spyGldCorr60d']}")
+    if signals.get("spyDxyCorr60d") is not None:
+        corr_parts.append(f"SPY/DXY {signals['spyDxyCorr60d']}")
+    if corr_parts:
+        msg += "\n- Corr60: " + " | ".join(corr_parts)
     return msg
 
 def get_global_risk_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
@@ -501,18 +841,21 @@ def get_global_risk_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
     """
     global _risk_cache
     current_time = time.time()
-    if (
-        not force_refresh
-        and _risk_cache["snapshot"] is not None
-        and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"])
-    ):
-        return {**_risk_cache["snapshot"], "cached": True}
+    if not force_refresh:
+        with _risk_cache_lock:
+            if (
+                _risk_cache["snapshot"] is not None
+                and (current_time - _risk_cache["timestamp"] < _risk_cache["expiry"])
+            ):
+                return {**_risk_cache["snapshot"], "cached": True}
 
     try:
         snapshot = _build_global_risk_snapshot()
-        _risk_cache["snapshot"] = snapshot
-        _risk_cache["report"] = format_global_risk_snapshot(snapshot)
-        _risk_cache["timestamp"] = current_time
+        report = format_global_risk_snapshot(snapshot)
+        with _risk_cache_lock:
+            _risk_cache["snapshot"] = snapshot
+            _risk_cache["report"] = report
+            _risk_cache["timestamp"] = time.time()
         return {**snapshot, "cached": False}
     except Exception as e:
         logger.error(f"Risk snapshot analysis failed: {e}")
@@ -527,7 +870,9 @@ def get_global_risk_radar(force_refresh: bool = False) -> str:
     """
     try:
         snapshot = get_global_risk_snapshot(force_refresh=force_refresh)
-        report = _risk_cache["report"] or format_global_risk_snapshot(snapshot)
+        with _risk_cache_lock:
+            report = _risk_cache["report"]
+        report = report or format_global_risk_snapshot(snapshot)
         return report + ("\n(⚡ DB-Cached)" if snapshot.get("cached") else "")
     except Exception as e:
         logger.error(f"Risk radar analysis failed: {e}")
@@ -552,6 +897,7 @@ def build_v_turn_report() -> str:
         vix3m_df = get_ticker("^VIX3M").history(period="2d", interval="15m")
         vvix_df = get_ticker("^VVIX").history(period="2d", interval="15m")
         spy_5m = get_ticker("SPY").history(period="2d", interval="5m")
+        breadth_snapshot = get_market_breadth()
 
         if splg.empty or rsp.empty:
             return "❌ yfinance 數據下載失敗，請檢查網路連線。"
@@ -595,7 +941,10 @@ def build_v_turn_report() -> str:
         rsp_5d = (rsp['Close'].iloc[-1] / rsp['Close'].iloc[-5]) - 1 if len(rsp) >= 5 else 0
         splg_5d = (splg['Close'].iloc[-1] / splg['Close'].iloc[-5]) - 1 if len(splg) >= 5 else 0
         breadth_val = rsp_5d - splg_5d
-        breadth_safe = (breadth_val > -0.005)
+        proxy_breadth_safe = (breadth_val > -0.005)
+        sector_breadth_50 = breadth_snapshot.get("pct_above_50ma")
+        sector_breadth_safe = sector_breadth_50 is not None and sector_breadth_50 > V_TURN_BREADTH_SAFE_THRESHOLD
+        breadth_safe = proxy_breadth_safe and (sector_breadth_safe if sector_breadth_50 is not None else True)
 
         vix_p = vix_df['Close'].iloc[-1] if not vix_df.empty else get_ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         vix3m_p = vix3m_df['Close'].iloc[-1] if not vix3m_df.empty else get_ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
@@ -628,6 +977,8 @@ def build_v_turn_report() -> str:
         report += f"- VVIX 恐慌速率: {vvix_val:.1f} {'🟢' if vvix_safe else '🔴'}\n"
         report += f"- 信用市場(HYG/LQD): {'🟢' if credit_safe else '🔴'}\n"
         report += f"- 市場寬度(RSP/SPLG): {breadth_val:+.2%} {'🟢' if breadth_safe else '🔴'}\n"
+        if sector_breadth_50 is not None:
+            report += f"- Sector Breadth(50MA): {sector_breadth_50:.1f}% {'🟢' if sector_breadth_safe else '🔴'}\n"
         report += f"- K線推力(CLV): {tick_msg} {tick_emoji}\n"
         report += f"- MA20 技術位階: {'🟢' if ma20_safe else '🔴'}\n"
         

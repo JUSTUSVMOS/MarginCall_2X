@@ -5,6 +5,7 @@ import yfinance as yf
 from yf_session import get_ticker, get_download
 import json
 import re  # 補回此行
+from typing import Callable, Optional
 import engine_market as market
 import engine_risk as risk
 import engine_fundamentals as fundamentals
@@ -40,15 +41,21 @@ def _decode_nlp_summary_payload(summary_text):
 
     return signal_pack, semantic_summary
 
-def get_my_user_id():
-    val = os.getenv("TELEGRAM_USER_ID")
-    return int(val) if val else 0
+_alert_callback: Optional[Callable[[str], None]] = None
 
-bot = None # 改為延後初始化或從外部注入
 
-def set_bot(external_bot):
-    global bot
-    bot = external_bot
+def set_alert_callback(cb: Optional[Callable[[str], None]]):
+    global _alert_callback
+    _alert_callback = cb
+
+
+def _emit_alert(message: str):
+    if _alert_callback is None:
+        return
+    try:
+        _alert_callback(message)
+    except Exception:
+        logger.exception("Router alert callback failed")
 
 # --- 0. 全域 Regex 配置 (預編譯提高效能) ---
 
@@ -234,6 +241,7 @@ def parse_pc_ratio(insight_text: str) -> float:
 def fetch_strat_data(symbol: str) -> dict:
     """
     根據資產類型分流抓取數據，並實作 CVD & NLP 雙重熔斷中斷。
+    警報交由可選 callback 發送，避免資料層直接依賴 Telegram。
     V2: NLP 分數保持唯讀，領先指標以獨立欄位輸出。
     """
     symbol = market.normalize_ticker(symbol)
@@ -265,7 +273,7 @@ def fetch_strat_data(symbol: str) -> dict:
         if not isinstance(signal_pack, dict):
             signal_pack = None
 
-        if isinstance(composite_alpha, (int, float)) and composite_alpha < -0.7 and bot:
+        if isinstance(composite_alpha, (int, float)) and composite_alpha < -0.7:
             sec_facts = "; ".join(signal_pack.get("sec_detail", [])[:2]) if signal_pack else ""
             macro_facts = "; ".join(signal_pack.get("macro_detail", [])[:2]) if signal_pack else ""
             fact_summary = sec_facts or macro_facts or (nlp_data.get("semantic_summary", "無") or "無")
@@ -276,7 +284,7 @@ def fetch_strat_data(symbol: str) -> dict:
                 f"事實摘要: {fact_summary[:180]}\n"
                 f"矛盾偵測: {divergence}"
             )
-            bot.send_message(get_my_user_id(), alert_msg)
+            _emit_alert(alert_msg)
             logger.warning(f"NLP Composite Alert for {symbol}: {composite_alpha}")
 
         if asset_type == 'Tech_Momentum':
@@ -284,27 +292,75 @@ def fetch_strat_data(symbol: str) -> dict:
             ticker = get_ticker(symbol, cache_level="live")
             df_5m = ticker.history(period="1d", interval="5m")
             cvd = risk.calculate_buying_pressure(df_5m)
-            
-            # 【重要】硬體中斷：CVD < -0.9 立即警報
-            if cvd < -0.9 and bot:
-                alert_msg = f"🚨 【硬體中斷】偵測到 {symbol} 恐慌性拋售！\n當前 CVD: {cvd:.4f}\n請立即檢查盤勢！"
-                bot.send_message(get_my_user_id(), alert_msg)
-                logger.warning(f"CVD Alert triggered for {symbol}: {cvd}")
+            technical_snapshot = market.build_technical_snapshot(symbol)
+            divergence = technical_snapshot.get("divergence", {})
+            divergence_label = divergence.get("label", "⚪ 無明顯背離")
+            has_bearish_divergence = bool(divergence.get("bearish_divergence"))
+            mtf_rsi = technical_snapshot.get("mtf_rsi", {})
+              
+            # 【升級】改為分級警報：CVD 極端先告警；CVD + 熊背離才升級為硬體中斷
+            if cvd < -0.9 and has_bearish_divergence:
+                alert_msg = (
+                    f"🚨 【硬體中斷】偵測到 {symbol} 恐慌性拋售 + 熊背離確認！\n"
+                    f"當前 CVD: {cvd:.4f}\n"
+                    f"RSI 結構: {divergence_label}\n"
+                    "請立即檢查盤勢！"
+                )
+                _emit_alert(alert_msg)
+                logger.warning(f"CVD + divergence hard alert triggered for {symbol}: {cvd}")
+            elif cvd < -0.9:
+                alert_msg = (
+                    f"⚠️ 【盤中拋壓警報】{symbol} 出現極端賣壓，但尚未完成熊背離確認。\n"
+                    f"當前 CVD: {cvd:.4f}\n"
+                    f"RSI 結構: {divergence_label}"
+                )
+                _emit_alert(alert_msg)
+                logger.warning(f"CVD soft alert triggered for {symbol}: {cvd}")
 
             # 抓取技術面 (RSI, MACD 等)
             tech_report = market.build_technical_report(symbol)
             live_insight = market.build_realtime_insight(symbol)
             pc_ratio = parse_pc_ratio(live_insight)
+            try:
+                option_vol_context = market.build_option_volatility_context(symbol)
+            except Exception as vol_exc:
+                logger.debug(f"Option volatility context failed for {symbol}: {vol_exc}")
+                option_vol_context = {}
+
+            pc_context = ""
+            vrp = option_vol_context.get("vrp")
+            vol_signal = option_vol_context.get("signal")
+            if isinstance(pc_ratio, (int, float)) and pc_ratio > 1.5:
+                if vol_signal == "🔥 恐慌定價":
+                    pc_context = "🟡 P/C 偏高且權利金昂貴，偏向恐慌避險定價"
+                elif isinstance(vrp, (int, float)) and vrp <= -3:
+                    pc_context = "🔴 P/C 偏高但 VRP 為負，避險壓力不可輕忽"
+                else:
+                    pc_context = "⚠️ P/C 偏高，避險需求升溫"
+            elif isinstance(pc_ratio, (int, float)) and pc_ratio < 0.5:
+                pc_context = "🟢 P/C 偏低，短線情緒偏樂觀"
              
             data["metrics"] = {
                 "cvd": round(cvd, 4),
+                "technical_snapshot": technical_snapshot,
                 "technical_analysis": tech_report,
-                "live_insight": live_insight
+                "live_insight": live_insight,
+                "option_volatility": option_vol_context,
             }
 
             data["leading_indicators"] = {
                 "cvd": round(cvd, 4),
                 "pc_ratio": _safe_round(pc_ratio, 4),
+                "rsi_divergence": divergence_label,
+                "adx": technical_snapshot.get("adx", {}).get("value"),
+                "trend_regime": technical_snapshot.get("adx", {}).get("trend_regime"),
+                "obv_signal": technical_snapshot.get("obv", {}).get("signal"),
+                "volatility_context": option_vol_context.get("summary"),
+                "volatility_signal": option_vol_context.get("signal"),
+                "pc_context": pc_context,
+                "mtf_rsi_signal": mtf_rsi.get("signal_label"),
+                "mtf_rsi_strength": mtf_rsi.get("confluence_strength"),
+                "signal_reliability": mtf_rsi.get("signal_reliability", "NORMAL"),
                 "cvd_signal": "🔴 拋壓" if cvd < -0.5 else "🟢 買壓" if cvd > 0.5 else "⚪ 中性",
                 "pc_signal": (
                     "🔴 避險"

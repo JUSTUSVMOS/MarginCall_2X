@@ -94,11 +94,21 @@ def generate_final_report(symbol, strat_data, nlp_data):
     if leading:
         pc_ratio = leading.get("pc_ratio")
         pc_display = f"{pc_ratio:.2f}" if isinstance(pc_ratio, (int, float)) else "N/A"
-        leading_block = f"""
-3. 即時領先指標:
-- CVD: {leading.get('cvd', 'N/A')} {leading.get('cvd_signal', '')}
-- P/C Ratio: {pc_display} {leading.get('pc_signal', '')}
-""".strip()
+        leading_lines = [
+            "3. 即時領先指標:",
+            f"- CVD: {leading.get('cvd', 'N/A')} {leading.get('cvd_signal', '')}",
+            f"- P/C Ratio: {pc_display} {leading.get('pc_signal', '')}",
+        ]
+        if leading.get("pc_context"):
+            leading_lines.append(f"- P/C + 波動定價: {leading['pc_context']}")
+        if leading.get("volatility_context"):
+            leading_lines.append(f"- 期權波動: {leading['volatility_context']}")
+        if leading.get("mtf_rsi_signal"):
+            leading_lines.append(
+                f"- 多時間框 RSI: {leading['mtf_rsi_signal']} "
+                f"(強度 {leading.get('mtf_rsi_strength', 'N/A')} / 可靠度 {leading.get('signal_reliability', 'NORMAL')})"
+            )
+        leading_block = "\n".join(leading_lines)
     else:
         leading_block = ""
 

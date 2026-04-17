@@ -8,6 +8,7 @@ import yfinance as yf
 from yf_session import get_ticker, get_download
 
 import logging
+from engine_technical import IndicatorCalculator, analyze_obv_signal, summarize_divergence
 from src.database import db_lock, get_connection
 from src.symbols import normalize_ticker
 from src.tools import format_tool_error, tool
@@ -25,6 +26,352 @@ def set_fubon_provider(provider):
 
 def _has_fubon_provider() -> bool:
     return _fubon_provider is not None and getattr(_fubon_provider, "fubon_ready", False)
+
+
+def _resolve_technical_interval(interval: str | None) -> tuple[str, str]:
+    requested_interval = (interval or "1d").lower()
+    tech_period_by_interval = {
+        "1d": "6mo",
+        "1wk": "3y",
+        "1mo": "10y",
+    }
+    history_interval = requested_interval if requested_interval in tech_period_by_interval else "1d"
+    return history_interval, tech_period_by_interval[history_interval]
+
+
+def _latest_numeric(value, digits: int = 2):
+    series = pd.Series(value).dropna() if isinstance(value, (np.ndarray, pd.Series, list, tuple)) else None
+    if series is not None:
+        if series.empty:
+            return None
+        value = series.iloc[-1]
+    if value is None or pd.isna(value):
+        return None
+    return round(float(value), digits)
+
+
+def _compute_vwap(df: pd.DataFrame) -> pd.Series:
+    typical = (df['High'] + df['Low'] + df['Close']) / 3
+    cumulative_volume = df['Volume'].cumsum().replace(0, np.nan)
+    return (typical * df['Volume']).cumsum() / cumulative_volume
+
+
+def _classify_dual_anchor_state(last_price: float, vwap: float | None, poc_price: float) -> str:
+    if vwap is None or pd.isna(vwap) or vwap <= 0:
+        return "N/A"
+    above_vwap = last_price >= vwap
+    above_poc = last_price >= poc_price
+    if above_vwap and above_poc:
+        return "🟢 多方完全控盤"
+    if (not above_vwap) and above_poc:
+        return "🟡 短線回調但量價仍有支撐"
+    if above_vwap and (not above_poc):
+        return "⚠️ 站上 VWAP 但仍受 POC 壓制"
+    return "🔴 空方控盤"
+
+
+def _select_option_expirations(expirations, *, min_days: int = 7, max_count: int = 4) -> list[str]:
+    selected = []
+    today = datetime.datetime.now().date()
+    for date_str in expirations or []:
+        if len(selected) >= max_count:
+            break
+        try:
+            expiry_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if (expiry_date - today).days < min_days:
+            continue
+        selected.append(date_str)
+    return selected
+
+
+def _extract_atm_iv_samples(option_df: pd.DataFrame | None, spot: float, contracts_per_side: int = 2) -> list[float]:
+    if option_df is None or option_df.empty or spot <= 0:
+        return []
+    if "strike" not in option_df.columns or "impliedVolatility" not in option_df.columns:
+        return []
+    subset = option_df[["strike", "impliedVolatility"]].dropna()
+    subset = subset[(subset["strike"] > 0) & (subset["impliedVolatility"] > 0)]
+    if subset.empty:
+        return []
+    nearest = subset.iloc[(subset["strike"] - spot).abs().argsort()[:contracts_per_side]]
+    return [float(iv) * 100 for iv in nearest["impliedVolatility"].tolist()]
+
+
+def _scan_option_derivatives(ticker, symbol: str, spot: float) -> dict:
+    derivatives = {
+        "pc_ratio": None,
+        "pc_ratio_report": "N/A",
+        "current_iv": None,
+        "current_iv_expiry": None,
+    }
+    total_calls = 0.0
+    total_puts = 0.0
+
+    expirations = _select_option_expirations(getattr(ticker, "options", None), min_days=7, max_count=4)
+    for date_str in expirations:
+        try:
+            chain = ticker.option_chain(date_str)
+        except Exception as chain_exc:
+            logger.debug(f"Option chain fetch failed for {symbol} @ {date_str}: {chain_exc}")
+            continue
+
+        calls = getattr(chain, "calls", None)
+        puts = getattr(chain, "puts", None)
+        calls = calls if isinstance(calls, pd.DataFrame) else pd.DataFrame()
+        puts = puts if isinstance(puts, pd.DataFrame) else pd.DataFrame()
+
+        if not calls.empty and "volume" in calls.columns:
+            total_calls += float(pd.to_numeric(calls["volume"], errors="coerce").fillna(0).sum())
+        if not puts.empty and "volume" in puts.columns:
+            total_puts += float(pd.to_numeric(puts["volume"], errors="coerce").fillna(0).sum())
+
+        if derivatives["current_iv"] is None:
+            iv_samples = _extract_atm_iv_samples(calls, spot) + _extract_atm_iv_samples(puts, spot)
+            if iv_samples:
+                derivatives["current_iv"] = round(float(np.mean(iv_samples)), 1)
+                derivatives["current_iv_expiry"] = date_str
+
+    if total_calls > 0:
+        pc_ratio = total_puts / total_calls
+        derivatives["pc_ratio"] = round(float(pc_ratio), 2)
+        derivatives["pc_ratio_report"] = f"{pc_ratio:.2f}"
+    return derivatives
+
+
+def _build_option_volatility_context_from_history(
+    history_df: pd.DataFrame,
+    symbol: str,
+    *,
+    current_iv: float | None = None,
+    expiry_used: str | None = None,
+) -> dict:
+    context = {
+        "symbol": symbol,
+        "current_iv": round(float(current_iv), 1) if isinstance(current_iv, (int, float)) else None,
+        "realized_vol_30d": None,
+        "vrp": None,
+        "iv_vs_rv_percentile": None,
+        "vol_premium_pct": None,
+        "signal": "⚪ 無期權波動資料",
+        "summary": "N/A",
+        "expiry_used": expiry_used,
+    }
+
+    if history_df is None or history_df.empty or "Close" not in history_df.columns:
+        return context
+
+    close = pd.to_numeric(history_df["Close"], errors="coerce").dropna()
+    if len(close) < 35:
+        return context
+
+    log_returns = np.log(close / close.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
+    realized_vol_series = (log_returns.rolling(30).std() * np.sqrt(252) * 100).replace([np.inf, -np.inf], np.nan).dropna()
+    if realized_vol_series.empty:
+        return context
+
+    latest_rv = float(realized_vol_series.iloc[-1])
+    context["realized_vol_30d"] = round(latest_rv, 1)
+
+    if context["current_iv"] is None or context["current_iv"] <= 0:
+        context["summary"] = f"RV30 {latest_rv:.1f}%"
+        return context
+
+    current_iv = float(context["current_iv"])
+    iv_vs_rv_percentile = float((realized_vol_series < current_iv).sum() / len(realized_vol_series) * 100)
+    vrp = current_iv - latest_rv
+    vol_premium_pct = ((current_iv / latest_rv) - 1) * 100 if latest_rv > 0 else None
+
+    if vrp >= 10 or (iv_vs_rv_percentile >= 80 and vrp > 5):
+        signal = "🔥 恐慌定價"
+    elif vrp <= -5 or (iv_vs_rv_percentile <= 30 and vrp < 0):
+        signal = "⚠️ 波動低估"
+    elif vrp > 0:
+        signal = "🟡 避險偏貴"
+    else:
+        signal = "⚪ 中性"
+
+    context.update(
+        {
+            "vrp": round(vrp, 1),
+            "iv_vs_rv_percentile": round(iv_vs_rv_percentile, 1),
+            "vol_premium_pct": round(vol_premium_pct, 1) if vol_premium_pct is not None else None,
+            "signal": signal,
+            "summary": f"ATM IV {current_iv:.1f}% | RV30 {latest_rv:.1f}% | VRP {vrp:+.1f}pt ({signal})",
+        }
+    )
+    return context
+
+
+def build_option_volatility_context(symbol: str) -> dict:
+    symbol = normalize_ticker(symbol)
+    s = symbol.upper()
+    if s.isdigit():
+        s += ".TW"
+
+    ticker = get_ticker(s)
+    history_df = ticker.history(period="1y", interval="1d")
+    if history_df.empty:
+        return _build_option_volatility_context_from_history(pd.DataFrame(), s)
+
+    spot = float(pd.to_numeric(history_df["Close"], errors="coerce").dropna().iloc[-1])
+    derivatives = _scan_option_derivatives(ticker, s, spot)
+    return _build_option_volatility_context_from_history(
+        history_df,
+        s,
+        current_iv=derivatives.get("current_iv"),
+        expiry_used=derivatives.get("current_iv_expiry"),
+    )
+
+
+def get_mtf_confluence(symbol: str) -> dict:
+    symbol = normalize_ticker(symbol)
+    s = symbol.upper()
+    if s.isdigit():
+        s += ".TW"
+
+    calc = IndicatorCalculator()
+    scores = {}
+    for interval, label in (("1wk", "weekly"), ("1d", "daily"), ("1h", "intraday_1h")):
+        try:
+            rsi_values = calc.RSI(calc.CLOSE(s, interval))
+            rsi_series = pd.Series(rsi_values).replace([np.inf, -np.inf], np.nan).dropna()
+            scores[label] = round(float(rsi_series.iloc[-1]), 2) if not rsi_series.empty else None
+        except Exception as exc:
+            logger.debug(f"MTF RSI fetch failed for {s} @ {interval}: {exc}")
+            scores[label] = None
+
+    valid = {key: value for key, value in scores.items() if value is not None}
+    oversold_count = sum(1 for value in valid.values() if value < 30)
+    overbought_count = sum(1 for value in valid.values() if value > 70)
+
+    if oversold_count >= 2:
+        signal = "strong_oversold"
+        signal_label = "🟢 強超賣共振"
+    elif overbought_count >= 2:
+        signal = "strong_overbought"
+        signal_label = "🔴 強過熱共振"
+    elif oversold_count == 1:
+        signal = "mild_oversold"
+        signal_label = "🟡 輕度超賣"
+    elif overbought_count == 1:
+        signal = "mild_overbought"
+        signal_label = "🟡 輕度過熱"
+    else:
+        signal = "neutral"
+        signal_label = "⚪ 中性"
+
+    strength = max(oversold_count, overbought_count)
+    reliability = "HIGH" if strength >= 2 else "MEDIUM" if strength == 1 else "NORMAL"
+    return {
+        "rsi_by_timeframe": scores,
+        "confluence_signal": signal,
+        "signal_label": signal_label,
+        "confluence_strength": strength,
+        "signal_reliability": reliability,
+    }
+
+
+def build_technical_snapshot(symbol: str, interval: str = "1d") -> dict:
+    symbol = normalize_ticker(symbol)
+    s = symbol.upper()
+    if s.isdigit():
+        s += ".TW"
+
+    history_interval, history_period = _resolve_technical_interval(interval)
+    if history_interval != (interval or "1d").lower():
+        logger.debug(f"Unsupported technical interval '{interval}' for {s}, falling back to 1d")
+
+    ticker = get_ticker(s)
+    df = ticker.history(period=history_period, interval=history_interval)
+    if df.empty:
+        raise ValueError(f"{s} 無法取得歷史數據")
+
+    calc = IndicatorCalculator()
+    close = df['Close'].astype(float)
+    high = df['High'].astype(float)
+    low = df['Low'].astype(float)
+    volume = df['Volume'].astype(float)
+
+    rsi_values = calc.RSI(close.values)
+    macd_payload = calc.MACD(close.values)
+    dif = pd.Series(macd_payload['macd'], index=df.index)
+    macd_hist = pd.Series(macd_payload['histogram'], index=df.index)
+    adx_payload = calc.ADX(high.values, low.values, close.values)
+    divergence = calc.DIVERGENCE(close.values, rsi_values)
+    divergence_label, divergence_details = summarize_divergence(divergence)
+    obv_values = calc.OBV(close.values, volume.values)
+    obv_signal = analyze_obv_signal(close.values, obv_values)
+    mtf_rsi = get_mtf_confluence(s)
+
+    low_9 = low.rolling(window=9).min()
+    high_9 = high.rolling(window=9).max()
+    rsv = (close - low_9) / (high_9 - low_9) * 100
+    vk = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+    vd = vk.ewm(alpha=1 / 3, adjust=False).mean()
+    vj = 3 * vk - 2 * vd
+
+    ma20 = close.rolling(window=20).mean()
+    ma60 = close.rolling(window=60).mean()
+    std20 = close.rolling(window=20).std()
+    upper = ma20 + (std20 * 2)
+    lower = ma20 - (std20 * 2)
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logger.debug(f"Failed to fetch info for technical snapshot {s}: {e}")
+        info = {}
+
+    current_price = float(close.iloc[-1])
+    rsi_latest = _latest_numeric(rsi_values)
+    macd_hist_latest = _latest_numeric(macd_hist)
+    high_52w = info.get('fiftyTwoWeekHigh')
+    low_52w = info.get('fiftyTwoWeekLow')
+    return {
+        "symbol": s,
+        "history_interval": history_interval,
+        "current_price": current_price,
+        "high_52w": float(high_52w) if high_52w is not None and not pd.isna(high_52w) else float(high.max()),
+        "low_52w": float(low_52w) if low_52w is not None and not pd.isna(low_52w) else float(low.min()),
+        "ma20": _latest_numeric(ma20),
+        "ma60": _latest_numeric(ma60),
+        "rsi": {
+            "value": rsi_latest,
+            "state": "🔥超買" if rsi_latest is not None and rsi_latest > 70 else "❄️超跌" if rsi_latest is not None and rsi_latest < 30 else "⚖️中性",
+        },
+        "macd": {
+            "dif": _latest_numeric(dif),
+            "histogram": macd_hist_latest,
+            "state": "📈多頭增強" if (macd_hist_latest or 0) > 0 else "📉空頭衰退",
+        },
+        "kdj": {
+            "k": _latest_numeric(vk, 1),
+            "d": _latest_numeric(vd, 1),
+            "j": _latest_numeric(vj, 1),
+        },
+        "bbands": {
+            "upper": _latest_numeric(upper),
+            "lower": _latest_numeric(lower),
+        },
+        "adx": {
+            "value": _latest_numeric(adx_payload["adx"]),
+            "plus_di": _latest_numeric(adx_payload["plus_di"]),
+            "minus_di": _latest_numeric(adx_payload["minus_di"]),
+            "trend_regime": adx_payload["trend_regime"],
+        },
+        "divergence": {
+            **divergence,
+            "label": divergence_label,
+            "details": divergence_details,
+        },
+        "obv": {
+            "value": _latest_numeric(obv_values, 0),
+            **obv_signal,
+        },
+        "mtf_rsi": mtf_rsi,
+    }
 
 def get_asset_profile(symbol: str) -> dict:
     """
@@ -204,11 +551,18 @@ def fetch_live_price(symbol: str) -> str:
     if not is_taiwan_stock and FMP_KEY and is_us_market_open():
         try:
             url = f"https://financialmodelingprep.com/stable/quote?symbol={symbol}&apikey={FMP_KEY}"
-            res = requests.get(url, timeout=5).json()
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            res = response.json()
             if isinstance(res, list) and len(res) > 0:
                 return f"{round(float(res[0]['price']), 2)} (來源: FMP)"
-        except Exception as e:
+            logger.warning(f"FMP returned empty quote payload for {symbol}")
+        except requests.RequestException as e:
             logger.warning(f"FMP real-time price fetch failed for {symbol}: {e}")
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            logger.error(f"FMP real-time price parsing failed for {symbol}: {e}")
+        except Exception:
+            logger.exception(f"Unexpected FMP real-time price failure for {symbol}")
 
     search_list = [symbol, f"{symbol}.TW", f"{symbol}.TWO"] if is_taiwan_stock else [symbol]
     for s in search_list:
@@ -241,37 +595,29 @@ def build_realtime_insight(symbol: str) -> str:
         full_df = ticker.history(period="2d", interval="5m")
         if full_df.empty: return f"❌ {symbol} 目前無盤中數據。"
         df = full_df.tail(10)
+        try:
+            daily_history = ticker.history(period="1y", interval="1d")
+        except Exception as daily_exc:
+            logger.debug(f"Daily history fetch failed for {symbol}: {daily_exc}")
+            daily_history = pd.DataFrame()
         info = ticker.info
         bid, ask = info.get('bid', 0), info.get('ask', 0)
         ba_ratio = (info.get('bidSize', 1) / info.get('askSize', 1)) if info.get('askSize', 0) > 0 else 1
         
-        # 🎭 Put/Call Ratio 計算 (優化：跳過超短期周選)
-        pc_report = "N/A"
-        try:
-            expirations = ticker.options
-            if expirations:
-                total_calls, total_puts, valid_fetched = 0, 0, 0
-                target_count = 4
-                min_days = 7
-                today = datetime.datetime.now()
-                for date_str in expirations:
-                    if valid_fetched >= target_count: break
-                    try:
-                        expiry_date = datetime.datetime.strptime(date_str, '%Y-%m-%d')
-                        if (expiry_date - today).days < min_days: continue
-                        chain = ticker.option_chain(date_str)
-                        c_sum = chain.calls['volume'].sum() if not chain.calls.empty else 0
-                        p_sum = chain.puts['volume'].sum() if not chain.puts.empty else 0
-                        total_calls += (c_sum if not np.isnan(c_sum) else 0)
-                        total_puts += (p_sum if not np.isnan(p_sum) else 0)
-                        valid_fetched += 1
-                    except Exception as chain_exc:
-                        logger.debug(f"Option chain fetch failed for {symbol} @ {date_str}: {chain_exc}")
-                        continue
-                if total_calls > 0:
-                    pc_report = f"{total_puts / total_calls:.2f}"
-        except Exception as e:
-            logger.warning(f"Put/Call ratio calculation failed for {symbol}: {e}")
+        spot_for_derivatives = float(df["Close"].iloc[-1])
+        if not daily_history.empty and "Close" in daily_history.columns:
+            daily_close = pd.to_numeric(daily_history["Close"], errors="coerce").dropna()
+            if not daily_close.empty:
+                spot_for_derivatives = float(daily_close.iloc[-1])
+        derivatives = _scan_option_derivatives(ticker, symbol, spot_for_derivatives)
+        pc_report = derivatives["pc_ratio_report"]
+        volatility_context = _build_option_volatility_context_from_history(
+            daily_history,
+            symbol,
+            current_iv=derivatives.get("current_iv"),
+            expiry_used=derivatives.get("current_iv_expiry"),
+        )
+        vol_context_report = volatility_context.get("summary", "N/A")
 
         # 成交量密集區 (POC)
         day_min, day_max = full_df['Low'].min(), full_df['High'].max()
@@ -281,6 +627,15 @@ def build_realtime_insight(symbol: str) -> str:
         poc_bin = vp.idxmax()
         poc_price = (poc_bin.left + poc_bin.right) / 2
         vp_status = "🛡️ 支撐" if df['Close'].iloc[-1] > poc_price else "🧱 壓力"
+        vwap_series = _compute_vwap(full_df)
+        current_vwap = _latest_numeric(vwap_series)
+        vwap_report = "N/A"
+        dual_anchor_state = "N/A"
+        if current_vwap is not None and current_vwap > 0:
+            vwap_delta_pct = ((df['Close'].iloc[-1] / current_vwap) - 1) * 100
+            vwap_status = "上方" if df['Close'].iloc[-1] >= current_vwap else "下方"
+            vwap_report = f"{current_vwap:.2f} ({vwap_status} {vwap_delta_pct:+.2f}%)"
+            dual_anchor_state = _classify_dual_anchor_state(df['Close'].iloc[-1], current_vwap, poc_price)
 
         # 📊 成交量爆發力與換手率 (Volume & Turnover)
         vol_ratio_report = "N/A"
@@ -332,7 +687,9 @@ def build_realtime_insight(symbol: str) -> str:
 
         report = f"🚀 === {symbol} 美股即時戰情 ===\n"
         report += f"● 現價: {df['Close'].iloc[-1]:.2f} | 買賣比: {ba_ratio:.2f} | P/C Ratio: {pc_report}\n"
-        report += f"● 成交量能比: {vol_ratio_report} | 換手率: {turnover_report} | POC 密集區: {poc_price:.2f} ({vp_status})\n"
+        report += f"● 成交量能比: {vol_ratio_report} | 換手率: {turnover_report} | VWAP: {vwap_report}\n"
+        report += f"● POC 密集區: {poc_price:.2f} ({vp_status}) | 雙錨點: {dual_anchor_state}\n"
+        report += f"● 波動定價: {vol_context_report}\n"
         report += "【📊 最近 5 根 K 線】\n"
         for _, row in df.tail(5).iterrows():
             report += f"  [{row.name.strftime('%H:%M')}] {'🟢' if row['Close']>row['Open'] else '🔴'} C:{row['Close']:.2f} | 量:{int(row['Volume'])}\n"
@@ -481,84 +838,66 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
         symbol = normalize_ticker(symbol)
         s = symbol.upper()
         clean_symbol = s.replace('.TW', '').replace('.TWO', '')
-        requested_interval = (interval or "1d").lower()
-        tech_period_by_interval = {
-            "1d": "6mo",
-            "1wk": "3y",
-            "1mo": "10y",
-        }
-        history_interval = requested_interval if requested_interval in tech_period_by_interval else "1d"
-        if history_interval != requested_interval:
-            logger.debug(f"Unsupported technical interval '{interval}' for {s}, falling back to 1d")
         is_taiwan = any(char.isdigit() for char in clean_symbol) and (len(clean_symbol) <= 6)
         
         # --- 台股使用 Fubon SDK 官方數據 ---
         if is_taiwan and _has_fubon_provider():
             return _fubon_provider.get_fubon_technical(clean_symbol)
             
-        # --- 美股使用 yfinance + pandas 自行計算 ---
-        ticker = get_ticker(s)
-        df = ticker.history(period=tech_period_by_interval[history_interval], interval=history_interval)
-        if df.empty: return f"❌ {s} 無法取得歷史數據。"
-        
-        close = df['Close']
-        # 1. 計算 RSI (14) - 修正為標準 Wilder's Smoothing (EWM)
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        
-        # 2. 計算 MACD
-        exp12 = close.ewm(span=12, adjust=False).mean()
-        exp26 = close.ewm(span=26, adjust=False).mean()
-        dif = exp12 - exp26
-        dea = dif.ewm(span=9, adjust=False).mean()
-        macd_hist = dif - dea
-        
-        # 2.5 計算 KDJ (9, 3, 3)
-        low_9 = df['Low'].rolling(window=9).min()
-        high_9 = df['High'].rolling(window=9).max()
-        rsv = (close - low_9) / (high_9 - low_9) * 100
-        vk = rsv.ewm(alpha=1/3, adjust=False).mean() # 初始值預設 50 在 ewm 中自動處理
-        vd = vk.ewm(alpha=1/3, adjust=False).mean()
-        vj = 3 * vk - 2 * vd
-        
-        # 3. 計算布林通道 (20) 與 MA60
-        ma20 = close.rolling(window=20).mean()
-        ma60 = close.rolling(window=60).mean()
-        std20 = close.rolling(window=20).std()
-        upper = ma20 + (std20 * 2)
-        lower = ma20 - (std20 * 2)
-        
-        # 4. 取得 52 週高低 (yf info)
-        info = ticker.info
-        h52 = info.get('fiftyTwoWeekHigh', df['High'].max())
-        l52 = info.get('fiftyTwoWeekLow', df['Low'].min())
-        curr = close.iloc[-1]
+        snapshot = build_technical_snapshot(symbol, interval)
+        curr = snapshot["current_price"]
+        curr_ma20 = snapshot["ma20"] if snapshot["ma20"] is not None else float("nan")
+        curr_ma60 = snapshot["ma60"] if snapshot["ma60"] is not None else float("nan")
+        curr_rsi = snapshot["rsi"]["value"] if snapshot["rsi"]["value"] is not None else float("nan")
+        curr_k = snapshot["kdj"]["k"] if snapshot["kdj"]["k"] is not None else float("nan")
+        curr_d = snapshot["kdj"]["d"] if snapshot["kdj"]["d"] is not None else float("nan")
+        curr_j = snapshot["kdj"]["j"] if snapshot["kdj"]["j"] is not None else float("nan")
+        upper = snapshot["bbands"]["upper"] if snapshot["bbands"]["upper"] is not None else float("nan")
+        lower = snapshot["bbands"]["lower"] if snapshot["bbands"]["lower"] is not None else float("nan")
+        divergence = snapshot["divergence"]
+        adx = snapshot["adx"]
+        obv = snapshot["obv"]
+        mtf_rsi = snapshot.get("mtf_rsi", {})
+        trend_regime = adx.get("trend_regime", "unknown")
+        trend_label = "📈趨勢盤" if trend_regime == "trending" else "🌀震盪盤"
+        mtf_scores = mtf_rsi.get("rsi_by_timeframe", {})
+        mtf_fragments = []
+        for key, label in (("weekly", "W"), ("daily", "D"), ("intraday_1h", "H1")):
+            value = mtf_scores.get(key)
+            if value is not None:
+                mtf_fragments.append(f"{label}:{value:.1f}")
+        mtf_score_line = " | ".join(mtf_fragments) if mtf_fragments else "N/A"
         
         report = f"🇺🇸 === {s} 美股全武裝分析 ===\n"
-        report += f"● 現價: {curr:.2f} | 52週高: {h52:.2f} | 52週低: {l52:.2f}\n"
-        report += f"● 均線位階: MA20:{ma20.iloc[-1]:.2f} | MA60:{ma60.iloc[-1]:.2f}\n"
-        report += f"● KDJ(9,3,3): K:{vk.iloc[-1]:.1f} | D:{vd.iloc[-1]:.1f} | J:{vj.iloc[-1]:.1f}\n"
-        report += f"● RSI(14): {rsi.iloc[-1]:.2f} ({'🔥超買' if rsi.iloc[-1]>70 else '❄️超跌' if rsi.iloc[-1]<30 else '⚖️中性'})\n"
-        report += f"● MACD: DIF:{dif.iloc[-1]:.2f} | 柱狀體:{macd_hist.iloc[-1]:.2f} ({'📈多頭增強' if macd_hist.iloc[-1]>0 else '📉空頭衰退'})\n"
-        report += f"● 布林通道: 上軌:{upper.iloc[-1]:.2f} | 下軌:{lower.iloc[-1]:.2f}\n"
+        report += f"● 現價: {curr:.2f} | 52週高: {snapshot['high_52w']:.2f} | 52週低: {snapshot['low_52w']:.2f}\n"
+        report += f"● 均線位階: MA20:{curr_ma20:.2f} | MA60:{curr_ma60:.2f}\n"
+        report += f"● KDJ(9,3,3): K:{curr_k:.1f} | D:{curr_d:.1f} | J:{curr_j:.1f}\n"
+        report += f"● RSI(14): {curr_rsi:.2f} ({snapshot['rsi']['state']})\n"
+        report += (
+            f"● 多時間框 RSI: {mtf_score_line} -> "
+            f"{mtf_rsi.get('signal_label', '⚪ 中性')} ({mtf_rsi.get('signal_reliability', 'NORMAL')})\n"
+        )
+        report += f"● MACD: DIF:{snapshot['macd']['dif']:.2f} | 柱狀體:{snapshot['macd']['histogram']:.2f} ({snapshot['macd']['state']})\n"
+        report += f"● ADX(14): {adx['value']:.2f} | +DI:{adx['plus_di']:.2f} | -DI:{adx['minus_di']:.2f} ({trend_label})\n"
+        report += f"● RSI 背離: {divergence['label']}"
+        if divergence.get("details") and divergence["details"] not in {"無明顯背離", "資料不足"}:
+            report += f" | {divergence['details']}"
+        report += "\n"
+        report += f"● OBV 趨勢: {obv['label']} | {obv['signal']}"
+        if obv.get("obv_ma20") is not None:
+            report += f" | OBV20MA:{obv['obv_ma20']:.2f}"
+        report += "\n"
+        report += f"● 布林通道: 上軌:{upper:.2f} | 下軌:{lower:.2f}\n"
         
         # 戰術建議 (優化：結合 RSI, KDJ 與 MA 濾網)
-        curr_rsi = rsi.iloc[-1]
-        curr_ma20 = ma20.iloc[-1]
-        curr_ma60 = ma60.iloc[-1]
-        curr_k, curr_d, curr_j = vk.iloc[-1], vd.iloc[-1], vj.iloc[-1]
-        
-        if curr >= upper.iloc[-1]:
+        if curr >= upper:
             if curr_rsi > 75:
                 report += f"⚠️ 戰略：觸及布林上軌且 RSI 極度過熱 ({curr_rsi:.2f})，短線噴發過頭，不建議追高。\n"
             elif 55 < curr_rsi <= 75:
                 report += f"🔥 戰略：強勢沿上軌攀升中 (RSI: {curr_rsi:.2f})，留意跌破均線停利。\n"
             else:
                 report += "⚠️ 戰略：觸及布林上軌，留意拉回風險。\n"
-        elif curr <= lower.iloc[-1]:
+        elif curr <= lower:
             if curr_rsi < 25:
                 report += f"🎯 戰略：觸及布林下軌且極度超跌 ({curr_rsi:.2f})，具備技術性反彈潛力！\n"
             elif 25 <= curr_rsi < 45:
@@ -579,6 +918,14 @@ def build_technical_report(symbol: str, interval: str = "1d") -> str:
             report += f"🔥 戰略：RSI 極度超跌 ({curr_rsi:.2f})，隨時可能暴力反彈。\n"
         else:
             report += "🧘 戰略：目前位階中性，建議分批佈局過等待關鍵突破。\n"
+
+        if divergence.get("bullish_divergence"):
+            report += "🟢 補充：RSI 底背離成立，賣壓動能正在衰竭。\n"
+        elif divergence.get("bearish_divergence"):
+            report += "🔴 補充：RSI 頂背離成立，上攻動能開始鈍化。\n"
+
+        if trend_regime == "ranging" and adx.get("value") is not None:
+            report += f"🌀 補充：ADX 僅 {adx['value']:.2f}，當前偏震盪盤，均線突破需二次確認。\n"
         
         return report
     except Exception as e:

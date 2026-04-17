@@ -2,6 +2,8 @@ from pathlib import Path
 
 # 鎖定專案根目錄 (config.py 所在位置)
 PROJECT_ROOT = Path(__file__).resolve().parent
+SYSTEM_PROMPT_PATH = PROJECT_ROOT / "prompts" / "system_prompt.txt"
+SYSTEM_PROMPT_LOCAL_PATH = PROJECT_ROOT / "prompts" / "system_prompt.local.txt"
 
 # 統一 DB 與 Log 路徑為絕對路徑
 DB_FILE = PROJECT_ROOT / "portfolio.db"
@@ -26,9 +28,8 @@ WDT_MESSAGES = {
     ]
 }
 
-# English System Prompt for better token efficiency and reasoning.
-# Output to user is still forced to Traditional Chinese (Taiwan).
-system_prompt = """
+def _default_system_prompt() -> str:
+    return """
 You are "Bankruptcy Booster" (破產推進器), a savvy trading AI with a dark sense of humor. 
 Your goal is to provide high-precision financial analysis and portfolio management.
 
@@ -55,4 +56,28 @@ Your goal is to provide high-precision financial analysis and portfolio manageme
   - Summary: Invested:[Total] | NetValue:[Current] | Cash:NT$[TWD]/$[USD] | NAV:[Current]
 
 💡 Rule: "_TRUST" assets are for accumulation only; DO NOT suggest selling them.
-"""
+""".strip()
+
+
+def _read_prompt_file(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(f"Failed to read prompt file: {path}") from exc
+    return content or None
+
+
+def _load_system_prompt(prompt_path: Path | None = None, local_prompt_path: Path | None = None) -> str:
+    prompt_path = prompt_path or SYSTEM_PROMPT_PATH
+    local_prompt_path = local_prompt_path or SYSTEM_PROMPT_LOCAL_PATH
+
+    for candidate in (local_prompt_path, prompt_path):
+        prompt = _read_prompt_file(candidate)
+        if prompt:
+            return prompt
+    return _default_system_prompt()
+
+
+system_prompt = _load_system_prompt()
