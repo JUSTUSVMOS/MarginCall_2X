@@ -16,3 +16,4 @@ finnhub-python
 parsel
 tqdm
 fubon-neo-fugle-marketdata
+statsmodels

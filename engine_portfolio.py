@@ -561,6 +561,23 @@ def _build_current_holdings_weights() -> tuple[Dict[str, float], List[Dict[str, 
     return ({pos["symbol"]: pos["market_value_twd"] / total_mv for pos in holdings}, holdings)
 
 
+def _parse_symbol_input(symbols: str | List[str] | None) -> List[str]:
+    if symbols is None:
+        return []
+    raw_items = symbols if isinstance(symbols, list) else str(symbols).replace(",", " ").split()
+    normalized = []
+    for item in raw_items:
+        symbol = normalize_ticker(str(item))
+        if not symbol:
+            continue
+        s = symbol.upper()
+        if s.isdigit():
+            s += ".TW"
+        if s not in normalized:
+            normalized.append(s)
+    return normalized
+
+
 def build_portfolio_analysis() -> Dict[str, Any]:
     """生成持倉健檢摘要，用於系統自動更新額葉。"""
     snapshots = _build_live_position_snapshots(_load_portfolio_rows())
@@ -904,6 +921,93 @@ def build_portfolio_beta_report(benchmark: str = "SPY", period: str = "6mo") -> 
 def get_portfolio_beta_attribution(benchmark: str = "SPY", period: str = "6mo") -> str:
     """Decomposes current holdings into benchmark beta and residual alpha."""
     return build_portfolio_beta_report(benchmark, period)
+
+
+def compute_inverse_vol_weights(symbols: List[str], lookback: int = 120, period: str = "1y") -> Dict[str, Any]:
+    cleaned = _parse_symbol_input(symbols)
+    if not cleaned:
+        return {"error": "沒有可用標的可做 inverse-vol 配置。"}
+
+    effective_lookback = max(int(lookback), 20)
+    annualized_vols: Dict[str, float] = {}
+    skipped: Dict[str, str] = {}
+
+    for symbol in cleaned:
+        try:
+            history = get_ticker(symbol, cache_level="daily").history(period=period, interval="1d")
+        except Exception as exc:
+            skipped[symbol] = f"價格抓取失敗: {exc}"
+            continue
+        if history.empty or "Close" not in history.columns:
+            skipped[symbol] = "缺少 Close 歷史資料"
+            continue
+
+        close = pd.to_numeric(history["Close"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        returns = close.pct_change().replace([np.inf, -np.inf], np.nan).dropna().tail(effective_lookback)
+        if len(returns) < min(effective_lookback, 20):
+            skipped[symbol] = f"有效樣本不足 ({len(returns)})"
+            continue
+
+        vol = float(returns.std(ddof=0) * np.sqrt(TRADING_DAYS_PER_YEAR))
+        if not np.isfinite(vol) or vol <= 0:
+            skipped[symbol] = "波動率無法計算"
+            continue
+        annualized_vols[symbol] = vol
+
+    if not annualized_vols:
+        return {"error": "所有標的都缺少足夠資料，無法計算 inverse-vol 權重。"}
+
+    inverse_vols = {symbol: 1 / vol for symbol, vol in annualized_vols.items()}
+    total_inverse = sum(inverse_vols.values())
+    weights = {symbol: inverse_vols[symbol] / total_inverse for symbol in annualized_vols}
+    risk_budget_proxy = {symbol: weights[symbol] * annualized_vols[symbol] for symbol in annualized_vols}
+
+    return {
+        "lookback": effective_lookback,
+        "weights": {symbol: round(weight, 4) for symbol, weight in weights.items()},
+        "annualized_vols": {symbol: round(vol, 4) for symbol, vol in annualized_vols.items()},
+        "risk_budget_proxy": {symbol: round(risk_budget_proxy[symbol], 4) for symbol in annualized_vols},
+        "skipped": skipped,
+        "methodology": "以近 N 日年化波動率做 inverse-vol weighting；這是簡化版 risk parity proxy，未納入協方差矩陣最佳化。",
+    }
+
+
+def build_risk_parity_report(symbols: str = "", lookback: int = 120, period: str = "1y") -> str:
+    source_symbols = _parse_symbol_input(symbols)
+    source_label = "指定標的"
+    if not source_symbols:
+        holdings, _ = _build_current_holdings_weights()
+        source_symbols = list(holdings.keys())
+        source_label = "目前持倉"
+    if not source_symbols:
+        return format_tool_error("❌ 無有效持倉或輸入標的可做配置。", data_unavailable=True)
+
+    payload = compute_inverse_vol_weights(source_symbols, lookback=lookback, period=period)
+    if payload.get("error"):
+        return format_tool_error(f"❌ {payload['error']}", data_unavailable=True)
+
+    ranked = sorted(payload["weights"], key=lambda symbol: payload["weights"][symbol], reverse=True)
+    report = "⚖️ === Inverse-Vol Risk Parity Proxy ===\n"
+    report += f"● 來源: {source_label} | Lookback: {payload['lookback']} 日\n"
+    for symbol in ranked:
+        report += (
+            f"● {symbol}: 權重 {payload['weights'][symbol] * 100:.1f}% | "
+            f"Ann Vol {payload['annualized_vols'][symbol] * 100:.1f}% | "
+            f"Risk Budget Proxy {payload['risk_budget_proxy'][symbol]:.4f}\n"
+        )
+
+    if payload["skipped"]:
+        skipped = "; ".join(f"{symbol}({reason})" for symbol, reason in sorted(payload["skipped"].items()))
+        report += f"● 跳過: {skipped}\n"
+
+    report += f"● 註記: {payload['methodology']}"
+    return report
+
+
+@tool()
+def get_risk_parity_weights(symbols: str = "", lookback: int = 120, period: str = "1y") -> str:
+    """Suggests simplified inverse-vol weights for supplied symbols or the current holdings."""
+    return build_risk_parity_report(symbols, lookback, period)
 
 
 def calculate_position_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:

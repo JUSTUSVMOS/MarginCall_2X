@@ -81,6 +81,62 @@ def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
     except ValueError:
         return None
 
+
+def _is_blank_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+
+    empty_attr = getattr(value, "empty", None)
+    if isinstance(empty_attr, bool):
+        return empty_attr
+
+    size_attr = getattr(value, "size", None)
+    if size_attr is not None:
+        try:
+            return int(size_attr) == 0
+        except (TypeError, ValueError):
+            pass
+
+    return False
+
+
+def _coerce_text_items(items: Any, default: str = "無") -> List[str]:
+    if _is_blank_value(items):
+        return [default]
+    if isinstance(items, str):
+        return [items]
+    if hasattr(items, "tolist") and not isinstance(items, (list, tuple, set, dict, str)):
+        try:
+            items = items.tolist()
+        except Exception:
+            return [str(items)]
+    if isinstance(items, (list, tuple, set)):
+        cleaned = [str(item).strip() for item in items if not _is_blank_value(item)]
+        return cleaned or [default]
+    return [str(items)]
+
+
+def _to_comparable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _to_comparable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_comparable(item) for item in value]
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes, list, tuple, set, dict)):
+        try:
+            return _to_comparable(value.tolist())
+        except Exception:
+            pass
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
 def _merge_defaults(defaults: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
     merged = copy.deepcopy(defaults)
     if not isinstance(incoming, dict):
@@ -259,7 +315,7 @@ def format_key_signals(signals: Optional[Dict[str, Any]], max_items: int = 4) ->
     parts = []
     for key, label, suffix in signal_map:
         value = signals.get(key)
-        if value in (None, "", []):
+        if _is_blank_value(value):
             continue
         parts.append(f"{label}={_format_signal_value(key, value)}{suffix}")
         if len(parts) >= max_items:
@@ -612,12 +668,13 @@ class Brain:
             "vixZ": "VIX Z",
             "skewPr": "SKEW PR"
         }
-        watchpoints = market.get("watchpoints") or ["無"]
-        reasons = market.get("reasons") or ["無"]
+        watchpoints = _coerce_text_items(market.get("watchpoints"))
+        reasons = _coerce_text_items(market.get("reasons"))
         signals = market.get("signals") or {}
         signal_lines = [
             f"- {signal_labels.get(key, key)}: {value}"
             for key, value in signals.items()
+            if not _is_blank_value(value)
         ] or ["- 無"]
 
         lines = [
@@ -646,7 +703,7 @@ class Brain:
     def _market_regime_changed(self, new_market: Dict[str, Any]) -> bool:
         current = self.state.get("marketRegime", _default_market_regime())
         keys = ["summary", "state", "riskScore", "watchpoints", "reasons", "signals"]
-        return any(current.get(key) != new_market.get(key) for key in keys)
+        return any(_to_comparable(current.get(key)) != _to_comparable(new_market.get(key)) for key in keys)
 
     # ==================== Queries (讀取記憶) ====================
 
@@ -686,13 +743,13 @@ class Brain:
 
     def get_cognitive_context(self, max_age_minutes: int = 180) -> str:
         market = self.get_market_regime(max_age_minutes=max_age_minutes)
-        watchpoints = market.get("watchpoints") or ["無"]
-        reasons = market.get("reasons") or ["無"]
+        watchpoints = _coerce_text_items(market.get("watchpoints"))
+        reasons = _coerce_text_items(market.get("reasons"))
         signals = market.get("signals") or {}
         frontal_lobe = self.state["frontalLobe"] or "空白 (首次運行)"
 
         signal_summary = ", ".join([
-            f"{key}={value}" for key, value in signals.items() if value not in (None, "", [])
+            f"{key}={value}" for key, value in signals.items() if not _is_blank_value(value)
         ]) or "無"
         watchpoints_text = "\n".join([f"  - {item}" for item in watchpoints])
         reasons_text = "\n".join([f"  - {item}" for item in reasons[:5]])
@@ -806,15 +863,18 @@ class Brain:
         updated_at: Optional[str] = None
     ) -> Dict[str, Any]:
         previous_market = copy.deepcopy(self.state["marketRegime"])
+        normalized_watchpoints = [item.strip() for item in _coerce_text_items(watchpoints, default="") if item and item.strip()]
+        normalized_reasons = [item.strip() for item in _coerce_text_items(reasons, default="") if item and item.strip()]
+        normalized_signals = _to_comparable(dict(signals)) if isinstance(signals, dict) else {}
         cleaned_market = {
             "summary": summary.strip(),
             "state": regime or self.state["marketRegime"].get("state") or "未初始化",
             "riskScore": risk_score if risk_score is not None else self.state["marketRegime"].get("riskScore"),
             "updatedAt": updated_at or _utc_now_iso(),
             "source": source,
-            "watchpoints": [item.strip() for item in (watchpoints or []) if item and item.strip()],
-            "reasons": [item.strip() for item in (reasons or []) if item and item.strip()],
-            "signals": dict(signals or {})
+            "watchpoints": normalized_watchpoints,
+            "reasons": normalized_reasons,
+            "signals": normalized_signals,
         }
         if not cleaned_market["watchpoints"]:
             cleaned_market["watchpoints"] = self.state["marketRegime"].get("watchpoints", [])

@@ -58,7 +58,7 @@ def _normalize_lookup_symbol(symbol: str) -> str:
         try:
             ticker = get_ticker(s + ".TW", cache_level="daily")
             info = ticker.fast_info
-            if "last_price" in info or "previous_close" in info:
+            if getattr(info, "last_price", None) is not None or getattr(info, "previous_close", None) is not None:
                 s += ".TW"
             else:
                 s += ".TWO"
