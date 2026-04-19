@@ -1,0 +1,850 @@
+diff --git a/engine_market.py b/engine_market.py
+index 84fa60c..105fa98 100644
+--- a/engine_market.py
++++ b/engine_market.py
+@@ -1,7 +1,8 @@
+-import os
+-import datetime
+-import requests
+-import time
++import os
++import datetime
++import math
++import requests
++import time
+ import pandas as pd
+ import numpy as np
+ import yfinance as yf
+@@ -50,6 +51,59 @@ def _latest_numeric(value, digits: int = 2):
+     return round(float(value), digits)
+ 
+ 
++def _normalize_lookup_symbol(symbol: str) -> str:
++    symbol = normalize_ticker(symbol)
++    s = symbol.upper()
++    if s.isdigit():
++        s += ".TW"
++    return s
++
++
++def _safe_float(value):
++    try:
++        if value is None or pd.isna(value):
++            return None
++        result = float(value)
++        if not np.isfinite(result):
++            return None
++        return result
++    except (TypeError, ValueError):
++        return None
++
++
++def _fetch_daily_close_series(symbol: str, period: str = "2y") -> pd.Series:
++    ticker = get_ticker(symbol, cache_level="daily")
++    history = ticker.history(period=period, interval="1d")
++    if history.empty or "Close" not in history.columns:
++        return pd.Series(dtype=float)
++    close = (
++        pd.to_numeric(history["Close"], errors="coerce")
++        .replace([np.inf, -np.inf], np.nan)
++        .dropna()
++    )
++    close.index = pd.to_datetime(close.index)
++    return close.astype(float)
++
++
++def _estimate_half_life(series: pd.Series) -> float | None:
++    clean = pd.Series(series, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
++    if len(clean) < 10:
++        return None
++    lagged = clean.shift(1).dropna()
++    current = clean.loc[lagged.index]
++    if lagged.empty:
++        return None
++    x = lagged.to_numpy(dtype=float)
++    y = current.to_numpy(dtype=float)
++    x_var = float(np.var(x))
++    if x_var <= 0:
++        return None
++    beta = float(np.mean((x - x.mean()) * (y - y.mean())) / x_var)
++    if 0 < beta < 1:
++        return float(-np.log(2) / np.log(beta))
++    return None
++
++
+ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
+     typical = (df['High'] + df['Low'] + df['Close']) / 3
+     cumulative_volume = df['Volume'].cumsum().replace(0, np.nan)
+@@ -994,10 +1048,392 @@ def build_mean_reversion_report(symbol: str, interval: str = "1d", lookback: int
+ def get_mean_reversion_signal(symbol: str, interval: str = "1d", lookback: int = 60) -> str:
+     """Evaluates price-vs-mean deviation and half-life for mean-reversion setups."""
+     return build_mean_reversion_report(symbol, interval, lookback)
+-
+-def build_movers_report() -> str:
+-    """Pure market-movers logic for direct callers and tests."""
+-    report = "🚀 === 市場異動排行榜 (Movers) ===\n"
++
++
++def compute_pair_trade_signal(symbol_a: str, symbol_b: str, lookback: int = 120, period: str = "2y") -> dict:
++    pair_a = _normalize_lookup_symbol(symbol_a)
++    pair_b = _normalize_lookup_symbol(symbol_b)
++    if pair_a == pair_b:
++        return {"error": "配對交易需要兩個不同標的。"}
++
++    effective_lookback = max(int(lookback), 60)
++    series_a = _fetch_daily_close_series(pair_a, period=period)
++    series_b = _fetch_daily_close_series(pair_b, period=period)
++    aligned = pd.concat([series_a.rename("a"), series_b.rename("b")], axis=1, join="inner").dropna()
++    if len(aligned) < effective_lookback:
++        return {"error": f"{pair_a}/{pair_b} 重疊歷史資料不足 ({len(aligned)})。"}
++
++    window = aligned.tail(effective_lookback).copy()
++    x = window["b"].to_numpy(dtype=float)
++    y = window["a"].to_numpy(dtype=float)
++    design = np.column_stack([x, np.ones(len(x))])
++    hedge_ratio, intercept = np.linalg.lstsq(design, y, rcond=None)[0]
++    fitted = (hedge_ratio * window["b"]) + intercept
++    spread = (window["a"] - fitted).astype(float)
++    spread_std = float(spread.std(ddof=0)) if len(spread) > 1 else 0.0
++    if spread_std <= 0:
++        return {"error": f"{pair_a}/{pair_b} 價差波動過低，無法判讀配對偏離。"}
++
++    try:
++        from statsmodels.tsa.stattools import adfuller
++    except ImportError:
++        return {"error": "缺少 statsmodels，無法執行 ADF 協整檢驗。"}
++
++    adf_pvalue = None
++    try:
++        adf_pvalue = float(adfuller(spread.to_numpy(dtype=float), autolag="AIC")[1])
++    except Exception as exc:
++        logger.debug(f"ADF test failed for {pair_a}/{pair_b}: {exc}")
++
++    zscore = float((spread.iloc[-1] - spread.mean()) / spread_std)
++    corr = float(np.corrcoef(y, x)[0, 1]) if len(window) > 1 else float("nan")
++    r_squared = (corr ** 2) if np.isfinite(corr) else None
++    half_life = _estimate_half_life(spread)
++    cointegrated = adf_pvalue is not None and adf_pvalue < 0.05
++    slow_reversion = half_life is not None and half_life > 60
++
++    if not cointegrated:
++        signal = "不構成配對 (spread 未達協整)"
++    elif zscore <= -2 and not slow_reversion:
++        signal = f"做多 {pair_a} / 做空 {pair_b}"
++    elif zscore >= 2 and not slow_reversion:
++        signal = f"做空 {pair_a} / 做多 {pair_b}"
++    elif abs(zscore) >= 2 and slow_reversion:
++        signal = "價差偏離達標，但半衰期過長，先列監控"
++    else:
++        signal = "無交易訊號"
++
++    return {
++        "pair": f"{pair_a}/{pair_b}",
++        "symbol_a": pair_a,
++        "symbol_b": pair_b,
++        "lookback": effective_lookback,
++        "hedge_ratio": round(float(hedge_ratio), 4),
++        "intercept": round(float(intercept), 4),
++        "r_squared": round(float(r_squared), 4) if r_squared is not None else None,
++        "adf_pvalue": round(adf_pvalue, 4) if adf_pvalue is not None else None,
++        "cointegrated": cointegrated,
++        "spread_zscore": round(zscore, 2),
++        "spread_half_life": round(half_life, 1) if half_life is not None else None,
++        "signal": signal,
++        "methodology": "以 OLS hedge ratio 建 spread，並用 ADF 檢驗殘差平穩性；屬統計配對訊號，不等於無風險套利。",
++    }
++
++
++def build_pairs_trade_report(symbol_a: str, symbol_b: str, lookback: int = 120) -> str:
++    payload = compute_pair_trade_signal(symbol_a, symbol_b, lookback=lookback)
++    if payload.get("error"):
++        return format_tool_error(f"❌ {payload['error']}", data_unavailable=True)
++
++    r2_text = f"{payload['r_squared']:.3f}" if payload.get("r_squared") is not None else "N/A"
++    adf_text = f"{payload['adf_pvalue']:.4f}" if payload.get("adf_pvalue") is not None else "N/A"
++    half_life = payload.get("spread_half_life")
++    half_life_text = f"{half_life:.1f} 期" if isinstance(half_life, (int, float)) else "N/A"
++    coint_text = "是" if payload.get("cointegrated") else "否"
++
++    report = f"🔗 === {payload['pair']} 配對/協整監控 ===\n"
++    report += (
++        f"● Hedge Ratio: {payload['hedge_ratio']:.3f} | R²: {r2_text} | "
++        f"ADF p-value: {adf_text} | 協整: {coint_text}\n"
++    )
++    report += (
++        f"● Spread Z-Score: {payload['spread_zscore']:+.2f} | "
++        f"半衰期: {half_life_text}\n"
++    )
++    report += f"● 結論: {payload['signal']}\n"
++    report += f"● 註記: {payload['methodology']}"
++    return report
++
++
++@tool()
++def get_pairs_trade_signal(symbol_a: str, symbol_b: str, lookback: int = 120) -> str:
++    """Evaluates a pair spread with OLS hedge ratio, ADF cointegration, and spread z-score."""
++    return build_pairs_trade_report(symbol_a, symbol_b, lookback)
++
++
++def compute_factor_snapshot(symbol: str) -> dict:
++    s = _normalize_lookup_symbol(symbol)
++    ticker = get_ticker(s, cache_level="daily")
++    history = ticker.history(period="2y", interval="1d")
++    if history.empty or "Close" not in history.columns:
++        return {"error": f"{s} 無法取得歷史價格。"}
++
++    close = (
++        pd.to_numeric(history["Close"], errors="coerce")
++        .replace([np.inf, -np.inf], np.nan)
++        .dropna()
++    )
++    if len(close) < 22:
++        return {"error": f"{s} 歷史價格不足，無法計算單股因子。"}
++
++    try:
++        info = ticker.info or {}
++    except Exception as exc:
++        logger.debug(f"Factor snapshot info fetch failed for {s}: {exc}")
++        info = {}
++
++    trailing_pe = _safe_float(info.get("trailingPE"))
++    price_to_book = _safe_float(info.get("priceToBook"))
++    market_cap = _safe_float(info.get("marketCap"))
++    roe = _safe_float(info.get("returnOnEquity"))
++    gross_margin = _safe_float(info.get("grossMargins"))
++    debt_to_equity = _safe_float(info.get("debtToEquity"))
++
++    momentum_12_1 = float((close.iloc[-22] / close.iloc[-252]) - 1) if len(close) >= 252 else None
++    reversal_1m = float(-((close.iloc[-1] / close.iloc[-22]) - 1)) if len(close) >= 22 else None
++    earnings_yield = float(1 / trailing_pe) if trailing_pe is not None and trailing_pe > 0 else None
++    book_price = float(1 / price_to_book) if price_to_book is not None and price_to_book > 0 else None
++
++    leverage_penalty = 1.0
++    if debt_to_equity is not None:
++        leverage_penalty = 1 / (1 + max(debt_to_equity, 0) / 100)
++    quality_raw = (
++        float(roe * gross_margin * leverage_penalty)
++        if roe is not None and gross_margin is not None
++        else None
++    )
++
++    returns = close.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
++    realized_vol_60d = float(returns.tail(60).std(ddof=0) * np.sqrt(252)) if len(returns) >= 60 else None
++    low_vol_score = -realized_vol_60d if realized_vol_60d is not None else None
++    size_log_mcap = float(math.log(market_cap)) if market_cap is not None and market_cap > 0 else None
++
++    return {
++        "symbol": s,
++        "momentum_12_1": round(momentum_12_1, 4) if momentum_12_1 is not None else None,
++        "reversal_1m": round(reversal_1m, 4) if reversal_1m is not None else None,
++        "earnings_yield": round(earnings_yield, 4) if earnings_yield is not None else None,
++        "book_price": round(book_price, 4) if book_price is not None else None,
++        "quality_raw": round(quality_raw, 4) if quality_raw is not None else None,
++        "roe": round(roe, 4) if roe is not None else None,
++        "gross_margin": round(gross_margin, 4) if gross_margin is not None else None,
++        "debt_to_equity": round(debt_to_equity, 2) if debt_to_equity is not None else None,
++        "low_vol_score": round(low_vol_score, 4) if low_vol_score is not None else None,
++        "realized_vol_60d": round(realized_vol_60d, 4) if realized_vol_60d is not None else None,
++        "size_log_mcap": round(size_log_mcap, 4) if size_log_mcap is not None else None,
++        "methodology": "單股 raw 因子快照；未做截面標準化、產業中性化或組合排序，因此不能直接視為正式多因子 alpha rank。",
++    }
++
++
++def build_factor_snapshot_report(symbol: str) -> str:
++    payload = compute_factor_snapshot(symbol)
++    if payload.get("error"):
++        return format_tool_error(f"❌ {payload['error']}", data_unavailable=True)
++
++    def _pct(value):
++        return f"{value * 100:+.1f}%" if isinstance(value, (int, float)) else "N/A"
++
++    def _raw(value, digits: int = 2):
++        return f"{value:.{digits}f}" if isinstance(value, (int, float)) else "N/A"
++
++    report = f"🧬 === {payload['symbol']} 單股因子快照 ===\n"
++    report += (
++        f"● Momentum(12-1): {_pct(payload.get('momentum_12_1'))} | "
++        f"Reversal(1M): {_pct(payload.get('reversal_1m'))} | "
++        f"RV60: {_pct(payload.get('realized_vol_60d'))}\n"
++    )
++    report += (
++        f"● Value: E/P {_pct(payload.get('earnings_yield'))} | "
++        f"B/P {_raw(payload.get('book_price'), 3)} | "
++        f"Size ln(MCap): {_raw(payload.get('size_log_mcap'), 2)}\n"
++    )
++    report += (
++        f"● Quality(raw): {_raw(payload.get('quality_raw'), 4)} | "
++        f"ROE {_pct(payload.get('roe'))} | "
++        f"毛利率 {_pct(payload.get('gross_margin'))} | "
++        f"D/E {_raw(payload.get('debt_to_equity'), 1)}\n"
++    )
++    report += f"● 註記: {payload['methodology']}"
++    return report
++
++
++@tool()
++def get_factor_snapshot(symbol: str) -> str:
++    """Builds a single-name raw factor snapshot (momentum, reversal, value, quality, low-vol, size)."""
++    return build_factor_snapshot_report(symbol)
++
++
++def _signal_symbol_variants(symbol: str) -> list[str]:
++    base = _normalize_lookup_symbol(symbol)
++    variants = [base]
++    clean = base.replace(".TW", "").replace(".TWO", "")
++    if clean not in variants:
++        variants.append(clean)
++    if base.endswith(".TW"):
++        two_variant = base.replace(".TW", ".TWO")
++        if two_variant not in variants:
++            variants.append(two_variant)
++    return variants
++
++
++def _parse_signal_timestamp(value):
++    try:
++        ts = pd.Timestamp(value)
++    except Exception:
++        return pd.NaT
++    return ts.tz_convert(None) if ts.tzinfo is not None else ts
++
++
++def compute_nlp_signal_ic(
++    symbol: str,
++    horizon_days: int = 5,
++    lookback_signals: int = 120,
++    rolling_window: int = 20,
++    min_samples: int = 20,
++) -> dict:
++    s = _normalize_lookup_symbol(symbol)
++    variants = _signal_symbol_variants(symbol)
++    placeholders = ", ".join(["?"] * len(variants))
++    query = (
++        f"SELECT timestamp, nlp_alpha FROM nlp_insights "
++        f"WHERE symbol IN ({placeholders}) AND nlp_alpha IS NOT NULL "
++        f"ORDER BY timestamp DESC LIMIT ?"
++    )
++    try:
++        with db_lock:
++            conn = get_connection()
++            try:
++                signals = pd.read_sql(query, conn, params=[*variants, max(lookback_signals * 3, rolling_window * 3)])
++            finally:
++                conn.close()
++    except Exception as exc:
++        logger.debug(f"NLP IC history load failed for {s}: {exc}")
++        return {"error": f"{s} 尚未建立可用的 nlp_insights 歷史。"}
++
++    if signals.empty:
++        return {"error": f"{s} 缺少 nlp_insights 歷史資料。"}
++
++    horizon = max(int(horizon_days), 1)
++    rolling_window = max(int(rolling_window), 5)
++    min_samples = max(int(min_samples), rolling_window)
++
++    signals["timestamp"] = signals["timestamp"].apply(_parse_signal_timestamp)
++    signals["nlp_alpha"] = pd.to_numeric(signals["nlp_alpha"], errors="coerce")
++    signals = signals.dropna(subset=["timestamp", "nlp_alpha"]).sort_values("timestamp")
++    if signals.empty:
++        return {"error": f"{s} 的 nlp_insights 時間戳或 alpha 無法解析。"}
++
++    signals["signal_day"] = signals["timestamp"].dt.normalize()
++    signals = signals.drop_duplicates(subset=["signal_day"], keep="last").tail(lookback_signals)
++
++    close = _fetch_daily_close_series(s, period="5y")
++    if close.empty:
++        return {"error": f"{s} 無法取得日線價格，無法計算 IC。"}
++
++    trade_index = pd.DatetimeIndex(pd.to_datetime(close.index))
++    if trade_index.tz is not None:
++        trade_index = trade_index.tz_convert(None)
++    trade_days = trade_index.normalize()
++
++    observations = []
++    for row in signals.itertuples(index=False):
++        anchor_idx = int(trade_days.searchsorted(row.signal_day, side="right"))
++        exit_idx = anchor_idx + horizon
++        if anchor_idx >= len(close) or exit_idx >= len(close):
++            continue
++        entry_price = float(close.iloc[anchor_idx])
++        exit_price = float(close.iloc[exit_idx])
++        if entry_price <= 0:
++            continue
++        observations.append(
++            {
++                "signal": float(row.nlp_alpha),
++                "forward_return": (exit_price / entry_price) - 1.0,
++                "anchor_day": trade_days[anchor_idx],
++            }
++        )
++
++    sample = pd.DataFrame(observations).sort_values("anchor_day")
++    if len(sample) < min_samples:
++        return {"error": f"{s} 可對齊的訊號樣本僅 {len(sample)} 筆，至少需要 {min_samples} 筆。"}
++
++    ic_full = sample["signal"].corr(sample["forward_return"], method="spearman")
++    ic_full = float(ic_full) if pd.notna(ic_full) else None
++
++    rolling_ics = []
++    if len(sample) >= rolling_window:
++        for end in range(rolling_window, len(sample) + 1):
++            window = sample.iloc[end - rolling_window:end]
++            ic_value = window["signal"].corr(window["forward_return"], method="spearman")
++            if pd.notna(ic_value):
++                rolling_ics.append(float(ic_value))
++
++    rolling_mean = float(np.mean(rolling_ics)) if rolling_ics else None
++    latest_rolling = rolling_ics[-1] if rolling_ics else None
++    quality_ref = rolling_mean if rolling_mean is not None else ic_full
++
++    if quality_ref is None:
++        quality = "noise"
++        directionality = "undetermined"
++        interpretation = "樣本雖足夠，但 IC 無法穩定估計。"
++    else:
++        directionality = "positive" if quality_ref > 0 else "negative" if quality_ref < 0 else "flat"
++        abs_ic = abs(quality_ref)
++        if abs_ic >= 0.05:
++            quality = "strong"
++            interpretation = "訊號具可觀統計預測力。"
++        elif abs_ic >= 0.02:
++            quality = "weak"
++            interpretation = "訊號微弱但仍可追蹤。"
++        else:
++            quality = "noise"
++            interpretation = "訊號目前接近雜訊。"
++        if quality_ref < 0:
++            interpretation += " 當前更像反向/contrarian edge。"
++        elif quality_ref > 0:
++            interpretation += " 當前屬順向 edge。"
++
++    return {
++        "symbol": s,
++        "horizon_days": horizon,
++        "rolling_window": rolling_window,
++        "sample_count": int(len(sample)),
++        "ic_full_sample": round(ic_full, 4) if ic_full is not None else None,
++        "ic_rolling_mean": round(rolling_mean, 4) if rolling_mean is not None else None,
++        "ic_latest_rolling": round(latest_rolling, 4) if latest_rolling is not None else None,
++        "signal_quality": quality,
++        "directionality": directionality,
++        "interpretation": interpretation,
++        "methodology": (
++            "使用 nlp_insights 中每日最新 nlp_alpha，對齊到訊號後下一個交易日收盤作為起點，"
++            f"計算 {horizon} 日 forward return；IC 採 Spearman rank correlation。"
++        ),
++    }
++
++
++def build_nlp_signal_ic_report(symbol: str, horizon_days: int = 5, lookback_signals: int = 120) -> str:
++    payload = compute_nlp_signal_ic(symbol, horizon_days=horizon_days, lookback_signals=lookback_signals)
++    if payload.get("error"):
++        return format_tool_error(f"❌ {payload['error']}", data_unavailable=True)
++
++    def _fmt_ic(value):
++        return f"{value:+.3f}" if isinstance(value, (int, float)) else "N/A"
++
++    report = f"🧪 === {payload['symbol']} NLP Alpha IC 追蹤 ===\n"
++    report += (
++        f"● Horizon: {payload['horizon_days']}D | Samples: {payload['sample_count']} | "
++        f"Rolling Window: {payload['rolling_window']}\n"
++    )
++    report += (
++        f"● Full IC: {_fmt_ic(payload.get('ic_full_sample'))} | "
++        f"Rolling Mean: {_fmt_ic(payload.get('ic_rolling_mean'))} | "
++        f"Latest Rolling: {_fmt_ic(payload.get('ic_latest_rolling'))}\n"
++    )
++    report += f"● 品質: {payload['signal_quality']} | 方向: {payload['directionality']}\n"
++    report += f"● 解讀: {payload['interpretation']}\n"
++    report += f"● 註記: {payload['methodology']}"
++    return report
++
++
++@tool()
++def get_nlp_signal_ic(symbol: str, horizon_days: int = 5, lookback_signals: int = 120) -> str:
++    """Tracks the Information Coefficient of persisted NLP alpha signals versus future returns."""
++    return build_nlp_signal_ic_report(symbol, horizon_days, lookback_signals)
++
++
++def build_movers_report() -> str:
++    """Pure market-movers logic for direct callers and tests."""
++    report = "🚀 === 市場異動排行榜 (Movers) ===\n"
+     
+     if FMP_KEY:
+         try:
+diff --git a/engine_memory.py b/engine_memory.py
+index fd7caf1..fbd5973 100644
+--- a/engine_memory.py
++++ b/engine_memory.py
+@@ -73,13 +73,69 @@ def _shorten(text: Optional[str], limit: int = 120) -> str:
+         return compact
+     return compact[:limit - 3].rstrip() + "..."
+ 
+-def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+-    if not value:
+-        return None
+-    try:
+-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+-    except ValueError:
+-        return None
++def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
++    if not value:
++        return None
++    try:
++        return datetime.fromisoformat(value.replace("Z", "+00:00"))
++    except ValueError:
++        return None
++
++
++def _is_blank_value(value: Any) -> bool:
++    if value is None:
++        return True
++    if isinstance(value, str):
++        return value.strip() == ""
++    if isinstance(value, (list, tuple, set, dict)):
++        return len(value) == 0
++
++    empty_attr = getattr(value, "empty", None)
++    if isinstance(empty_attr, bool):
++        return empty_attr
++
++    size_attr = getattr(value, "size", None)
++    if size_attr is not None:
++        try:
++            return int(size_attr) == 0
++        except (TypeError, ValueError):
++            pass
++
++    return False
++
++
++def _coerce_text_items(items: Any, default: str = "無") -> List[str]:
++    if _is_blank_value(items):
++        return [default]
++    if isinstance(items, str):
++        return [items]
++    if hasattr(items, "tolist") and not isinstance(items, (list, tuple, set, dict, str)):
++        try:
++            items = items.tolist()
++        except Exception:
++            return [str(items)]
++    if isinstance(items, (list, tuple, set)):
++        cleaned = [str(item).strip() for item in items if not _is_blank_value(item)]
++        return cleaned or [default]
++    return [str(items)]
++
++
++def _to_comparable(value: Any) -> Any:
++    if isinstance(value, dict):
++        return {key: _to_comparable(item) for key, item in value.items()}
++    if isinstance(value, (list, tuple, set)):
++        return [_to_comparable(item) for item in value]
++    if hasattr(value, "tolist") and not isinstance(value, (str, bytes, list, tuple, set, dict)):
++        try:
++            return _to_comparable(value.tolist())
++        except Exception:
++            pass
++    if hasattr(value, "item") and callable(value.item):
++        try:
++            return value.item()
++        except Exception:
++            pass
++    return value
+ 
+ def _merge_defaults(defaults: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+     merged = copy.deepcopy(defaults)
+@@ -245,26 +301,26 @@ def _format_signal_value(key: str, value: Any) -> str:
+         return f"{value:.2f}"
+     return str(value)
+ 
+-def format_key_signals(signals: Optional[Dict[str, Any]], max_items: int = 4) -> str:
+-    if not signals:
+-        return ""
+-    signal_map = [
+-        ("gexBillions", "GEX", "B"),
++def format_key_signals(signals: Optional[Dict[str, Any]], max_items: int = 4) -> str:
++    if not signals:
++        return ""
++    signal_map = [
++        ("gexBillions", "GEX", "B"),
+         ("vixZ", "VIX_Z", ""),
+         ("dixPr", "DIX_PR", ""),
+         ("spx", "SPX", ""),
+         ("yieldCurve10Y2Y", "YC_10Y2Y", ""),
+         ("sentimentScore", "SENT", ""),
+-    ]
+-    parts = []
+-    for key, label, suffix in signal_map:
+-        value = signals.get(key)
+-        if value in (None, "", []):
+-            continue
+-        parts.append(f"{label}={_format_signal_value(key, value)}{suffix}")
+-        if len(parts) >= max_items:
+-            break
+-    return ", ".join(parts)
++    ]
++    parts = []
++    for key, label, suffix in signal_map:
++        value = signals.get(key)
++        if _is_blank_value(value):
++            continue
++        parts.append(f"{label}={_format_signal_value(key, value)}{suffix}")
++        if len(parts) >= max_items:
++            break
++    return ", ".join(parts)
+ 
+ class Brain:
+     """
+@@ -595,7 +651,7 @@ class Brain:
+         self._save()
+         return True
+ 
+-    def _render_market_regime_markdown(self, market: Dict[str, Any], heartbeat: Dict[str, Any]) -> str:
++    def _render_market_regime_markdown(self, market: Dict[str, Any], heartbeat: Dict[str, Any]) -> str:
+         signal_labels = {
+             "yieldCurve10Y2Y": "Yield Curve 10Y-2Y",
+             "fedFundsRate": "Fed Funds",
+@@ -612,13 +668,14 @@ class Brain:
+             "vixZ": "VIX Z",
+             "skewPr": "SKEW PR"
+         }
+-        watchpoints = market.get("watchpoints") or ["無"]
+-        reasons = market.get("reasons") or ["無"]
+-        signals = market.get("signals") or {}
+-        signal_lines = [
+-            f"- {signal_labels.get(key, key)}: {value}"
+-            for key, value in signals.items()
+-        ] or ["- 無"]
++        watchpoints = _coerce_text_items(market.get("watchpoints"))
++        reasons = _coerce_text_items(market.get("reasons"))
++        signals = market.get("signals") or {}
++        signal_lines = [
++            f"- {signal_labels.get(key, key)}: {value}"
++            for key, value in signals.items()
++            if not _is_blank_value(value)
++        ] or ["- 無"]
+ 
+         lines = [
+             "# Persistent Macro Regime",
+@@ -643,10 +700,10 @@ class Brain:
+         ]
+         return "\n".join(lines)
+ 
+-    def _market_regime_changed(self, new_market: Dict[str, Any]) -> bool:
+-        current = self.state.get("marketRegime", _default_market_regime())
+-        keys = ["summary", "state", "riskScore", "watchpoints", "reasons", "signals"]
+-        return any(current.get(key) != new_market.get(key) for key in keys)
++    def _market_regime_changed(self, new_market: Dict[str, Any]) -> bool:
++        current = self.state.get("marketRegime", _default_market_regime())
++        keys = ["summary", "state", "riskScore", "watchpoints", "reasons", "signals"]
++        return any(_to_comparable(current.get(key)) != _to_comparable(new_market.get(key)) for key in keys)
+ 
+     # ==================== Queries (讀取記憶) ====================
+ 
+@@ -684,16 +741,16 @@ class Brain:
+         age_seconds = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+         return age_seconds > max_age_minutes * 60
+ 
+-    def get_cognitive_context(self, max_age_minutes: int = 180) -> str:
+-        market = self.get_market_regime(max_age_minutes=max_age_minutes)
+-        watchpoints = market.get("watchpoints") or ["無"]
+-        reasons = market.get("reasons") or ["無"]
+-        signals = market.get("signals") or {}
+-        frontal_lobe = self.state["frontalLobe"] or "空白 (首次運行)"
+-
+-        signal_summary = ", ".join([
+-            f"{key}={value}" for key, value in signals.items() if value not in (None, "", [])
+-        ]) or "無"
++    def get_cognitive_context(self, max_age_minutes: int = 180) -> str:
++        market = self.get_market_regime(max_age_minutes=max_age_minutes)
++        watchpoints = _coerce_text_items(market.get("watchpoints"))
++        reasons = _coerce_text_items(market.get("reasons"))
++        signals = market.get("signals") or {}
++        frontal_lobe = self.state["frontalLobe"] or "空白 (首次運行)"
++
++        signal_summary = ", ".join([
++            f"{key}={value}" for key, value in signals.items() if not _is_blank_value(value)
++        ]) or "無"
+         watchpoints_text = "\n".join([f"  - {item}" for item in watchpoints])
+         reasons_text = "\n".join([f"  - {item}" for item in reasons[:5]])
+         frontal_lobe_text = "\n".join([f"  {line}" for line in frontal_lobe.splitlines()])
+@@ -794,28 +851,31 @@ class Brain:
+         )
+         return {"success": True, "message": f"Emotion: {old_emotion} -> {emotion}"}
+ 
+-    def update_market_regime(
+-        self,
+-        summary: str,
+-        regime: Optional[str] = None,
+-        risk_score: Optional[int] = None,
++    def update_market_regime(
++        self,
++        summary: str,
++        regime: Optional[str] = None,
++        risk_score: Optional[int] = None,
+         watchpoints: Optional[List[str]] = None,
+         reasons: Optional[List[str]] = None,
+         signals: Optional[Dict[str, Any]] = None,
+         source: str = "manual",
+         updated_at: Optional[str] = None
+-    ) -> Dict[str, Any]:
+-        previous_market = copy.deepcopy(self.state["marketRegime"])
+-        cleaned_market = {
+-            "summary": summary.strip(),
+-            "state": regime or self.state["marketRegime"].get("state") or "未初始化",
+-            "riskScore": risk_score if risk_score is not None else self.state["marketRegime"].get("riskScore"),
+-            "updatedAt": updated_at or _utc_now_iso(),
+-            "source": source,
+-            "watchpoints": [item.strip() for item in (watchpoints or []) if item and item.strip()],
+-            "reasons": [item.strip() for item in (reasons or []) if item and item.strip()],
+-            "signals": dict(signals or {})
+-        }
++    ) -> Dict[str, Any]:
++        previous_market = copy.deepcopy(self.state["marketRegime"])
++        normalized_watchpoints = [item.strip() for item in _coerce_text_items(watchpoints, default="") if item and item.strip()]
++        normalized_reasons = [item.strip() for item in _coerce_text_items(reasons, default="") if item and item.strip()]
++        normalized_signals = _to_comparable(dict(signals)) if isinstance(signals, dict) else {}
++        cleaned_market = {
++            "summary": summary.strip(),
++            "state": regime or self.state["marketRegime"].get("state") or "未初始化",
++            "riskScore": risk_score if risk_score is not None else self.state["marketRegime"].get("riskScore"),
++            "updatedAt": updated_at or _utc_now_iso(),
++            "source": source,
++            "watchpoints": normalized_watchpoints,
++            "reasons": normalized_reasons,
++            "signals": normalized_signals,
++        }
+         if not cleaned_market["watchpoints"]:
+             cleaned_market["watchpoints"] = self.state["marketRegime"].get("watchpoints", [])
+         if not cleaned_market["reasons"]:
+diff --git a/engine_portfolio.py b/engine_portfolio.py
+index 1cda8cc..89b296a 100644
+--- a/engine_portfolio.py
++++ b/engine_portfolio.py
+@@ -561,6 +561,23 @@ def _build_current_holdings_weights() -> tuple[Dict[str, float], List[Dict[str,
+     return ({pos["symbol"]: pos["market_value_twd"] / total_mv for pos in holdings}, holdings)
+ 
+ 
++def _parse_symbol_input(symbols: str | List[str] | None) -> List[str]:
++    if symbols is None:
++        return []
++    raw_items = symbols if isinstance(symbols, list) else str(symbols).replace(",", " ").split()
++    normalized = []
++    for item in raw_items:
++        symbol = normalize_ticker(str(item))
++        if not symbol:
++            continue
++        s = symbol.upper()
++        if s.isdigit():
++            s += ".TW"
++        if s not in normalized:
++            normalized.append(s)
++    return normalized
++
++
+ def build_portfolio_analysis() -> Dict[str, Any]:
+     """生成持倉健檢摘要，用於系統自動更新額葉。"""
+     snapshots = _build_live_position_snapshots(_load_portfolio_rows())
+@@ -906,6 +923,93 @@ def get_portfolio_beta_attribution(benchmark: str = "SPY", period: str = "6mo")
+     return build_portfolio_beta_report(benchmark, period)
+ 
+ 
++def compute_inverse_vol_weights(symbols: List[str], lookback: int = 120, period: str = "1y") -> Dict[str, Any]:
++    cleaned = _parse_symbol_input(symbols)
++    if not cleaned:
++        return {"error": "沒有可用標的可做 inverse-vol 配置。"}
++
++    effective_lookback = max(int(lookback), 20)
++    annualized_vols: Dict[str, float] = {}
++    skipped: Dict[str, str] = {}
++
++    for symbol in cleaned:
++        try:
++            history = get_ticker(symbol, cache_level="daily").history(period=period, interval="1d")
++        except Exception as exc:
++            skipped[symbol] = f"價格抓取失敗: {exc}"
++            continue
++        if history.empty or "Close" not in history.columns:
++            skipped[symbol] = "缺少 Close 歷史資料"
++            continue
++
++        close = pd.to_numeric(history["Close"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
++        returns = close.pct_change().replace([np.inf, -np.inf], np.nan).dropna().tail(effective_lookback)
++        if len(returns) < min(effective_lookback, 20):
++            skipped[symbol] = f"有效樣本不足 ({len(returns)})"
++            continue
++
++        vol = float(returns.std(ddof=0) * np.sqrt(TRADING_DAYS_PER_YEAR))
++        if not np.isfinite(vol) or vol <= 0:
++            skipped[symbol] = "波動率無法計算"
++            continue
++        annualized_vols[symbol] = vol
++
++    if not annualized_vols:
++        return {"error": "所有標的都缺少足夠資料，無法計算 inverse-vol 權重。"}
++
++    inverse_vols = {symbol: 1 / vol for symbol, vol in annualized_vols.items()}
++    total_inverse = sum(inverse_vols.values())
++    weights = {symbol: inverse_vols[symbol] / total_inverse for symbol in annualized_vols}
++    risk_budget_proxy = {symbol: weights[symbol] * annualized_vols[symbol] for symbol in annualized_vols}
++
++    return {
++        "lookback": effective_lookback,
++        "weights": {symbol: round(weight, 4) for symbol, weight in weights.items()},
++        "annualized_vols": {symbol: round(vol, 4) for symbol, vol in annualized_vols.items()},
++        "risk_budget_proxy": {symbol: round(risk_budget_proxy[symbol], 4) for symbol in annualized_vols},
++        "skipped": skipped,
++        "methodology": "以近 N 日年化波動率做 inverse-vol weighting；這是簡化版 risk parity proxy，未納入協方差矩陣最佳化。",
++    }
++
++
++def build_risk_parity_report(symbols: str = "", lookback: int = 120, period: str = "1y") -> str:
++    source_symbols = _parse_symbol_input(symbols)
++    source_label = "指定標的"
++    if not source_symbols:
++        holdings, _ = _build_current_holdings_weights()
++        source_symbols = list(holdings.keys())
++        source_label = "目前持倉"
++    if not source_symbols:
++        return format_tool_error("❌ 無有效持倉或輸入標的可做配置。", data_unavailable=True)
++
++    payload = compute_inverse_vol_weights(source_symbols, lookback=lookback, period=period)
++    if payload.get("error"):
++        return format_tool_error(f"❌ {payload['error']}", data_unavailable=True)
++
++    ranked = sorted(payload["weights"], key=lambda symbol: payload["weights"][symbol], reverse=True)
++    report = "⚖️ === Inverse-Vol Risk Parity Proxy ===\n"
++    report += f"● 來源: {source_label} | Lookback: {payload['lookback']} 日\n"
++    for symbol in ranked:
++        report += (
++            f"● {symbol}: 權重 {payload['weights'][symbol] * 100:.1f}% | "
++            f"Ann Vol {payload['annualized_vols'][symbol] * 100:.1f}% | "
++            f"Risk Budget Proxy {payload['risk_budget_proxy'][symbol]:.4f}\n"
++        )
++
++    if payload["skipped"]:
++        skipped = "; ".join(f"{symbol}({reason})" for symbol, reason in sorted(payload["skipped"].items()))
++        report += f"● 跳過: {skipped}\n"
++
++    report += f"● 註記: {payload['methodology']}"
++    return report
++
++
++@tool()
++def get_risk_parity_weights(symbols: str = "", lookback: int = 120, period: str = "1y") -> str:
++    """Suggests simplified inverse-vol weights for supplied symbols or the current holdings."""
++    return build_risk_parity_report(symbols, lookback, period)
++
++
+ def calculate_position_pnl(symbol: str, current_price: float, shares: float, historical_twd_cost: float, is_us_stock: bool) -> dict:
+     """Pure PnL logic for direct callers and tests."""
+     # 識別市場
+diff --git a/requirements.txt b/requirements.txt
+index c6a054b..38a79c1 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -16,3 +16,4 @@ finnhub-python
+ parsel
+ tqdm
+ fubon-neo-fugle-marketdata
++statsmodels

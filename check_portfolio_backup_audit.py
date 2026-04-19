@@ -34,7 +34,11 @@ class PortfolioBackupAuditChecks(unittest.TestCase):
             )
             conn.commit()
 
-        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0):
+        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0), patch.object(
+            engine_portfolio,
+            "_apply_pretrade_risk_gate",
+            return_value={"allowed": True, "approved_shares": 2.0, "approved_twd_total": 6400.0, "message": "", "note": None},
+        ):
             engine_portfolio.execute_position_update("AAPL", 100.0, 2.0, action="buy")
             engine_portfolio.execute_position_update("AAPL", 120.0, 1.0, action="sell")
             engine_portfolio.execute_position_update("MSFT", 200.0, 3.0, action="set", locked=1)

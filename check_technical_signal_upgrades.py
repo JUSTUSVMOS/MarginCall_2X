@@ -116,6 +116,15 @@ class TechnicalSignalUpgradeChecks(unittest.TestCase):
             ), patch.object(engine_router, "get_ticker", return_value=fake_ticker), patch.object(
                 engine_router.risk, "calculate_buying_pressure", return_value=-0.95
             ), patch.object(
+                engine_router.risk, "get_global_risk_snapshot", return_value={"state": "🟡 整理", "riskScore": 42}
+            ), patch.object(
+                engine_router.market,
+                "compute_nlp_signal_ic",
+                return_value={"signal_quality": "strong", "directionality": "positive", "ic_rolling_mean": 0.08},
+            ), patch(
+                "engine_portfolio.compute_portfolio_risk_overlay",
+                return_value={"trade_mode_label": "🟢 Normal", "size_multiplier": 1.0, "recommended_gross_scale": 1.0},
+            ), patch.object(
                 engine_router.market, "build_technical_snapshot", return_value=technical_snapshot
             ), patch.object(
                 engine_router.market, "build_technical_report", return_value="TECH"

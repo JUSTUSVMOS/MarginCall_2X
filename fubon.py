@@ -186,7 +186,7 @@ def init_fubon():
     my_id = os.getenv("FUBON_ID")
     api_key = os.getenv("FUBON_API_KEY")
     cert_pwd = os.getenv("FUBON_CERT_PWD")
-    cert_path = "./R124949189.pfx"
+    cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R124949189.pfx")
 
     try:
         logger.info(f"🔌 正在連線富邦主機 (ID: {my_id})...")
@@ -214,7 +214,7 @@ def get_fubon_inventories():
         my_id = os.getenv("FUBON_ID")
         api_key = os.getenv("FUBON_API_KEY")
         cert_pwd = os.getenv("FUBON_CERT_PWD")
-        cert_path = "./R124949189.pfx"
+        cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R124949189.pfx")
 
         login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
         if not login_res.is_success or not login_res.data:
@@ -227,8 +227,15 @@ def get_fubon_inventories():
         inv_res = fubon_sdk.accounting.inventories(acc)
         if inv_res.is_success:
             for item in inv_res.data:
-                if item.today_qty > 0:
-                    inventory_map[item.stock_no] = {'shares': item.today_qty, 'cost': 0.0}
+                # 處理整股與零股 (odd lots)
+                reg_qty = getattr(item, 'today_qty', 0)
+                odd_qty = 0
+                if hasattr(item, 'odd'):
+                    odd_qty = getattr(item.odd, 'today_qty', 0)
+                
+                total_qty = reg_qty + odd_qty
+                if total_qty > 0:
+                    inventory_map[item.stock_no] = {'shares': total_qty, 'cost': 0.0}
 
         # 2. 從未實現損益補完數據 (包含 FMP 抓不到的成本資訊)
         unreal_res = fubon_sdk.accounting.unrealized_gains_and_loses(acc)
@@ -258,7 +265,7 @@ def get_fubon_bank_remain():
         my_id = os.getenv("FUBON_ID")
         api_key = os.getenv("FUBON_API_KEY")
         cert_pwd = os.getenv("FUBON_CERT_PWD")
-        cert_path = "./R124949189.pfx"
+        cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R124949189.pfx")
         login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
         if login_res.is_success and login_res.data:
             acc = login_res.data[0]

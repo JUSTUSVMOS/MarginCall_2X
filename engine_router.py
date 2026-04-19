@@ -1,6 +1,8 @@
 import os
 import logging
 import datetime
+import time
+import threading
 import yfinance as yf
 from yf_session import get_ticker, get_download
 import json
@@ -14,9 +16,133 @@ from src.database import db_lock, get_connection
 # 設定日誌
 logger = logging.getLogger(__name__)
 
+_nlp_ic_cache = {"entries": {}, "expiry": 1800}
+_nlp_ic_cache_lock = threading.Lock()
+
 
 def _safe_round(value, digits=4):
     return round(value, digits) if isinstance(value, (int, float)) else value
+
+
+def _get_cached_nlp_signal_ic(symbol: str, horizon_days: int = 5, lookback_signals: int = 120) -> dict:
+    cache_key = (market.normalize_ticker(symbol), int(horizon_days), int(lookback_signals))
+    now = time.time()
+    with _nlp_ic_cache_lock:
+        cached = _nlp_ic_cache["entries"].get(cache_key)
+        if cached and (now - cached["timestamp"] < _nlp_ic_cache["expiry"]):
+            return dict(cached["payload"])
+
+    payload = market.compute_nlp_signal_ic(symbol, horizon_days=horizon_days, lookback_signals=lookback_signals)
+    with _nlp_ic_cache_lock:
+        _nlp_ic_cache["entries"][cache_key] = {"timestamp": now, "payload": dict(payload)}
+    return dict(payload)
+
+
+def _build_alpha_confidence_overlay(
+    symbol: str,
+    nlp_data: dict,
+    risk_snapshot: dict | None = None,
+    portfolio_overlay: dict | None = None,
+    ic_payload: dict | None = None,
+) -> dict:
+    raw_alpha = nlp_data.get("nlp_alpha")
+    overlay = {
+        "raw_alpha": raw_alpha,
+        "effective_alpha": raw_alpha,
+        "combined_multiplier": 1.0,
+        "ic_multiplier": 1.0,
+        "regime_multiplier": 1.0,
+        "drawdown_multiplier": 1.0,
+        "ic_quality": "unknown",
+        "ic_rolling_mean": None,
+        "directionality": "undetermined",
+        "summary": "NLP alpha 尚未進行風控縮放。",
+        "reasons": [],
+    }
+    if not isinstance(raw_alpha, (int, float)):
+        return overlay
+
+    ic_payload_data = {}
+    ic_multiplier = 0.9
+    reasons = []
+    try:
+        ic_payload_data = dict(ic_payload) if isinstance(ic_payload, dict) else _get_cached_nlp_signal_ic(
+            symbol,
+            horizon_days=5,
+            lookback_signals=120,
+        )
+    except Exception as exc:
+        logger.debug(f"Alpha IC overlay failed for {symbol}: {exc}")
+        ic_payload_data = {"error": str(exc)}
+
+    ic_quality = ic_payload_data.get("signal_quality", "unknown")
+    directionality = ic_payload_data.get("directionality", "undetermined")
+    ic_mean = ic_payload_data.get("ic_rolling_mean")
+
+    if ic_payload_data.get("error"):
+        ic_multiplier = 0.9
+        reasons.append("IC 樣本不足，先維持輕度保守縮放")
+    elif directionality == "negative":
+        ic_multiplier = 0.35
+        reasons.append("NLP IC 轉負，模型近期更像反向訊號")
+    elif ic_quality == "strong":
+        ic_multiplier = 1.0
+        reasons.append("NLP IC 穩定為正，可維持原始 alpha")
+    elif ic_quality == "weak":
+        ic_multiplier = 0.75
+        reasons.append("NLP IC 偏弱，alpha 降權")
+    else:
+        ic_multiplier = 0.55
+        reasons.append("NLP IC 接近雜訊，alpha 明顯降權")
+
+    state = (risk_snapshot or {}).get("state", "🟡 整理")
+    if raw_alpha >= 0:
+        if str(state).startswith("🟢"):
+            regime_multiplier = 1.0
+        elif str(state).startswith("🟡"):
+            regime_multiplier = 0.85
+        elif str(state).startswith("🔴"):
+            regime_multiplier = 0.65
+        else:
+            regime_multiplier = 0.35
+        if regime_multiplier < 1.0:
+            reasons.append(f"市場 regime {state}，正向 alpha 進一步降權")
+    else:
+        if str(state).startswith("💀"):
+            regime_multiplier = 1.10
+            reasons.append("系統風險偏高，偏空/防守 alpha 可略提高權重")
+        elif str(state).startswith("🔴"):
+            regime_multiplier = 1.05
+            reasons.append("警戒 regime 下，防守型 alpha 保持較高權重")
+        else:
+            regime_multiplier = 1.0
+
+    drawdown_multiplier = 1.0
+    if raw_alpha >= 0 and isinstance(portfolio_overlay, dict) and not portfolio_overlay.get("error"):
+        drawdown_multiplier = float(portfolio_overlay.get("size_multiplier", 1.0))
+        if drawdown_multiplier < 1.0:
+            reasons.append(f"組合回撤節流 {portfolio_overlay.get('trade_mode_label', '')}，新增多單需縮倉")
+
+    combined = max(0.0, min(1.25, ic_multiplier * regime_multiplier * drawdown_multiplier))
+    effective_alpha = round(float(raw_alpha) * combined, 4)
+    overlay.update(
+        {
+            "effective_alpha": effective_alpha,
+            "combined_multiplier": round(combined, 4),
+            "ic_multiplier": round(ic_multiplier, 4),
+            "regime_multiplier": round(regime_multiplier, 4),
+            "drawdown_multiplier": round(drawdown_multiplier, 4),
+            "ic_quality": ic_quality,
+            "ic_rolling_mean": _safe_round(ic_mean, 4),
+            "directionality": directionality,
+            "summary": (
+                f"Raw {raw_alpha:+.2f} -> Adjusted {effective_alpha:+.2f} "
+                f"(IC x{ic_multiplier:.2f} / Regime x{regime_multiplier:.2f} / DD x{drawdown_multiplier:.2f})"
+            ),
+            "reasons": reasons,
+        }
+    )
+    return overlay
 
 
 def _decode_nlp_summary_payload(summary_text):
@@ -238,7 +364,13 @@ def parse_pc_ratio(insight_text: str) -> float:
         logger.debug(f"Failed to parse P/C ratio: {e}")
     return None
 
-def fetch_strat_data(symbol: str) -> dict:
+def fetch_strat_data(
+    symbol: str,
+    *,
+    risk_snapshot: dict | None = None,
+    portfolio_overlay: dict | None = None,
+    alpha_ic_payload: dict | None = None,
+) -> dict:
     """
     根據資產類型分流抓取數據，並實作 CVD & NLP 雙重熔斷中斷。
     警報交由可選 callback 發送，避免資料層直接依賴 Telegram。
@@ -250,6 +382,27 @@ def fetch_strat_data(symbol: str) -> dict:
     
     # --- 核心升級：抓取 NLP Alpha 因子 ---
     nlp_data = fetch_nlp_alpha(symbol)
+    if risk_snapshot is None:
+        try:
+            risk_snapshot = risk.get_global_risk_snapshot()
+        except Exception as risk_exc:
+            logger.debug(f"Risk snapshot load failed for {symbol}: {risk_exc}")
+            risk_snapshot = {"error": str(risk_exc)}
+    if portfolio_overlay is None:
+        try:
+            import engine_portfolio as portfolio
+            portfolio_overlay = portfolio.compute_portfolio_risk_overlay()
+        except Exception as overlay_exc:
+            logger.debug(f"Portfolio overlay load failed for {symbol}: {overlay_exc}")
+            portfolio_overlay = {"error": str(overlay_exc)}
+    alpha_overlay = _build_alpha_confidence_overlay(
+        symbol,
+        nlp_data,
+        risk_snapshot=risk_snapshot,
+        portfolio_overlay=portfolio_overlay,
+        ic_payload=alpha_ic_payload,
+    )
+    nlp_data = {**nlp_data, "alpha_overlay": alpha_overlay}
     
     # --- 核心升級：區分系統性 vs 個股風險 ---
     risk_type, excess = get_relative_move(symbol)
@@ -262,6 +415,23 @@ def fetch_strat_data(symbol: str) -> dict:
         "relative_move": {
             "risk_type": risk_type,
             "excess_return": round(excess, 4)
+        },
+        "portfolio_overlay": portfolio_overlay,
+        "risk_snapshot": {
+            "state": risk_snapshot.get("state"),
+            "riskScore": risk_snapshot.get("riskScore"),
+        },
+        "leading_indicators": {
+            "alpha_raw": _safe_round(nlp_data.get("nlp_alpha"), 4),
+            "alpha_adjusted": alpha_overlay.get("effective_alpha"),
+            "alpha_scale": alpha_overlay.get("combined_multiplier"),
+            "alpha_governor": alpha_overlay.get("summary"),
+            "alpha_ic_quality": alpha_overlay.get("ic_quality"),
+            "alpha_ic_mean": alpha_overlay.get("ic_rolling_mean"),
+            "portfolio_trade_mode": portfolio_overlay.get("trade_mode_label"),
+            "portfolio_gross_scale": portfolio_overlay.get("recommended_gross_scale"),
+            "risk_state": risk_snapshot.get("state"),
+            "risk_score": risk_snapshot.get("riskScore"),
         },
         "metrics": {},
         "raw_profile": profile
@@ -348,7 +518,7 @@ def fetch_strat_data(symbol: str) -> dict:
                 "option_volatility": option_vol_context,
             }
 
-            data["leading_indicators"] = {
+            data["leading_indicators"].update({
                 "cvd": round(cvd, 4),
                 "pc_ratio": _safe_round(pc_ratio, 4),
                 "rsi_divergence": divergence_label,
@@ -369,7 +539,7 @@ def fetch_strat_data(symbol: str) -> dict:
                     if isinstance(pc_ratio, (int, float)) and pc_ratio < 0.5
                     else "⚪ 中性"
                 ),
-            }
+            })
 
         elif asset_type == 'Value_Holding':
             # 抓取深度基本面 (趨勢、ROE、債務)
@@ -407,16 +577,34 @@ def get_strat_context(user_text: str) -> str:
     """
     symbols = detect_symbols(user_text)
     if not symbols: return ""
+
+    try:
+        shared_risk_snapshot = risk.get_global_risk_snapshot()
+    except Exception as exc:
+        logger.debug(f"Shared risk snapshot load failed: {exc}")
+        shared_risk_snapshot = {"error": str(exc)}
+    try:
+        import engine_portfolio as portfolio
+        shared_portfolio_overlay = portfolio.compute_portfolio_risk_overlay()
+    except Exception as exc:
+        logger.debug(f"Shared portfolio overlay load failed: {exc}")
+        shared_portfolio_overlay = {"error": str(exc)}
     
     context = "\n【🛡️ 策略路由系統已啟動】\n"
     for sym in symbols:
-        data = fetch_strat_data(sym)
+        data = fetch_strat_data(
+            sym,
+            risk_snapshot=shared_risk_snapshot,
+            portfolio_overlay=shared_portfolio_overlay,
+        )
         context += f"\n--- 標的: {sym} ({data.get('asset_type')}) ---\n"
         # 整合技術指標與語意情緒
         combined_metrics = {
             "market_data": data.get('metrics', {}),
             "leading_indicators": data.get('leading_indicators', {}),
             "relative_move": data.get('relative_move', {}),
+            "portfolio_overlay": data.get('portfolio_overlay', {}),
+            "risk_snapshot": data.get('risk_snapshot', {}),
             "nlp_sentiment_alpha": data.get('nlp_insights', {})
         }
         context += json.dumps(combined_metrics, ensure_ascii=False, separators=(',', ':'))

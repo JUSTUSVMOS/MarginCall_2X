@@ -92,6 +92,15 @@ class RouterPayloadTests(unittest.TestCase):
         ), patch.object(engine_router, "get_ticker", return_value=fake_ticker), patch.object(
             engine_router.risk, "calculate_buying_pressure", return_value=-0.6
         ), patch.object(
+            engine_router.risk, "get_global_risk_snapshot", return_value={"state": "🟡 整理", "riskScore": 42}
+        ), patch.object(
+            engine_router.market,
+            "compute_nlp_signal_ic",
+            return_value={"signal_quality": "strong", "directionality": "positive", "ic_rolling_mean": 0.08},
+        ), patch(
+            "engine_portfolio.compute_portfolio_risk_overlay",
+            return_value={"trade_mode_label": "🟢 Normal", "size_multiplier": 1.0, "recommended_gross_scale": 1.0},
+        ), patch.object(
             engine_router.market,
             "build_technical_snapshot",
             return_value={
@@ -144,6 +153,10 @@ class AgentPromptTests(unittest.TestCase):
 
         nlp_data = {
             "nlp_alpha": -0.72,
+            "alpha_overlay": {
+                "effective_alpha": -0.46,
+                "summary": "Raw -0.72 -> Adjusted -0.46 (IC x0.75 / Regime x0.85 / DD x1.00)",
+            },
             "signal_pack": {
                 "sec_stance": "bearish",
                 "sec_detail": ["subpoena disclosed", "insider sale picked up"],
@@ -168,6 +181,17 @@ class AgentPromptTests(unittest.TestCase):
                 "mtf_rsi_signal": "🟢 強超賣共振",
                 "mtf_rsi_strength": 2,
                 "signal_reliability": "HIGH",
+                "alpha_raw": -0.72,
+                "alpha_adjusted": -0.46,
+                "alpha_scale": 0.6375,
+                "alpha_ic_quality": "weak",
+                "alpha_governor": "Raw -0.72 -> Adjusted -0.46 (IC x0.75 / Regime x0.85 / DD x1.00)",
+            },
+            "portfolio_overlay": {
+                "trade_mode_label": "🟠 Risk-Off",
+                "current_drawdown": 0.054,
+                "recommended_gross_scale": 0.5,
+                "risk_state": "🔴 警戒",
             },
         }
 
@@ -183,6 +207,8 @@ class AgentPromptTests(unittest.TestCase):
         self.assertIn("P/C + 波動定價: 🟡 P/C 偏高且權利金昂貴，偏向恐慌避險定價", prompt)
         self.assertIn("多時間框 RSI: 🟢 強超賣共振 (強度 2 / 可靠度 HIGH)", prompt)
         self.assertIn("多空矛盾偵測: ⚠️ 散戶情緒看多 vs SEC 官方偏空 -> 散戶陷阱風險", prompt)
+        self.assertIn("風控調整後 Alpha: -0.46", prompt)
+        self.assertIn("組合 Governor: 🟠 Risk-Off", prompt)
 
 
 if __name__ == "__main__":

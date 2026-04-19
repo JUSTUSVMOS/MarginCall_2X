@@ -63,16 +63,23 @@ def generate_final_report(symbol, strat_data, nlp_data):
         signal_pack = None
 
     composite_alpha = nlp_data.get("nlp_alpha", 0)
+    alpha_overlay = nlp_data.get("alpha_overlay") if isinstance(nlp_data.get("alpha_overlay"), dict) else {}
     leading = strat_data.get("leading_indicators", {})
+    portfolio_overlay = strat_data.get("portfolio_overlay", {})
+    adjusted_alpha = alpha_overlay.get("effective_alpha", composite_alpha)
+    adjusted_alpha_display = f"{adjusted_alpha:+.2f}" if isinstance(adjusted_alpha, (int, float)) else "N/A"
+    raw_alpha_display = f"{composite_alpha:+.2f}" if isinstance(composite_alpha, (int, float)) else "N/A"
 
     if signal_pack:
         source_counts = signal_pack.get("source_counts", {})
         nlp_block = f"""
-- 綜合 Alpha: {composite_alpha:+.2f}
-- SEC/官方立場: {signal_pack.get('sec_stance', 'N/A')} ({source_counts.get('sec', 0)} 份來源)
-  事實: {_format_fact_list(signal_pack.get('sec_detail', []))}
-- 宏觀新聞立場: {signal_pack.get('macro_stance', 'N/A')} ({source_counts.get('macro', 0)} 篇來源)
-  事實: {_format_fact_list(signal_pack.get('macro_detail', []))}
+ - 綜合 Alpha(raw): {raw_alpha_display}
+ - 風控調整後 Alpha: {adjusted_alpha_display}
+ - Alpha Governor: {alpha_overlay.get('summary', 'N/A')}
+ - SEC/官方立場: {signal_pack.get('sec_stance', 'N/A')} ({source_counts.get('sec', 0)} 份來源)
+   事實: {_format_fact_list(signal_pack.get('sec_detail', []))}
+ - 宏觀新聞立場: {signal_pack.get('macro_stance', 'N/A')} ({source_counts.get('macro', 0)} 篇來源)
+   事實: {_format_fact_list(signal_pack.get('macro_detail', []))}
 - 散戶情緒: {signal_pack.get('retail_stance', 'N/A')} ({source_counts.get('retail', 0)} 則來源)
   事實: {_format_fact_list(signal_pack.get('retail_detail', []))}
 - 多空矛盾偵測: {signal_pack.get('divergence', '無')}
@@ -84,10 +91,12 @@ def generate_final_report(symbol, strat_data, nlp_data):
         )
     else:
         nlp_block = f"""
-- 綜合 Alpha: {composite_alpha:+.2f}
-- 官方/SEC 訊號: {nlp_data.get('alpha_official', 0):+.2f}
-- 散戶情緒: {nlp_data.get('alpha_retail', 0):+.2f}
-- 語意報告: {nlp_data.get('semantic_summary', '無資料')}
+ - 綜合 Alpha(raw): {raw_alpha_display}
+ - 風控調整後 Alpha: {adjusted_alpha_display}
+ - Alpha Governor: {alpha_overlay.get('summary', 'N/A')}
+ - 官方/SEC 訊號: {nlp_data.get('alpha_official', 0):+.2f}
+ - 散戶情緒: {nlp_data.get('alpha_retail', 0):+.2f}
+ - 語意報告: {nlp_data.get('semantic_summary', '無資料')}
 """.strip()
         nuclear_warning = ""
 
@@ -108,6 +117,18 @@ def generate_final_report(symbol, strat_data, nlp_data):
                 f"- 多時間框 RSI: {leading['mtf_rsi_signal']} "
                 f"(強度 {leading.get('mtf_rsi_strength', 'N/A')} / 可靠度 {leading.get('signal_reliability', 'NORMAL')})"
             )
+        if leading.get("alpha_governor"):
+            leading_lines.append(
+                f"- Alpha Governor: raw {leading.get('alpha_raw', 'N/A')} / adjusted {leading.get('alpha_adjusted', 'N/A')} "
+                f"(scale {leading.get('alpha_scale', 'N/A')}, IC {leading.get('alpha_ic_quality', 'unknown')})"
+            )
+        if isinstance(portfolio_overlay, dict) and not portfolio_overlay.get("error"):
+            leading_lines.append(
+                f"- 組合 Governor: {portfolio_overlay.get('trade_mode_label', 'N/A')} | "
+                f"DD {portfolio_overlay.get('current_drawdown', 0) * 100:.1f}% | "
+                f"Gross {portfolio_overlay.get('recommended_gross_scale', 1.0):.2f}x | "
+                f"Risk {portfolio_overlay.get('risk_state', 'N/A')}"
+            )
         leading_block = "\n".join(leading_lines)
     else:
         leading_block = ""
@@ -126,6 +147,8 @@ def generate_final_report(symbol, strat_data, nlp_data):
 
 【🧠 推論任務】
 - 你必須綜合技術面、官方/宏觀/散戶三維訊號與即時領先指標給出最終交易建議。
+- 若 Alpha Governor 已明顯降權，請不要把 raw alpha 直接當作可滿倉執行的信號。
+- 若組合 Governor 顯示 drawdown / gross scale throttled，請優先給出降槓桿、減倉或等待確認的建議。
 - 若 SEC 官方來源與散戶情緒方向相反，請把官方事實放在更高權重。
 - 若事實欄位提到法律風險、內部人減持、會計異常或已核實的核彈級警報，請在回覆開頭先給強烈風險警告。
 - 請給出具體的「戰略方向」（例如：多頭佈局、觀望、或空頭避險）。

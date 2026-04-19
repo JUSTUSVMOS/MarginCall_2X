@@ -10,6 +10,7 @@ from yf_session import get_ticker, get_download
 
 import logging
 from engine_technical import IndicatorCalculator, analyze_obv_signal, summarize_divergence
+from config import WATCH_LIST
 from src.database import db_lock, get_connection
 from src.symbols import normalize_ticker
 from src.tools import format_tool_error, tool
@@ -54,13 +55,19 @@ def _latest_numeric(value, digits: int = 2):
 def _normalize_lookup_symbol(symbol: str) -> str:
     symbol = normalize_ticker(symbol)
     s = symbol.upper()
-    if s.isdigit():
+    # 支援台股代碼：純數字或包含數字且長度 <= 6 (涵蓋權證如 00981A)
+    is_taiwan_format = any(char.isdigit() for char in s) and (
+        len(s.replace(".TW", "").replace(".TWO", "")) <= 6
+    )
+    if is_taiwan_format and not (s.endswith(".TW") or s.endswith(".TWO")):
         try:
+            # 優先嘗試 .TW (上市)
             ticker = get_ticker(s + ".TW", cache_level="daily")
             info = ticker.fast_info
             if getattr(info, "last_price", None) is not None or getattr(info, "previous_close", None) is not None:
                 s += ".TW"
             else:
+                # 否則 fallback 到 .TWO (上櫃/權證)
                 s += ".TWO"
         except Exception:
             s += ".TWO"
@@ -1437,6 +1444,346 @@ def build_nlp_signal_ic_report(symbol: str, horizon_days: int = 5, lookback_sign
 def get_nlp_signal_ic(symbol: str, horizon_days: int = 5, lookback_signals: int = 120) -> str:
     """Tracks the Information Coefficient of persisted NLP alpha signals versus future returns."""
     return build_nlp_signal_ic_report(symbol, horizon_days, lookback_signals)
+
+
+def _parse_candidate_universe(symbols: str | list[str] | None) -> list[str]:
+    raw_items = WATCH_LIST if symbols in (None, "", []) else symbols
+    if not isinstance(raw_items, list):
+        raw_items = str(raw_items).replace(",", " ").split()
+
+    universe = []
+    for item in raw_items:
+        normalized = _normalize_lookup_symbol(str(item or "").strip())
+        if normalized and normalized not in universe:
+            universe.append(normalized)
+    return universe
+
+
+def _apply_cross_section_score(
+    rows: list[dict],
+    source_key: str,
+    target_key: str,
+    *,
+    invert: bool = False,
+):
+    valid_values = [
+        float(row[source_key])
+        for row in rows
+        if isinstance(row.get(source_key), (int, float)) and np.isfinite(float(row[source_key]))
+    ]
+    mean_value = float(np.mean(valid_values)) if valid_values else 0.0
+    std_value = float(np.std(valid_values, ddof=0)) if len(valid_values) >= 2 else 0.0
+
+    for row in rows:
+        value = row.get(source_key)
+        if not isinstance(value, (int, float)) or not np.isfinite(float(value)) or std_value <= 0:
+            score = 0.0
+        else:
+            score = (float(value) - mean_value) / std_value
+        row[target_key] = round((-score if invert else score), 4)
+
+
+def _compute_liquidity_proxy(symbol: str, period: str = "6mo") -> tuple[float | None, float | None]:
+    try:
+        history = get_ticker(symbol, cache_level="daily").history(period=period, interval="1d")
+    except Exception as exc:
+        logger.debug(f"Liquidity proxy fetch failed for {symbol}: {exc}")
+        return None, None
+    if history.empty or "Close" not in history.columns or "Volume" not in history.columns:
+        return None, None
+
+    close = pd.to_numeric(history["Close"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    volume = pd.to_numeric(history["Volume"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    dollar_volume = (close * volume).dropna()
+    if dollar_volume.empty:
+        return None, None
+
+    avg_dollar_volume_20d = float(dollar_volume.tail(20).mean())
+    liquidity_proxy = float(math.log1p(avg_dollar_volume_20d)) if avg_dollar_volume_20d > 0 else None
+    return liquidity_proxy, avg_dollar_volume_20d
+
+
+def _infer_mean_reversion_edge(mean_reversion: dict) -> float | None:
+    if not isinstance(mean_reversion, dict):
+        return None
+    zscore = _safe_float(mean_reversion.get("zscore"))
+    if zscore is None:
+        return None
+
+    edge = -zscore
+    if not mean_reversion.get("reversion_candidate"):
+        edge *= 0.5
+    half_life = _safe_float(mean_reversion.get("half_life_days"))
+    if half_life is not None and half_life > 30:
+        edge *= 0.7
+    return round(float(edge), 4)
+
+
+def _calibrate_candidate_forecast(row: dict, risk_state: str, portfolio_overlay: dict) -> dict:
+    final_score = float(row.get("final_alpha_score") or 0.0)
+    alpha_adjusted = float(row.get("alpha_adjusted") or 0.0)
+    asset_type = str(row.get("asset_type") or "Unknown")
+    ic_quality = str(row.get("alpha_ic_quality") or "unknown")
+    reversion_candidate = bool(row.get("reversion_candidate"))
+    half_life = _safe_float(row.get("mr_half_life_days"))
+
+    ic_multiplier = {"strong": 1.0, "weak": 0.8, "noise": 0.55, "unknown": 0.65}.get(ic_quality, 0.65)
+    positive_bias = (final_score >= 0) or (alpha_adjusted >= 0)
+    if positive_bias:
+        if str(risk_state).startswith("🟢"):
+            regime_multiplier = 1.0
+        elif str(risk_state).startswith("🟡"):
+            regime_multiplier = 0.9
+        elif str(risk_state).startswith("🔴"):
+            regime_multiplier = 0.7
+        else:
+            regime_multiplier = 0.5
+        drawdown_multiplier = float(portfolio_overlay.get("size_multiplier", 1.0))
+    else:
+        regime_multiplier = 1.0 if not str(risk_state).startswith("💀") else 1.05
+        drawdown_multiplier = 1.0
+
+    signal_strength = min(1.0, (abs(final_score) / 2.5) + (abs(alpha_adjusted) / 1.5))
+    confidence = (0.35 + (0.35 * signal_strength)) * ic_multiplier * regime_multiplier * max(drawdown_multiplier, 0.5)
+    if reversion_candidate:
+        confidence *= 1.05
+    forecast_confidence = round(float(max(0.1, min(0.95, confidence))), 4)
+
+    base_return_bps = (final_score * 85.0) + (alpha_adjusted * 90.0)
+    expected_return_bps = round(
+        float(max(-250.0, min(250.0, base_return_bps * max(forecast_confidence, 0.35)))),
+        1,
+    )
+
+    if reversion_candidate and half_life is not None:
+        holding_horizon_days = int(max(3, min(15, round(half_life))))
+    elif asset_type == "Value_Holding":
+        holding_horizon_days = 20 if expected_return_bps >= 0 else 10
+    elif asset_type == "Macro_Hedge":
+        holding_horizon_days = 10
+    else:
+        holding_horizon_days = 5 if abs(expected_return_bps) >= 60 else 8
+
+    if expected_return_bps >= 80:
+        signal_strength_label = "high_conviction_long"
+    elif expected_return_bps >= 20:
+        signal_strength_label = "long_bias"
+    elif expected_return_bps <= -80:
+        signal_strength_label = "avoid_or_short_bias"
+    elif expected_return_bps <= -20:
+        signal_strength_label = "underweight_bias"
+    else:
+        signal_strength_label = "neutral"
+
+    return {
+        "expected_return_bps": expected_return_bps,
+        "forecast_confidence": forecast_confidence,
+        "holding_horizon_days": holding_horizon_days,
+        "forecast_label": signal_strength_label,
+    }
+
+
+def compute_candidate_alpha_panel(
+    symbols: str | list[str] | None = None,
+    benchmark: str = "SPY",
+    period: str = "6mo",
+    horizon_days: int = 5,
+    lookback_signals: int = 120,
+) -> dict:
+    universe = _parse_candidate_universe(symbols)
+    if not universe:
+        return {"error": "沒有可用候選股可建立 alpha panel。"}
+
+    import engine_portfolio as portfolio
+    import engine_router as router
+    import engine_risk as risk_engine
+
+    try:
+        risk_snapshot = risk_engine.get_global_risk_snapshot()
+    except Exception as exc:
+        logger.debug(f"Candidate alpha panel risk snapshot failed: {exc}")
+        risk_snapshot = {}
+    try:
+        portfolio_overlay = portfolio.compute_portfolio_risk_overlay(benchmark=benchmark, period=period)
+    except Exception as exc:
+        logger.debug(f"Candidate alpha panel portfolio overlay failed: {exc}")
+        portfolio_overlay = {}
+
+    risk_state = str(risk_snapshot.get("state") or "🟡 整理")
+    beta_series_cache: dict[tuple[str, str], pd.Series] = {}
+    rows = []
+
+    for symbol in universe:
+        profile = get_asset_profile(symbol)
+        nlp_data = router.fetch_nlp_alpha(symbol)
+        alpha_overlay = router._build_alpha_confidence_overlay(
+            symbol,
+            nlp_data,
+            risk_snapshot=risk_snapshot,
+            portfolio_overlay=portfolio_overlay,
+        )
+        factor = compute_factor_snapshot(symbol)
+        technical_snapshot = {}
+        try:
+            technical_snapshot = build_technical_snapshot(symbol)
+        except Exception as exc:
+            logger.debug(f"Candidate alpha panel technical snapshot failed for {symbol}: {exc}")
+        mean_reversion = technical_snapshot.get("mean_reversion", {}) if isinstance(technical_snapshot, dict) else {}
+        ic_payload = compute_nlp_signal_ic(
+            symbol,
+            horizon_days=horizon_days,
+            lookback_signals=lookback_signals,
+        )
+        beta_payload = portfolio.compute_portfolio_beta_attribution(
+            {symbol: 1.0},
+            benchmark=benchmark,
+            period=period,
+            series_cache=beta_series_cache,
+        )
+        beta_row = next(iter(beta_payload.get("positions", {}).values()), {}) if not beta_payload.get("error") else {}
+        liquidity_proxy, avg_dollar_volume_20d = _compute_liquidity_proxy(symbol, period=period)
+
+        ic_mean = ic_payload.get("ic_rolling_mean")
+        ic_edge = None
+        if isinstance(ic_mean, (int, float)):
+            ic_edge = float(ic_mean)
+            if ic_payload.get("directionality") == "negative":
+                ic_edge = -abs(ic_edge)
+
+        beta_value = beta_row.get("beta")
+        row = {
+            "symbol": symbol,
+            "asset_type": profile.get("asset_type", "Unknown"),
+            "sector": profile.get("sector", "Unknown"),
+            "industry": profile.get("industry", "Unknown"),
+            "alpha_raw": _safe_float(nlp_data.get("nlp_alpha")),
+            "alpha_adjusted": _safe_float(alpha_overlay.get("effective_alpha")),
+            "alpha_scale": _safe_float(alpha_overlay.get("combined_multiplier")),
+            "alpha_ic_quality": ic_payload.get("signal_quality", "unknown"),
+            "alpha_ic_mean": _safe_float(ic_mean),
+            "directionality": ic_payload.get("directionality", "undetermined"),
+            "momentum_12_1": _safe_float(factor.get("momentum_12_1")),
+            "reversal_1m": _safe_float(factor.get("reversal_1m")),
+            "quality_composite": _safe_float(factor.get("quality_raw")),
+            "earnings_yield": _safe_float(factor.get("earnings_yield")),
+            "book_price": _safe_float(factor.get("book_price")),
+            "mr_zscore": _safe_float(mean_reversion.get("zscore")),
+            "mr_half_life_days": _safe_float(mean_reversion.get("half_life_days")),
+            "reversion_candidate": bool(mean_reversion.get("reversion_candidate")),
+            "mean_reversion_edge": _infer_mean_reversion_edge(mean_reversion),
+            "beta": _safe_float(beta_value),
+            "idio_vol": _safe_float(beta_row.get("idio_vol")),
+            "liquidity_proxy": _safe_float(liquidity_proxy),
+            "avg_dollar_volume_20d": round(avg_dollar_volume_20d, 2) if avg_dollar_volume_20d is not None else None,
+            "beta_penalty_raw": max(0.0, float(beta_value) - 1.0) if isinstance(beta_value, (int, float)) else None,
+            "risk_state": risk_state,
+            "portfolio_trade_mode": portfolio_overlay.get("trade_mode_label"),
+        }
+        rows.append(row)
+
+    for source_key, target_key, invert in (
+        ("alpha_adjusted", "alpha_score_cs", False),
+        ("momentum_12_1", "momentum_score_cs", False),
+        ("quality_composite", "quality_score_cs", False),
+        ("mean_reversion_edge", "mean_reversion_score_cs", False),
+        ("alpha_ic_mean", "ic_score_cs", False),
+        ("beta_penalty_raw", "beta_penalty_cs", True),
+        ("idio_vol", "idio_vol_score_cs", True),
+        ("liquidity_proxy", "liquidity_score_cs", False),
+    ):
+        _apply_cross_section_score(rows, source_key, target_key, invert=invert)
+
+    for row in rows:
+        final_alpha_score = (
+            (row.get("alpha_score_cs", 0.0) * 0.35)
+            + (row.get("momentum_score_cs", 0.0) * 0.15)
+            + (row.get("quality_score_cs", 0.0) * 0.10)
+            + (row.get("mean_reversion_score_cs", 0.0) * 0.10)
+            + (row.get("ic_score_cs", 0.0) * 0.10)
+            + (row.get("liquidity_score_cs", 0.0) * 0.05)
+            + (row.get("beta_penalty_cs", 0.0) * 0.10)
+            + (row.get("idio_vol_score_cs", 0.0) * 0.05)
+        )
+        row["final_alpha_score"] = round(float(final_alpha_score), 4)
+        row.update(_calibrate_candidate_forecast(row, risk_state, portfolio_overlay))
+
+    rows.sort(
+        key=lambda row: (
+            float(row.get("final_alpha_score") or 0.0),
+            float(row.get("expected_return_bps") or 0.0),
+            float(row.get("forecast_confidence") or 0.0),
+        ),
+        reverse=True,
+    )
+    for index, row in enumerate(rows, start=1):
+        row["rank"] = index
+
+    return {
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "benchmark": _normalize_lookup_symbol(benchmark),
+        "risk_state": risk_state,
+        "portfolio_trade_mode": portfolio_overlay.get("trade_mode_label"),
+        "portfolio_gross_scale": portfolio_overlay.get("recommended_gross_scale"),
+        "universe": universe,
+        "rows": rows,
+        "methodology": (
+            "把現有 adjusted alpha、IC、單股因子、均值回歸、beta/idio vol、流動性做截面標準化後合成 ranking score，"
+            "再依 risk state 與 portfolio governor 校準 expected return / confidence / horizon。"
+        ),
+    }
+
+
+def build_candidate_alpha_report(
+    symbols: str | list[str] | None = None,
+    benchmark: str = "SPY",
+    period: str = "6mo",
+    horizon_days: int = 5,
+    lookback_signals: int = 120,
+) -> str:
+    payload = compute_candidate_alpha_panel(
+        symbols=symbols,
+        benchmark=benchmark,
+        period=period,
+        horizon_days=horizon_days,
+        lookback_signals=lookback_signals,
+    )
+    if payload.get("error"):
+        return format_tool_error(f"❌ {payload['error']}", data_unavailable=True)
+
+    report = "🧭 === Candidate Alpha Panel ===\n"
+    report += (
+        f"● Universe: {len(payload['rows'])} | Benchmark: {payload['benchmark']} | "
+        f"Risk: {payload.get('risk_state', 'N/A')} | Portfolio Mode: {payload.get('portfolio_trade_mode', 'N/A')}\n"
+    )
+    if isinstance(payload.get("portfolio_gross_scale"), (int, float)):
+        report += f"● Gross Scale: {payload['portfolio_gross_scale']:.2f}x\n"
+
+    for row in payload["rows"][:10]:
+        beta_text = f"{row['beta']:.2f}" if isinstance(row.get("beta"), (int, float)) else "N/A"
+        conf_text = f"{row['forecast_confidence'] * 100:.0f}%" if isinstance(row.get("forecast_confidence"), (int, float)) else "N/A"
+        report += (
+            f"{row['rank']}. {row['symbol']}: Score {row['final_alpha_score']:+.2f} | "
+            f"ER {row['expected_return_bps']:+.0f}bps | Conf {conf_text} | "
+            f"Horizon {row['holding_horizon_days']}D | β {beta_text} | "
+            f"IC {row.get('alpha_ic_quality', 'unknown')} | Sector {row.get('sector', 'Unknown')}\n"
+        )
+
+    if len(payload["rows"]) > 10:
+        report += f"● 其餘 {len(payload['rows']) - 10} 檔未展開。\n"
+    report += f"● 註記: {payload['methodology']}"
+    return report
+
+
+@tool()
+def get_candidate_alpha_panel(
+    symbols: str = "",
+    benchmark: str = "SPY",
+    period: str = "6mo",
+    horizon_days: int = 5,
+    lookback_signals: int = 120,
+) -> str:
+    """Builds a cross-sectional candidate ranking panel with calibrated return/confidence forecasts."""
+    return build_candidate_alpha_report(symbols, benchmark, period, horizon_days, lookback_signals)
 
 
 def build_movers_report() -> str:
