@@ -409,7 +409,9 @@ def fetch_strat_data(
     
     data = {
         "symbol": symbol,
+        "name": profile.get('name', 'Unknown'),
         "asset_type": asset_type,
+        "currency": profile.get('currency', 'USD'),
         "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         "nlp_insights": nlp_data, # 注入語意情緒
         "relative_move": {

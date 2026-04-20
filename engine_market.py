@@ -474,6 +474,7 @@ def get_asset_profile(symbol: str) -> dict:
     asset_type = "Unknown"
     sector = "Unknown"
     industry = "Unknown"
+    currency = "USD"  # 預設
     risk_score = 1.0 # 預設
 
     # Stage 1: Rule-based (YF Info)
@@ -483,6 +484,7 @@ def get_asset_profile(symbol: str) -> dict:
             info = get_ticker(symbol).info
             sector = info.get('sector', 'Unknown')
             industry = info.get('industry', 'Unknown')
+            currency = info.get('currency', 'USD')
         except Exception as e:
             logger.debug(f"Stage 1 info fetching failed for {symbol}: {e}")
             pass
@@ -492,6 +494,7 @@ def get_asset_profile(symbol: str) -> dict:
             info = ticker.info
             sector = info.get('sector', 'Unknown')
             industry = info.get('industry', 'Unknown')
+            currency = info.get('currency', 'USD')
             
             if sector in ['Technology', 'Communication Services']:
                 asset_type = 'Tech_Momentum'
@@ -538,9 +541,11 @@ def get_asset_profile(symbol: str) -> dict:
 
     return {
         "symbol": symbol,
+        "name": info.get('longName') or info.get('shortName') if 'info' in locals() else "Unknown",
         "asset_type": asset_type,
         "sector": sector,
         "industry": industry,
+        "currency": currency,
         "risk_score": risk_score
     }
 
