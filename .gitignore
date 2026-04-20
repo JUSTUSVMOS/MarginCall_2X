@@ -40,3 +40,7 @@ todo.txt
 *.service
 sa_login_generator.py
 prompts/system_prompt.local.txt
+check_*.py
+reproduce*.py
+*.diff
+*.patch
