@@ -303,9 +303,44 @@ def _estimate_sector_exposure_twd(
             continue
         lookup_symbol = _resolve_lookup_symbol(str(snapshot.get("symbol") or ""))
         profile = market.get_asset_profile(lookup_symbol or str(snapshot.get("symbol") or ""))
-        if str(profile.get("sector") or "Unknown") == target_sector:
+        if _get_concentration_bucket(profile) == target_sector:
             exposure_twd += float(snapshot.get("market_value_twd") or 0.0)
     return exposure_twd
+
+
+def _get_concentration_bucket(profile: Dict[str, Any]) -> str:
+    bucket = str(profile.get("concentration_bucket") or "").strip()
+    if bucket and bucket != "Unknown":
+        return bucket
+    sector = str(profile.get("sector") or "").strip()
+    if sector and sector not in {"Unknown", "ETF"}:
+        return sector
+    asset_type = str(profile.get("asset_type") or "Unknown")
+    if asset_type == "Tech_Momentum":
+        return "Technology"
+    if asset_type == "Macro_Hedge":
+        return "Macro Hedge"
+    if asset_type == "Value_Holding" and bool(profile.get("is_etf")):
+        return "Diversified Equity"
+    return "Unknown"
+
+
+def _is_concentration_cap_applicable(bucket: str) -> bool:
+    return bucket not in {"", "Unknown", "Diversified Equity"}
+
+
+def _format_trade_limit_source(
+    overlay: Dict[str, Any],
+    *,
+    limit_key: str,
+    limits: Dict[str, float],
+    asset_type: str,
+) -> str:
+    base_limits = TRADE_GOVERNOR_LIMITS.get(str(overlay.get("trade_mode") or "normal"), TRADE_GOVERNOR_LIMITS["normal"])
+    source = f"{overlay.get('trade_mode_label', '🟢 Normal')} 檔位"
+    if abs(float(limits.get(limit_key, 0.0)) - float(base_limits.get(limit_key, 0.0))) > 1e-9 and asset_type == "Tech_Momentum":
+        source += " + Tech_Momentum tighten"
+    return source
 
 
 def _apply_pretrade_risk_gate(
@@ -377,8 +412,22 @@ def _apply_pretrade_risk_gate(
     lookup_symbol = _resolve_lookup_symbol(symbol)
     profile = market.get_asset_profile(lookup_symbol or symbol)
     asset_type = str(profile.get("asset_type") or "Unknown")
-    sector = str(profile.get("sector") or "Unknown")
+    sector = _get_concentration_bucket(profile)
+    tracking_index = str(profile.get("tracking_index") or "").strip()
+    is_etf = bool(profile.get("is_etf"))
     limits = _get_trade_governor_limits(str(overlay.get("trade_mode") or "normal"), asset_type)
+    sector_limit_source = _format_trade_limit_source(
+        overlay,
+        limit_key="sector_cap",
+        limits=limits,
+        asset_type=asset_type,
+    )
+    single_name_limit_source = _format_trade_limit_source(
+        overlay,
+        limit_key="single_name_cap",
+        limits=limits,
+        asset_type=asset_type,
+    )
 
     requested_twd_total = float(actual_twd_total)
     current_position_mv = float(existing_snapshot.get("market_value_twd") or 0.0) if existing_snapshot else 0.0
@@ -404,22 +453,30 @@ def _apply_pretrade_risk_gate(
             "message": (
                 f"❌ 風控拒單：{symbol} 已達單一持股上限 "
                 f"{limits['single_name_cap'] * 100:.1f}% of NAV。"
+                f" 目前 {current_position_mv / current_nav_twd * 100:.1f}% | "
+                f"滿單後 {(current_position_mv + requested_twd_total) / current_nav_twd * 100:.1f}% | "
+                f"來源: {single_name_limit_source}。"
             ),
         }
 
     headrooms: List[tuple[str, float]] = [("gross_scale", gross_headroom_twd), ("single_name_cap", position_headroom_twd)]
 
-    if sector and sector != "Unknown":
+    if _is_concentration_cap_applicable(sector):
         sector_cap_twd = current_nav_twd * limits["sector_cap"]
         current_sector_mv = _estimate_sector_exposure_twd(snapshots, sector)
         sector_headroom_twd = max(0.0, sector_cap_twd - current_sector_mv)
         if sector_headroom_twd <= 0:
+            current_sector_ratio = current_sector_mv / current_nav_twd if current_nav_twd > 0 else 0.0
+            requested_sector_ratio = (current_sector_mv + requested_twd_total) / current_nav_twd if current_nav_twd > 0 else 0.0
+            etf_context = f" | ETF 指數: {tracking_index}" if is_etf and tracking_index else ""
             return {
                 **gate_result,
                 "allowed": False,
                 "message": (
-                    f"❌ 風控拒單：{sector} 曝險已達產業上限 "
+                    f"❌ 風控拒單：{sector} 曝險已達集中上限 "
                     f"{limits['sector_cap'] * 100:.1f}% of NAV。"
+                    f" 目前 {current_sector_ratio * 100:.1f}% | 滿單後 {requested_sector_ratio * 100:.1f}% | "
+                    f"來源: {sector_limit_source}{etf_context}。"
                 ),
             }
         headrooms.append((f"sector_cap:{sector}", sector_headroom_twd))
@@ -470,23 +527,74 @@ def _apply_pretrade_risk_gate(
     }
     if binding_constraint.startswith("sector_cap:"):
         sector_name = binding_constraint.split(":", 1)[1]
-        cap_labels[binding_constraint] = f"{sector_name} 產業上限 {limits['sector_cap'] * 100:.1f}% NAV"
+        cap_labels[binding_constraint] = f"{sector_name} 集中上限 {limits['sector_cap'] * 100:.1f}% NAV"
     binding_label = cap_labels.get(binding_constraint, binding_constraint)
+    context_suffix = ""
+    if binding_constraint == "single_name_cap":
+        context_suffix = (
+            f" 目前 {current_position_mv / current_nav_twd * 100:.1f}% -> "
+            f"滿單後 {(current_position_mv + requested_twd_total) / current_nav_twd * 100:.1f}% | "
+            f"來源: {single_name_limit_source}。"
+        )
+    elif binding_constraint.startswith("sector_cap:") and current_nav_twd > 0:
+        current_sector_mv = _estimate_sector_exposure_twd(snapshots, sector)
+        approved_sector_ratio = (current_sector_mv + approved_twd_total) / current_nav_twd
+        requested_sector_ratio = (current_sector_mv + requested_twd_total) / current_nav_twd
+        etf_context = f" | ETF 指數: {tracking_index}" if is_etf and tracking_index else ""
+        context_suffix = (
+            f" 目前 {current_sector_mv / current_nav_twd * 100:.1f}% -> "
+            f"滿單後 {requested_sector_ratio * 100:.1f}% -> "
+            f"核准後 {approved_sector_ratio * 100:.1f}% | "
+            f"來源: {sector_limit_source}{etf_context}。"
+        )
     return {
         **gate_result,
         "approved_shares": approved_shares,
         "approved_twd_total": approved_twd_total,
         "message": (
             f"⚠️ 風控縮倉：{symbol} 由 {float(shares):.4f} 股縮至 {approved_shares:.4f} 股 "
-            f"({binding_label})。"
+            f"({binding_label})。{context_suffix}".strip()
         ),
         "note": (
             f"risk_gate:{binding_label}; requested_shares={float(shares):.4f}; "
-            f"approved_shares={approved_shares:.4f}"
+            f"approved_shares={approved_shares:.4f}; source={sector_limit_source if binding_constraint.startswith('sector_cap:') else single_name_limit_source if binding_constraint == 'single_name_cap' else binding_label}"
         ),
     }
 
-def execute_position_update(symbol: str, price: float, shares: float, action: str = 'set', total_amount_twd: float = None, locked: int = None, sync_memory: bool = False) -> str:
+def _format_confirmed_trade_risk_feedback(gate: Dict[str, Any], requested_shares: float) -> Dict[str, Any]:
+    gate_message = str(gate.get("message") or "").strip()
+    gate_note = str(gate.get("note") or "").strip()
+    approved_shares = float(gate.get("approved_shares") or requested_shares)
+
+    if gate.get("allowed", True) and approved_shares + 1e-9 >= float(requested_shares) and not gate_message and not gate_note:
+        return {"message": "", "note": None}
+
+    detail = gate_message
+    for prefix in ("❌ 風控拒單：", "⚠️ 風控縮倉："):
+        if detail.startswith(prefix):
+            detail = detail[len(prefix):].strip()
+            break
+    if not detail:
+        detail = "此筆交易觸發組合風控限制。"
+
+    warning_message = (
+        f"⚠️ 成交後風控警告：{detail} "
+        f"本次因 /trade 視為已成交，仍已照原始 {float(requested_shares):.4f} 股入帳。"
+    ).strip()
+    warning_note = f"post_trade_warning:{gate_note or detail}"
+    return {"message": warning_message, "note": warning_note}
+
+
+def execute_position_update(
+    symbol: str,
+    price: float,
+    shares: float,
+    action: str = 'set',
+    total_amount_twd: float = None,
+    locked: int = None,
+    sync_memory: bool = False,
+    enforce_pretrade_gate: bool = True,
+) -> str:
     """Pure portfolio-write logic for direct callers and tests."""
     symbol = normalize_ticker(symbol)
     try:
@@ -521,16 +629,21 @@ def execute_position_update(symbol: str, price: float, shares: float, action: st
 
     if action == "buy" and not is_cash:
         gate = _apply_pretrade_risk_gate(symbol, action, shares, actual_twd_total)
-        if not gate.get("allowed", True):
-            return gate.get("message") or "❌ 風控拒單。"
-        approved_shares = float(gate.get("approved_shares", shares))
-        approved_twd_total = float(gate.get("approved_twd_total", actual_twd_total))
-        if approved_shares < shares:
-            shares = approved_shares
-            actual_twd_total = approved_twd_total
-            settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
-            gate_message = gate.get("message", "")
-            trade_note = gate.get("note")
+        if enforce_pretrade_gate:
+            if not gate.get("allowed", True):
+                return gate.get("message") or "❌ 風控拒單。"
+            approved_shares = float(gate.get("approved_shares", shares))
+            approved_twd_total = float(gate.get("approved_twd_total", actual_twd_total))
+            if approved_shares < shares:
+                shares = approved_shares
+                actual_twd_total = approved_twd_total
+                settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
+                gate_message = gate.get("message", "")
+                trade_note = gate.get("note")
+        else:
+            confirmed_feedback = _format_confirmed_trade_risk_feedback(gate, shares)
+            gate_message = confirmed_feedback.get("message", "")
+            trade_note = confirmed_feedback.get("note")
 
     result_message = ""
     should_refresh_memory = False
@@ -810,9 +923,8 @@ def build_portfolio_raw_data() -> str:
             conn.close()
 
 
-@tool()
-def get_portfolio_raw_data() -> str:
-    """Retrieves current portfolio positions, prices, and TWD balances."""
+def build_portfolio_detailed_raw_data() -> str:
+    """Pure portfolio snapshot logic with live prices and PnL."""
     # 1. 觸發與 Fubon 同步，並清除幽靈庫存
     build_portfolio_raw_data()
     
@@ -833,6 +945,12 @@ def get_portfolio_raw_data() -> str:
             f"{s['symbol']}|{name}|{s['shares']}sh|cost={cost:.4f}|price={price:.4f}|market_value_twd={mv_twd:.0f}|pnl_twd={pnl_twd:+.0f}|pnl_pct={pnl_pct:+.1f}%|{s['market']}"
         )
     return "\n".join(lines)
+
+
+@tool()
+def get_portfolio_raw_data() -> str:
+    """Retrieves current portfolio positions, prices, and TWD balances."""
+    return build_portfolio_detailed_raw_data()
 
 
 def _classify_portfolio_market(symbol: str) -> str:
@@ -1809,6 +1927,7 @@ def compute_portfolio_risk_overlay(
     target_beta_low, target_beta_high = target["beta_band"]
     target_beta_mid = (target_beta_low + target_beta_high) / 2
     target_vol = target["target_vol"]
+    active_limits = _get_trade_governor_limits(governor["trade_mode"])
 
     beta_scale = 1.0
     if beta_to_nav is not None and target_beta_high > 0 and beta_to_nav > target_beta_high:
@@ -1872,6 +1991,9 @@ def compute_portfolio_risk_overlay(
         "hedge_notional_twd": round(hedge_notional_twd, 2),
         "primary_constraint": primary_constraint,
         "constraints": constraints,
+        "base_single_name_cap": round(float(active_limits["single_name_cap"]), 4),
+        "base_sector_cap": round(float(active_limits["sector_cap"]), 4),
+        "concentration_methodology": "股票以 sector 計，ETF 以 tracking index / category / 名稱推斷 concentration bucket。",
         "beta_methodology": beta_payload.get("methodology") if not beta_payload.get("error") else beta_payload.get("error"),
         "vol_methodology": (
             "以代表性持倉權重重建近 60 日組合報酬；優先納入前 5 大權重，"
@@ -1908,6 +2030,10 @@ def build_portfolio_risk_overlay_report(benchmark: str = "SPY", period: str = "6
         f"Vol(NAV) {nav_vol_text} vs 目標 {target_vol_text}\n"
     )
     report += (
+        f"● 交易上限: 單一持股 {overlay['base_single_name_cap'] * 100:.1f}% NAV | "
+        f"集中桶 {overlay['base_sector_cap'] * 100:.1f}% NAV\n"
+    )
+    report += (
         f"● 建議: Gross Scale {overlay['recommended_gross_scale']:.2f}x | "
         f"Raise Cash ~NT${overlay['trim_notional_twd']:,.0f}"
     )
@@ -1915,7 +2041,8 @@ def build_portfolio_risk_overlay_report(benchmark: str = "SPY", period: str = "6
         report += f" | Benchmark Hedge ~NT${overlay['hedge_notional_twd']:,.0f}"
     report += "\n"
     report += f"● 約束: {overlay['primary_constraint']}\n"
-    report += f"● Governor: {overlay['governor_message']}"
+    report += f"● Governor: {overlay['governor_message']}\n"
+    report += f"● 集中度方法: {overlay['concentration_methodology']}"
     return report
 
 

@@ -1,6 +1,9 @@
 import os
+import re
 import datetime
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import time
 import pandas as pd
@@ -20,6 +23,150 @@ logger = logging.getLogger(__name__)
 FMP_KEY = os.getenv("FMP_API_KEY")
 
 _fubon_provider = None
+_CANDIDATE_PANEL_MAX_WORKERS = 5
+_SENTIMENT_BATCH_CACHE_TTL_SECONDS = 600
+_SENTIMENT_BATCH_CACHE = {"entries": {}}
+_SENTIMENT_BATCH_CACHE_LOCK = threading.Lock()
+_SENTIMENT_INDICATORS = {
+    "^TWII": "台股(加權)",
+    "TSM": "台積ADR",
+    "EWT": "台灣ETF",
+    "^GSPC": "標普500(大盤)",
+    "^IXIC": "那指(科技)",
+    "^SOX": "費半(基石)",
+    "^RUT": "羅素2000(水溫)",
+    "^TNX": "美債10Y(重力)",
+    "TLT": "20Y美債(避風港)",
+    "DX-Y.NYB": "美元(水龍頭)",
+    "TWD=X": "台幣(外資)",
+    "JPY=X": "日圓(套利)",
+    "^VIX": "恐慌(絞肉機)",
+    "HYG": "高收債(風險)",
+    "XLU": "公用事業(防禦)",
+    "GC=F": "黃金(避險)",
+    "CL=F": "原油(通膨)",
+    "BZ=F": "布蘭特(地緣)",
+    "HG=F": "銅(景氣)",
+    "BTC-USD": "BTC",
+}
+
+_ASSET_PROFILE_CACHE_COLUMNS = {
+    "name": "TEXT",
+    "currency": "TEXT",
+    "quote_type": "TEXT",
+    "is_etf": "INTEGER DEFAULT 0",
+    "category": "TEXT",
+    "fund_family": "TEXT",
+    "geo_focus": "TEXT",
+    "strategy_type": "TEXT",
+    "tracking_index": "TEXT",
+    "concentration_bucket": "TEXT",
+}
+
+_TRACKING_INDEX_PATTERNS = (
+    (re.compile(r"S&P\s*500\s+([A-Za-z& ]+?)\s+Sector", re.IGNORECASE), lambda m: f"S&P 500 {m.group(1).strip()} Sector"),
+    (re.compile(r"NASDAQ-?100", re.IGNORECASE), lambda m: "NASDAQ-100"),
+    (re.compile(r"S&P\s*500", re.IGNORECASE), lambda m: "S&P 500"),
+    (re.compile(r"MSCI\s+[A-Za-z0-9& \-]+", re.IGNORECASE), lambda m: m.group(0).strip()),
+    (re.compile(r"FTSE\s+[A-Za-z0-9& \-]+", re.IGNORECASE), lambda m: m.group(0).strip()),
+    (re.compile(r"Russell\s+\d{3,4}", re.IGNORECASE), lambda m: m.group(0).strip()),
+    (re.compile(r"Dow Jones\s+[A-Za-z0-9& \-]+", re.IGNORECASE), lambda m: m.group(0).strip()),
+    (re.compile(r"Morningstar\s+[A-Za-z0-9& \-]+", re.IGNORECASE), lambda m: m.group(0).strip()),
+    (re.compile(r"Technology Select Sector", re.IGNORECASE), lambda m: "Technology Select Sector"),
+)
+
+_LOCAL_ETF_PROFILE_REGISTRY = {
+    "00997A": {
+        "name": "群益美國增長主動式ETF",
+        "quote_type": "ETF",
+        "is_etf": True,
+        "currency": "TWD",
+        "fund_family": "群益投信",
+        "geo_focus": "US",
+        "strategy_type": "Active US Growth ETF",
+        "tracking_index": "Active ETF Strategy",
+        "category": "US Large-Cap Growth",
+        "sector": "Unknown",
+        "industry": "Active ETF",
+        "asset_type": "Tech_Momentum",
+        "concentration_bucket": "Technology",
+    },
+    "00987A": {
+        "name": "主動台新台灣優勢成長ETF",
+        "quote_type": "ETF",
+        "is_etf": True,
+        "currency": "TWD",
+        "fund_family": "台新投信",
+        "geo_focus": "Taiwan",
+        "strategy_type": "Active Taiwan Advantage Growth ETF",
+        "tracking_index": "Active ETF Strategy",
+        "category": "Taiwan Technology Growth",
+        "sector": "Unknown",
+        "industry": "Active ETF",
+        "asset_type": "Tech_Momentum",
+        "concentration_bucket": "Technology",
+    },
+    "00981A": {
+        "name": "主動統一台股增長ETF",
+        "quote_type": "ETF",
+        "is_etf": True,
+        "currency": "TWD",
+        "fund_family": "統一投信",
+        "geo_focus": "Taiwan",
+        "strategy_type": "Active Taiwan Growth ETF",
+        "tracking_index": "Active ETF Strategy",
+        "category": "Taiwan Technology Growth",
+        "sector": "Unknown",
+        "industry": "Active ETF",
+        "asset_type": "Tech_Momentum",
+        "concentration_bucket": "Technology",
+    },
+    "FBCG": {
+        "name": "Fidelity Blue Chip Growth ETF",
+        "quote_type": "ETF",
+        "is_etf": True,
+        "currency": "USD",
+        "fund_family": "Fidelity Investments",
+        "geo_focus": "US",
+        "strategy_type": "Blue Chip Growth Catalyst Strategy",
+        "tracking_index": "Active ETF Strategy",
+        "category": "US Blue Chip Growth",
+        "sector": "Unknown",
+        "industry": "Active ETF",
+        "asset_type": "Tech_Momentum",
+        "concentration_bucket": "Technology",
+    },
+    "TCHP": {
+        "name": "T. Rowe Price Blue Chip Growth ETF",
+        "quote_type": "ETF",
+        "is_etf": True,
+        "currency": "USD",
+        "fund_family": "T. Rowe Price",
+        "geo_focus": "US",
+        "strategy_type": "Quality Blue Chip Growth Strategy",
+        "tracking_index": "Active ETF Strategy",
+        "category": "US Quality Growth",
+        "sector": "Unknown",
+        "industry": "Active ETF",
+        "asset_type": "Value_Holding",
+        "concentration_bucket": "Diversified Equity",
+    },
+    "CGGR": {
+        "name": "Capital Group Growth ETF",
+        "quote_type": "ETF",
+        "is_etf": True,
+        "currency": "USD",
+        "fund_family": "Capital Group",
+        "geo_focus": "Global",
+        "strategy_type": "Global Multi-Manager Growth Strategy",
+        "tracking_index": "Active ETF Strategy",
+        "category": "Global Growth",
+        "sector": "Unknown",
+        "industry": "Active ETF",
+        "asset_type": "Value_Holding",
+        "concentration_bucket": "Diversified Equity",
+    },
+}
 
 def set_fubon_provider(provider):
     global _fubon_provider
@@ -444,78 +591,302 @@ def build_technical_snapshot(symbol: str, interval: str = "1d", mean_reversion_l
         "mean_reversion": mean_reversion,
     }
 
+
+def _ensure_asset_profile_cache_schema():
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS asset_profile_cache (
+                    symbol TEXT PRIMARY KEY,
+                    name TEXT,
+                    asset_type TEXT,
+                    sector TEXT,
+                    industry TEXT,
+                    currency TEXT,
+                    risk_score REAL,
+                    quote_type TEXT,
+                    is_etf INTEGER DEFAULT 0,
+                    category TEXT,
+                    fund_family TEXT,
+                    geo_focus TEXT,
+                    strategy_type TEXT,
+                    tracking_index TEXT,
+                    concentration_bucket TEXT,
+                    last_updated DATETIME
+                )
+                """
+            )
+            existing_columns = {
+                row[1]
+                for row in cursor.execute("PRAGMA table_info(asset_profile_cache)").fetchall()
+            }
+            for column, ddl in _ASSET_PROFILE_CACHE_COLUMNS.items():
+                if column not in existing_columns:
+                    cursor.execute(f"ALTER TABLE asset_profile_cache ADD COLUMN {column} {ddl}")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _clean_profile_text(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"", "none", "nan"} else text
+
+
+def _normalize_cached_asset_profile(row: dict) -> dict:
+    normalized = dict(row)
+    normalized["quote_type"] = _clean_profile_text(normalized.get("quote_type")) or "Unknown"
+    normalized["name"] = _clean_profile_text(normalized.get("name")) or "Unknown"
+    normalized["category"] = _clean_profile_text(normalized.get("category"))
+    normalized["fund_family"] = _clean_profile_text(normalized.get("fund_family"))
+    normalized["geo_focus"] = _clean_profile_text(normalized.get("geo_focus"))
+    normalized["strategy_type"] = _clean_profile_text(normalized.get("strategy_type"))
+    normalized["tracking_index"] = _clean_profile_text(normalized.get("tracking_index")) or None
+    normalized["concentration_bucket"] = _clean_profile_text(normalized.get("concentration_bucket")) or "Unknown"
+    normalized["sector"] = _clean_profile_text(normalized.get("sector")) or "Unknown"
+    normalized["industry"] = _clean_profile_text(normalized.get("industry")) or "Unknown"
+    normalized["currency"] = _clean_profile_text(normalized.get("currency")) or "USD"
+    raw_is_etf = normalized.get("is_etf")
+    if isinstance(raw_is_etf, str):
+        normalized["is_etf"] = raw_is_etf.strip().lower() in {"1", "true", "yes"}
+    else:
+        normalized["is_etf"] = bool(raw_is_etf)
+    return normalized
+
+
+def _get_local_profile_override(symbol: str, lookup_symbol: str | None = None) -> dict:
+    candidates = [normalize_ticker(symbol)]
+    if lookup_symbol:
+        normalized_lookup = normalize_ticker(lookup_symbol)
+        candidates.append(normalized_lookup)
+        candidates.append(normalized_lookup.replace(".TW", "").replace(".TWO", ""))
+    for candidate in dict.fromkeys(candidates):
+        override = _LOCAL_ETF_PROFILE_REGISTRY.get(candidate)
+        if override:
+            return dict(override)
+    return {}
+
+
+def _merge_profile_override(base: dict, override: dict) -> dict:
+    if not override:
+        return base
+    merged = dict(base)
+    for key, value in override.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        merged[key] = value
+    return merged
+
+
+def _infer_tracking_index(info: dict, symbol: str, is_etf: bool) -> str | None:
+    if not is_etf:
+        return None
+
+    text_parts = [
+        info.get("longName"),
+        info.get("shortName"),
+        info.get("category"),
+        info.get("longBusinessSummary"),
+    ]
+    combined = " | ".join(part for part in (_clean_profile_text(v) for v in text_parts) if part)
+
+    for pattern, formatter in _TRACKING_INDEX_PATTERNS:
+        match = pattern.search(combined)
+        if match:
+            return formatter(match)
+
+    lowered = combined.lower()
+    if "gold" in lowered or "bullion" in lowered:
+        return "Physical Gold"
+    if "innovation" in lowered and "active" in lowered:
+        return "Active Innovation Basket"
+    if "active" in lowered or "actively-managed" in lowered:
+        return "Active ETF Strategy"
+    if "technology" in lowered and "sector" in lowered:
+        return "Technology Sector Basket"
+    if "energy" in lowered and "sector" in lowered:
+        return "Energy Sector Basket"
+    if "mlp" in lowered or "pipeline" in lowered:
+        return "Energy Infrastructure / MLP Basket"
+    if "total market" in lowered:
+        return "Total Market"
+    if "world" in lowered or "all-country" in lowered:
+        return "Global Equity"
+    return None
+
+
+def _infer_concentration_bucket(
+    *,
+    asset_type: str,
+    sector: str,
+    industry: str,
+    is_etf: bool,
+    tracking_index: str | None,
+    category: str,
+    name: str,
+) -> str:
+    clean_sector = _clean_profile_text(sector)
+    if clean_sector and clean_sector not in {"Unknown", "ETF"}:
+        return clean_sector
+
+    text = " ".join(
+        part.lower()
+        for part in (
+            tracking_index,
+            category,
+            name,
+            industry,
+            asset_type,
+        )
+        if _clean_profile_text(part)
+    )
+
+    keyword_buckets = (
+        (("technology", "tech", "software", "semiconductor", "nasdaq-100", "innovation", "artificial intelligence", "cloud"), "Technology"),
+        (("communication", "internet", "media", "telecom", "social"), "Communication Services"),
+        (("energy", "oil", "gas", "mlp", "pipeline"), "Energy"),
+        (("gold", "silver", "bullion", "metal", "commodity"), "Macro Hedge"),
+        (("utility", "utilities"), "Utilities"),
+        (("financial", "bank", "insurance"), "Financial Services"),
+        (("healthcare", "biotech", "pharma"), "Healthcare"),
+        (("real estate", "reit"), "Real Estate"),
+        (("industrial", "aerospace", "defense", "manufacturing"), "Industrials"),
+        (("consumer staples",), "Consumer Staples"),
+        (("consumer discretionary", "retail"), "Consumer Discretionary"),
+        (("materials", "mining", "chemicals"), "Materials"),
+        (("s&p 500", "msci world", "ftse", "russell 1000", "russell 2000", "total market", "large blend", "large value"), "Diversified Equity"),
+    )
+    for keywords, bucket in keyword_buckets:
+        if any(keyword in text for keyword in keywords):
+            return bucket
+
+    if is_etf:
+        return "Diversified Equity"
+    if asset_type == "Tech_Momentum":
+        return "Technology"
+    if asset_type == "Macro_Hedge":
+        return "Macro Hedge"
+    if asset_type == "Value_Holding":
+        return "Diversified Equity"
+    return "Unknown"
+
+
 def get_asset_profile(symbol: str) -> dict:
     """
     【核心】資產分類器：Stage 1 (規則) + Stage 2 (LLM Fallback)
     """
     symbol = normalize_ticker(symbol)
-    
-    # 1. 檢查 SQLite 快取
+    lookup_symbol = _normalize_lookup_symbol(symbol)
+    _ensure_asset_profile_cache_schema()
+    local_override = _get_local_profile_override(symbol, lookup_symbol)
+
+    cache_candidates = list(dict.fromkeys([symbol, lookup_symbol]))
     with db_lock:
         conn = get_connection()
         try:
-            df = pd.read_sql("SELECT * FROM asset_profile_cache WHERE symbol = ?", conn, params=(symbol,))
-            if not df.empty:
-                logger.info(f"Cache Hit: {symbol}")
-                return df.iloc[0].to_dict()
+            for cache_symbol in cache_candidates:
+                df = pd.read_sql("SELECT * FROM asset_profile_cache WHERE symbol = ?", conn, params=(cache_symbol,))
+                if df.empty:
+                    continue
+                cached = _normalize_cached_asset_profile(df.iloc[0].to_dict())
+                merged_cached = _merge_profile_override(cached, local_override)
+                merged_cached.setdefault("symbol", symbol)
+                merged_cached.setdefault("lookup_symbol", lookup_symbol)
+                if merged_cached.get("quote_type") not in {"", "Unknown"} or local_override:
+                    logger.info(f"Cache Hit: {cache_symbol}")
+                    return merged_cached
         except Exception as e:
             logger.error(f"Cache check failed: {e}")
-        finally: conn.close()
+        finally:
+            conn.close()
 
     logger.info(f"Cache Miss: {symbol}, starting classifier...")
-    
-    # Hard-coded Overrides
+
     overrides = {
         'BRK-B': 'Value_Holding',
         'IAUM': 'Macro_Hedge',
         'MLPS.L': 'Macro_Hedge'
     }
-    
-    asset_type = "Unknown"
-    sector = "Unknown"
-    industry = "Unknown"
-    currency = "USD"  # 預設
-    risk_score = 1.0 # 預設
 
-    # Stage 1: Rule-based (YF Info)
+    info = {}
+    asset_type = _clean_profile_text(local_override.get("asset_type")) or "Unknown"
+    sector = _clean_profile_text(local_override.get("sector")) or "Unknown"
+    industry = _clean_profile_text(local_override.get("industry")) or "Unknown"
+    currency = _clean_profile_text(local_override.get("currency")) or "USD"
+    risk_score = 1.0
+    quote_type = _clean_profile_text(local_override.get("quote_type")) or "Unknown"
+    category = _clean_profile_text(local_override.get("category"))
+    fund_family = _clean_profile_text(local_override.get("fund_family"))
+    geo_focus = _clean_profile_text(local_override.get("geo_focus"))
+    strategy_type = _clean_profile_text(local_override.get("strategy_type"))
+    tracking_index = _clean_profile_text(local_override.get("tracking_index")) or None
+    concentration_bucket = _clean_profile_text(local_override.get("concentration_bucket")) or "Unknown"
+    is_etf = bool(local_override.get("is_etf"))
+    name_hint = _clean_profile_text(local_override.get("name")) or symbol
+
+    try:
+        ticker = get_ticker(lookup_symbol)
+        info = ticker.info or {}
+        sector = _clean_profile_text(info.get('sector')) or "Unknown"
+        industry = _clean_profile_text(info.get('industry')) or "Unknown"
+        currency = _clean_profile_text(info.get('currency')) or "USD"
+        quote_type = _clean_profile_text(info.get('quoteType')) or "Unknown"
+        category = _clean_profile_text(info.get('category'))
+        fund_family = _clean_profile_text(info.get('fundFamily'))
+        legal_type = _clean_profile_text(info.get("legalType")).lower()
+        is_etf = quote_type.upper() == "ETF" or "exchange traded fund" in legal_type
+        tracking_index = _infer_tracking_index(info, symbol, is_etf)
+        concentration_bucket = _infer_concentration_bucket(
+            asset_type=asset_type,
+            sector=sector,
+            industry=industry,
+            is_etf=is_etf,
+            tracking_index=tracking_index,
+            category=category,
+            name=_clean_profile_text(info.get("longName")) or _clean_profile_text(info.get("shortName")) or name_hint,
+        )
+    except Exception as e:
+        logger.warning(f"Stage 1 fetching failed for {symbol}: {e}")
+
     if symbol in overrides:
         asset_type = overrides[symbol]
-        try:
-            info = get_ticker(symbol).info
-            sector = info.get('sector', 'Unknown')
-            industry = info.get('industry', 'Unknown')
-            currency = info.get('currency', 'USD')
-        except Exception as e:
-            logger.debug(f"Stage 1 info fetching failed for {symbol}: {e}")
-            pass
-    else:
-        try:
-            ticker = get_ticker(symbol)
-            info = ticker.info
-            sector = info.get('sector', 'Unknown')
-            industry = info.get('industry', 'Unknown')
-            currency = info.get('currency', 'USD')
-            
-            if sector in ['Technology', 'Communication Services']:
-                asset_type = 'Tech_Momentum'
-            elif sector in ['Energy', 'Utilities'] or 'Oil' in industry or 'Gas' in industry:
-                asset_type = 'Macro_Hedge'
-            elif sector == 'Financial Services':
-                market_cap = info.get('marketCap', 0)
-                if market_cap > 100_000_000_000: # 100B
-                    asset_type = 'Value_Holding'
-            elif any(kw in (sector + industry) for kw in ['Gold', 'Metal', 'Commodity']):
-                asset_type = 'Macro_Hedge'
-        except Exception as e:
-            logger.warning(f"Stage 1 fetching failed for {symbol}: {e}")
+    elif sector in ['Technology', 'Communication Services']:
+        asset_type = 'Tech_Momentum'
+    elif sector in ['Energy', 'Utilities'] or 'Oil' in industry or 'Gas' in industry:
+        asset_type = 'Macro_Hedge'
+    elif sector == 'Financial Services':
+        market_cap = info.get('marketCap', 0)
+        if market_cap > 100_000_000_000:
+            asset_type = 'Value_Holding'
+    elif any(kw in (sector + industry) for kw in ['Gold', 'Metal', 'Commodity']):
+        asset_type = 'Macro_Hedge'
+    elif is_etf:
+        if concentration_bucket in {"Technology", "Communication Services"}:
+            asset_type = "Tech_Momentum"
+        elif concentration_bucket in {"Energy", "Utilities", "Macro Hedge"}:
+            asset_type = "Macro_Hedge"
+        elif concentration_bucket == "Diversified Equity":
+            asset_type = "Value_Holding"
 
-    # Stage 2: LLM Fallback (透過統一管理器)
-    if asset_type == "Unknown":
+    is_taiwan_lookup = lookup_symbol.endswith(".TW") or lookup_symbol.endswith(".TWO")
+    should_use_llm_fallback = asset_type == "Unknown" and not local_override and not is_taiwan_lookup
+    if should_use_llm_fallback:
         logger.info(f"Starting Stage 2 LLM Classifier for {symbol}")
         try:
             from src.llm import quick_call, LIGHT_MODELS
 
-            prompt = f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}) 分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。\n僅回傳分類名稱。"
+            prompt = (
+                f"請將標的 {symbol} (Sector: {sector}, Industry: {industry}, "
+                f"QuoteType: {quote_type}, TrackingIndex: {tracking_index or 'Unknown'}) "
+                "分類為以下三類之一：Tech_Momentum, Value_Holding, Macro_Hedge。\n僅回傳分類名稱。"
+            )
             result = quick_call(prompt, models=LIGHT_MODELS)
             if result:
                 llm_type = result.strip()
@@ -524,30 +895,75 @@ def get_asset_profile(symbol: str) -> dict:
         except Exception as e:
             logger.warning(f"Stage 2 LLM classification failed: {e}")
 
-    # 3. 持久化到 SQLite
-    with db_lock:
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO asset_profile_cache (symbol, asset_type, sector, industry, risk_score, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (symbol, asset_type, sector, industry, risk_score, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            conn.commit()
-            logger.info(f"Cached {symbol} as {asset_type}")
-        except Exception as e:
-            logger.error(f"Failed to cache {symbol}: {e}")
-        finally: conn.close()
+    concentration_bucket = _infer_concentration_bucket(
+        asset_type=asset_type,
+        sector=sector,
+        industry=industry,
+        is_etf=is_etf,
+        tracking_index=tracking_index,
+        category=category,
+        name=_clean_profile_text(info.get("longName")) or _clean_profile_text(info.get("shortName")) or name_hint,
+    )
 
-    return {
+    profile_payload = {
         "symbol": symbol,
-        "name": info.get('longName') or info.get('shortName') if 'info' in locals() else "Unknown",
+        "lookup_symbol": lookup_symbol,
+        "name": _clean_profile_text(info.get('longName')) or _clean_profile_text(info.get('shortName')) or name_hint,
         "asset_type": asset_type,
         "sector": sector,
         "industry": industry,
         "currency": currency,
-        "risk_score": risk_score
+        "risk_score": risk_score,
+        "quote_type": quote_type,
+        "is_etf": is_etf,
+        "category": category,
+        "fund_family": fund_family,
+        "geo_focus": geo_focus,
+        "strategy_type": strategy_type,
+        "tracking_index": tracking_index,
+        "concentration_bucket": concentration_bucket,
     }
+    profile_payload = _merge_profile_override(profile_payload, local_override)
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            for cache_symbol in cache_candidates:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO asset_profile_cache (
+                        symbol, name, asset_type, sector, industry, currency, risk_score, quote_type, is_etf,
+                        category, fund_family, geo_focus, strategy_type, tracking_index, concentration_bucket, last_updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cache_symbol,
+                        profile_payload["name"],
+                        profile_payload["asset_type"],
+                        profile_payload["sector"],
+                        profile_payload["industry"],
+                        profile_payload["currency"],
+                        risk_score,
+                        profile_payload["quote_type"],
+                        int(bool(profile_payload["is_etf"])),
+                        profile_payload["category"] or None,
+                        profile_payload["fund_family"] or None,
+                        profile_payload["geo_focus"] or None,
+                        profile_payload["strategy_type"] or None,
+                        profile_payload["tracking_index"],
+                        profile_payload["concentration_bucket"],
+                        datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    ),
+                )
+            conn.commit()
+            logger.info(f"Cached {symbol} as {asset_type}")
+        except Exception as e:
+            logger.error(f"Failed to cache {symbol}: {e}")
+        finally:
+            conn.close()
+
+    return profile_payload
 
 import pytz
 
@@ -779,22 +1195,76 @@ def get_us_realtime_insight(symbol: str) -> str:
     """Tool schema for LLM."""
     return build_realtime_insight(symbol)
 
+
+def _extract_download_history_frame(histories: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    if not isinstance(histories, pd.DataFrame) or histories.empty:
+        return pd.DataFrame()
+    try:
+        if isinstance(histories.columns, pd.MultiIndex):
+            if symbol not in histories.columns.get_level_values(0):
+                return pd.DataFrame()
+            frame = histories[symbol].copy()
+        else:
+            frame = histories.copy()
+    except Exception as exc:
+        logger.debug(f"Batch history extract failed for {symbol}: {exc}")
+        return pd.DataFrame()
+    if isinstance(frame, pd.Series):
+        frame = frame.to_frame()
+    return frame.dropna(how="all")
+
+
+def _get_cached_sentiment_histories(symbols: list[str], period: str = "10d") -> pd.DataFrame:
+    normalized_symbols = tuple(dict.fromkeys(symbols))
+    cache_key = (normalized_symbols, period, "1d")
+    now = time.time()
+    with _SENTIMENT_BATCH_CACHE_LOCK:
+        cached = _SENTIMENT_BATCH_CACHE["entries"].get(cache_key)
+        if cached and (now - cached["timestamp"] < _SENTIMENT_BATCH_CACHE_TTL_SECONDS):
+            return cached["data"].copy()
+
+    try:
+        histories = get_download(
+            list(normalized_symbols),
+            period=period,
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+        )
+    except Exception as exc:
+        logger.debug(f"Sentiment batch download failed: {exc}")
+        return pd.DataFrame()
+
+    if not isinstance(histories, pd.DataFrame) or histories.empty:
+        return pd.DataFrame()
+
+    with _SENTIMENT_BATCH_CACHE_LOCK:
+        _SENTIMENT_BATCH_CACHE["entries"][cache_key] = {
+            "timestamp": now,
+            "data": histories.copy(),
+        }
+    return histories.copy()
+
+
+def _load_sentiment_history(symbol: str, batch_histories: pd.DataFrame, period: str = "10d") -> pd.DataFrame:
+    history = _extract_download_history_frame(batch_histories, symbol)
+    if not history.empty:
+        return history
+    try:
+        return get_ticker(symbol).history(period=period)
+    except Exception as exc:
+        logger.debug(f"Market sentiment fallback fetch failed for {symbol}: {exc}")
+        return pd.DataFrame()
+
+
 def build_sentiment_report() -> str:
     """Pure market sentiment logic for direct callers and tests."""
-    indicators = {
-        "^TWII": "台股(加權)", "TSM": "台積ADR", "EWT": "台灣ETF",
-        "^GSPC": "標普500(大盤)", "^IXIC": "那指(科技)", "^SOX": "費半(基石)", "^RUT": "羅素2000(水溫)",
-        "^TNX": "美債10Y(重力)", "TLT": "20Y美債(避風港)",
-        "DX-Y.NYB": "美元(水龍頭)", "TWD=X": "台幣(外資)", "JPY=X": "日圓(套利)",
-        "^VIX": "恐慌(絞肉機)", "HYG": "高收債(風險)", "XLU": "公用事業(防禦)",
-        "GC=F": "黃金(避險)", "CL=F": "原油(通膨)", "BZ=F": "布蘭特(地緣)", "HG=F": "銅(景氣)",
-        "BTC-USD": "BTC"
-    }
+    indicators = _SENTIMENT_INDICATORS
+    batch_histories = _get_cached_sentiment_histories(list(indicators.keys()), period="10d")
     report = "【🌐 全球宏觀資金流向雷達】\n"
     for symbol, name in indicators.items():
         try:
-            ticker = get_ticker(symbol)
-            hist = ticker.history(period="10d")
+            hist = _load_sentiment_history(symbol, batch_histories, period="10d")
             if not hist.empty:
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
@@ -1588,6 +2058,100 @@ def _calibrate_candidate_forecast(row: dict, risk_state: str, portfolio_overlay:
     }
 
 
+def _seed_candidate_beta_series_cache(portfolio_module, benchmark: str, period: str) -> dict[tuple[str, str], pd.Series]:
+    try:
+        benchmark_symbol, benchmark_returns, benchmark_error = portfolio_module._load_daily_return_series(
+            benchmark,
+            period=period,
+            series_cache={},
+        )
+    except Exception as exc:
+        logger.debug(f"Candidate alpha panel benchmark prefetch failed: {exc}")
+        return {}
+
+    if benchmark_error or not benchmark_symbol or benchmark_returns.empty:
+        return {}
+    return {(benchmark_symbol, period): benchmark_returns.copy()}
+
+
+def _compute_candidate_alpha_row(
+    symbol: str,
+    *,
+    risk_snapshot: dict,
+    portfolio_overlay: dict,
+    risk_state: str,
+    benchmark: str,
+    period: str,
+    horizon_days: int,
+    lookback_signals: int,
+    portfolio_module,
+    router_module,
+    beta_series_seed: dict[tuple[str, str], pd.Series],
+) -> dict:
+    profile = get_asset_profile(symbol)
+    nlp_data = router_module.fetch_nlp_alpha(symbol)
+    ic_payload = compute_nlp_signal_ic(
+        symbol,
+        horizon_days=horizon_days,
+        lookback_signals=lookback_signals,
+    )
+    alpha_overlay = router_module._build_alpha_confidence_overlay(
+        symbol,
+        nlp_data,
+        risk_snapshot=risk_snapshot,
+        portfolio_overlay=portfolio_overlay,
+        ic_payload=ic_payload,
+    )
+    factor = compute_factor_snapshot(symbol)
+    technical_snapshot = {}
+    try:
+        technical_snapshot = build_technical_snapshot(symbol)
+    except Exception as exc:
+        logger.debug(f"Candidate alpha panel technical snapshot failed for {symbol}: {exc}")
+    mean_reversion = technical_snapshot.get("mean_reversion", {}) if isinstance(technical_snapshot, dict) else {}
+
+    local_beta_cache = {key: value.copy() for key, value in beta_series_seed.items()}
+    beta_payload = portfolio_module.compute_portfolio_beta_attribution(
+        {symbol: 1.0},
+        benchmark=benchmark,
+        period=period,
+        series_cache=local_beta_cache,
+    )
+    beta_row = next(iter(beta_payload.get("positions", {}).values()), {}) if not beta_payload.get("error") else {}
+    liquidity_proxy, avg_dollar_volume_20d = _compute_liquidity_proxy(symbol, period=period)
+
+    ic_mean = ic_payload.get("ic_rolling_mean")
+    beta_value = beta_row.get("beta")
+    return {
+        "symbol": symbol,
+        "asset_type": profile.get("asset_type", "Unknown"),
+        "sector": profile.get("sector", "Unknown"),
+        "industry": profile.get("industry", "Unknown"),
+        "alpha_raw": _safe_float(nlp_data.get("nlp_alpha")),
+        "alpha_adjusted": _safe_float(alpha_overlay.get("effective_alpha")),
+        "alpha_scale": _safe_float(alpha_overlay.get("combined_multiplier")),
+        "alpha_ic_quality": ic_payload.get("signal_quality", "unknown"),
+        "alpha_ic_mean": _safe_float(ic_mean),
+        "directionality": ic_payload.get("directionality", "undetermined"),
+        "momentum_12_1": _safe_float(factor.get("momentum_12_1")),
+        "reversal_1m": _safe_float(factor.get("reversal_1m")),
+        "quality_composite": _safe_float(factor.get("quality_raw")),
+        "earnings_yield": _safe_float(factor.get("earnings_yield")),
+        "book_price": _safe_float(factor.get("book_price")),
+        "mr_zscore": _safe_float(mean_reversion.get("zscore")),
+        "mr_half_life_days": _safe_float(mean_reversion.get("half_life_days")),
+        "reversion_candidate": bool(mean_reversion.get("reversion_candidate")),
+        "mean_reversion_edge": _infer_mean_reversion_edge(mean_reversion),
+        "beta": _safe_float(beta_value),
+        "idio_vol": _safe_float(beta_row.get("idio_vol")),
+        "liquidity_proxy": _safe_float(liquidity_proxy),
+        "avg_dollar_volume_20d": round(avg_dollar_volume_20d, 2) if avg_dollar_volume_20d is not None else None,
+        "beta_penalty_raw": max(0.0, float(beta_value) - 1.0) if isinstance(beta_value, (int, float)) else None,
+        "risk_state": risk_state,
+        "portfolio_trade_mode": portfolio_overlay.get("trade_mode_label"),
+    }
+
+
 def compute_candidate_alpha_panel(
     symbols: str | list[str] | None = None,
     benchmark: str = "SPY",
@@ -1615,76 +2179,51 @@ def compute_candidate_alpha_panel(
         portfolio_overlay = {}
 
     risk_state = str(risk_snapshot.get("state") or "🟡 整理")
-    beta_series_cache: dict[tuple[str, str], pd.Series] = {}
-    rows = []
+    beta_series_seed = _seed_candidate_beta_series_cache(portfolio, benchmark, period)
 
-    for symbol in universe:
-        profile = get_asset_profile(symbol)
-        nlp_data = router.fetch_nlp_alpha(symbol)
-        alpha_overlay = router._build_alpha_confidence_overlay(
-            symbol,
-            nlp_data,
-            risk_snapshot=risk_snapshot,
-            portfolio_overlay=portfolio_overlay,
-        )
-        factor = compute_factor_snapshot(symbol)
-        technical_snapshot = {}
-        try:
-            technical_snapshot = build_technical_snapshot(symbol)
-        except Exception as exc:
-            logger.debug(f"Candidate alpha panel technical snapshot failed for {symbol}: {exc}")
-        mean_reversion = technical_snapshot.get("mean_reversion", {}) if isinstance(technical_snapshot, dict) else {}
-        ic_payload = compute_nlp_signal_ic(
-            symbol,
-            horizon_days=horizon_days,
-            lookback_signals=lookback_signals,
-        )
-        beta_payload = portfolio.compute_portfolio_beta_attribution(
-            {symbol: 1.0},
-            benchmark=benchmark,
-            period=period,
-            series_cache=beta_series_cache,
-        )
-        beta_row = next(iter(beta_payload.get("positions", {}).values()), {}) if not beta_payload.get("error") else {}
-        liquidity_proxy, avg_dollar_volume_20d = _compute_liquidity_proxy(symbol, period=period)
-
-        ic_mean = ic_payload.get("ic_rolling_mean")
-        ic_edge = None
-        if isinstance(ic_mean, (int, float)):
-            ic_edge = float(ic_mean)
-            if ic_payload.get("directionality") == "negative":
-                ic_edge = -abs(ic_edge)
-
-        beta_value = beta_row.get("beta")
-        row = {
-            "symbol": symbol,
-            "asset_type": profile.get("asset_type", "Unknown"),
-            "sector": profile.get("sector", "Unknown"),
-            "industry": profile.get("industry", "Unknown"),
-            "alpha_raw": _safe_float(nlp_data.get("nlp_alpha")),
-            "alpha_adjusted": _safe_float(alpha_overlay.get("effective_alpha")),
-            "alpha_scale": _safe_float(alpha_overlay.get("combined_multiplier")),
-            "alpha_ic_quality": ic_payload.get("signal_quality", "unknown"),
-            "alpha_ic_mean": _safe_float(ic_mean),
-            "directionality": ic_payload.get("directionality", "undetermined"),
-            "momentum_12_1": _safe_float(factor.get("momentum_12_1")),
-            "reversal_1m": _safe_float(factor.get("reversal_1m")),
-            "quality_composite": _safe_float(factor.get("quality_raw")),
-            "earnings_yield": _safe_float(factor.get("earnings_yield")),
-            "book_price": _safe_float(factor.get("book_price")),
-            "mr_zscore": _safe_float(mean_reversion.get("zscore")),
-            "mr_half_life_days": _safe_float(mean_reversion.get("half_life_days")),
-            "reversion_candidate": bool(mean_reversion.get("reversion_candidate")),
-            "mean_reversion_edge": _infer_mean_reversion_edge(mean_reversion),
-            "beta": _safe_float(beta_value),
-            "idio_vol": _safe_float(beta_row.get("idio_vol")),
-            "liquidity_proxy": _safe_float(liquidity_proxy),
-            "avg_dollar_volume_20d": round(avg_dollar_volume_20d, 2) if avg_dollar_volume_20d is not None else None,
-            "beta_penalty_raw": max(0.0, float(beta_value) - 1.0) if isinstance(beta_value, (int, float)) else None,
-            "risk_state": risk_state,
-            "portfolio_trade_mode": portfolio_overlay.get("trade_mode_label"),
-        }
-        rows.append(row)
+    if len(universe) == 1:
+        rows = [
+            _compute_candidate_alpha_row(
+                universe[0],
+                risk_snapshot=risk_snapshot,
+                portfolio_overlay=portfolio_overlay,
+                risk_state=risk_state,
+                benchmark=benchmark,
+                period=period,
+                horizon_days=horizon_days,
+                lookback_signals=lookback_signals,
+                portfolio_module=portfolio,
+                router_module=router,
+                beta_series_seed=beta_series_seed,
+            )
+        ]
+    else:
+        rows = []
+        max_workers = min(len(universe), _CANDIDATE_PANEL_MAX_WORKERS)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(
+                    _compute_candidate_alpha_row,
+                    symbol,
+                    risk_snapshot=risk_snapshot,
+                    portfolio_overlay=portfolio_overlay,
+                    risk_state=risk_state,
+                    benchmark=benchmark,
+                    period=period,
+                    horizon_days=horizon_days,
+                    lookback_signals=lookback_signals,
+                    portfolio_module=portfolio,
+                    router_module=router,
+                    beta_series_seed=beta_series_seed,
+                ): symbol
+                for symbol in universe
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    rows.append(future.result())
+                except Exception as exc:
+                    raise RuntimeError(f"Candidate alpha panel failed for {symbol}: {exc}") from exc
 
     for source_key, target_key, invert in (
         ("alpha_adjusted", "alpha_score_cs", False),

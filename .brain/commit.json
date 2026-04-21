@@ -1,35 +1,35 @@
 {
   "state": {
-    "frontalLobe": "Market View: Neutral - Market View:\nCore Levels: Market View:\nPortfolio Health: NAV: NT$126,006 | PnL: +9.6% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 0.1% | 🟢 Normal | Gross Scale 1.00x\nNext Round: Next Round:",
+    "frontalLobe": "Market View: Neutral - Market View:\nCore Levels: Market View:\nPortfolio Health: NAV: NT$124,834 | PnL: +10.5% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 1.0% | 🟢 Normal | Gross Scale 1.00x\nNext Round: Next Round:",
     "emotion": "neutral",
     "marketRegime": {
-      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐",
+      "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 8。核心觀察：⚠️ SPY 位於 Gamma Flip 下方 (850.00)",
       "state": "🟢 多頭",
-      "riskScore": 0,
-      "updatedAt": "2026-04-20T19:40:14Z",
+      "riskScore": 8,
+      "updatedAt": "2026-04-21T05:07:31Z",
       "source": "macro_heartbeat",
       "watchpoints": [
         "殖利率曲線 10Y-2Y: 0.246",
-        "GEX: 0.44B",
+        "GEX: 0.0B",
         "市場情緒: 中性 (0.0)",
         "SPX: 7126.1 / MA20 6721.4 / MA200 6688.3",
         "SPX 趨勢型態: trending (ADX 27.79)",
         "Sector Breadth: 50MA 63.6% / 200MA 100.0%"
       ],
       "reasons": [
-        "🟢 暗池吸籌，大戶提供下檔支撐"
+        "⚠️ SPY 位於 Gamma Flip 下方 (850.00)"
       ],
       "signals": {
         "yieldCurve10Y2Y": 0.246,
         "fedFundsRate": 3.6,
-        "dixPr": 0.99,
-        "dixSupportActive": true,
+        "dixPr": 0.83,
+        "dixSupportActive": false,
         "dixSupportOffset": 0,
-        "gexBillions": 0.44,
+        "gexBillions": 0.0,
         "spySpot": 710.14,
-        "spyGammaFlipLevel": 495.8,
-        "spyMaxPain": 696.0,
-        "spyBelowGammaFlip": false,
+        "spyGammaFlipLevel": 850.0,
+        "spyMaxPain": 850.0,
+        "spyBelowGammaFlip": true,
         "sentimentScore": 0.0,
         "sentimentLabel": "中性",
         "spx": 7126.1,
@@ -41,13 +41,13 @@
         "sectorBreadth50": 63.6,
         "sectorBreadth200": 100.0,
         "sectorBreadthState": "healthy",
-        "spyCurrentIv": 13.8,
-        "spyRealizedVol30d": 18.1,
-        "spyVrp": -4.3,
-        "spyIvVsRvPercentile": 82.7,
-        "spyVolSignal": "⚪ 中性",
+        "spyCurrentIv": 0.1,
+        "spyRealizedVol30d": 17.6,
+        "spyVrp": -17.5,
+        "spyIvVsRvPercentile": 0.0,
+        "spyVolSignal": "⚠️ 波動低估",
         "spyTltCorr60d": 0.194,
-        "spyGldCorr60d": 0.301,
+        "spyGldCorr60d": 0.3,
         "spyDxyCorr60d": -0.448,
         "dxyZ": null,
         "tnxZ": null,
@@ -56,10 +56,10 @@
       }
     },
     "heartbeat": {
-      "lastMacroSyncAt": "2026-04-20T19:40:14Z",
-      "lastMacroChangeAt": "2026-04-20T19:40:14Z",
+      "lastMacroSyncAt": "2026-04-21T05:07:31Z",
+      "lastMacroChangeAt": "2026-04-21T05:07:31Z",
       "lastSyncStatus": "updated",
-      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
+      "lastSyncMessage": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 8。核心觀察：⚠️ SPY 位於 Gamma Flip 下方 (850.00)"
     }
   },
   "commits": [
@@ -492,10 +492,10 @@
       "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$126,135 | PnL: +9.7% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 0.0% | 🟢 Nor...",
       "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.27B, DIX_PR=0.99, SPX=7126.10",
       "frontal_lobe_ref": "Neutral - Market View: | Next: Next Round:",
+      "source": "portfolio_review",
       "delta": {
         "portfolio_health": "NAV: NT$126,135 | PnL: +9.7% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 0.0% | 🟢 Normal | Gross Scale 1.00x"
-      },
-      "source": "portfolio_review"
+      }
     },
     {
       "hash": "c2733cb0",
@@ -505,14 +505,14 @@
       "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 暗池吸籌，大戶提供下檔支撐",
       "key_signals": "GEX=+0.44B, DIX_PR=0.99, SPX=7126.10, YC_10Y2Y=+0.25",
       "frontal_lobe_ref": "Neutral - Market View: | Next: Next Round:",
+      "source": "macro_heartbeat",
       "delta": {
         "risk_score_from": 0,
         "risk_score_to": 0,
         "state_from": "🟢 多頭",
         "state_to": "🟢 多頭",
         "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 暗池吸籌，大戶提供下檔支撐"
-      },
-      "source": "macro_heartbeat"
+      }
     },
     {
       "hash": "a70bb10d",
@@ -522,11 +522,58 @@
       "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$126,006 | PnL: +9.6% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 0.1% | 🟢 Nor...",
       "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.44B, DIX_PR=0.99, SPX=7126.10",
       "frontal_lobe_ref": "Neutral - Market View: | Next: Next Round:",
+      "source": "portfolio_review",
       "delta": {
         "portfolio_health": "NAV: NT$126,006 | PnL: +9.6% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 0.1% | 🟢 Normal | Gross Scale 1.00x"
+      }
+    },
+    {
+      "hash": "d4c5b023",
+      "parent_hash": "a70bb10d",
+      "timestamp": "2026-04-21T01:40:15Z",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK HOLD: 0 -> 0 | 🟢 指標目前健康",
+      "key_signals": "GEX=+0.41B, DIX_PR=0.83, SPX=7126.10, YC_10Y2Y=+0.25",
+      "frontal_lobe_ref": "Neutral - Market View: | Next: Next Round:",
+      "source": "macro_heartbeat",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 0,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 0。核心觀察：🟢 指標目前健康"
+      }
+    },
+    {
+      "hash": "ef4eaf6d",
+      "parent_hash": "d4c5b023",
+      "timestamp": "2026-04-21T02:07:23Z",
+      "type": "frontal_lobe_patch",
+      "summary": "🧠 PORTFOLIO HEALTH AUTO-UPDATE: NAV: NT$124,834 | PnL: +10.5% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 1.0% | 🟢 No...",
+      "key_signals": "RISK=0 | REGIME=🟢 多頭 | GEX=+0.41B, DIX_PR=0.83, SPX=7126.10",
+      "frontal_lobe_ref": "Neutral - Market View: | Next: Next Round:",
+      "delta": {
+        "portfolio_health": "NAV: NT$124,834 | PnL: +10.5% | Top3 集中度: 69% (⚠️ 總體損益波動劇烈) | DD: 1.0% | 🟢 Normal | Gross Scale 1.00x"
       },
       "source": "portfolio_review"
+    },
+    {
+      "hash": "a4e1f962",
+      "parent_hash": "ef4eaf6d",
+      "timestamp": "2026-04-21T05:07:31Z",
+      "type": "market_regime",
+      "summary": "🟢 多頭 RISK UP: 0 -> 8 | ⚠️ SPY 位於 Gamma Flip 下方 (850.00)",
+      "key_signals": "GEX=+0.00B, DIX_PR=0.83, SPX=7126.10, YC_10Y2Y=+0.25",
+      "frontal_lobe_ref": "Neutral - Market View: | Next: Next Round:",
+      "delta": {
+        "risk_score_from": 0,
+        "risk_score_to": 8,
+        "state_from": "🟢 多頭",
+        "state_to": "🟢 多頭",
+        "summary": "市場仍維持偏多結構，但要留意短線波動升溫。 當前 regime：🟢 多頭，風險分數 8。核心觀察：⚠️ SPY 位於 Gamma Flip 下方 (850.00)"
+      },
+      "source": "macro_heartbeat"
     }
   ],
-  "head": "a70bb10d"
+  "head": "a4e1f962"
 }
