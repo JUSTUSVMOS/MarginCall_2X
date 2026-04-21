@@ -234,7 +234,28 @@ class TestNLPWorker(unittest.TestCase):
         return self.test_annotate_macro_candidate_marks_acquisition_rule_from_table()
 
     def test_merge_macro_candidates_keeps_major_event_even_when_primary_lane_is_empty(self):
-        return self.test_merge_macro_candidates_prioritizes_event_and_formats_exact_must_mention()
+        """Real regression: primary lane empty but an event candidate is kept and formatted."""
+        published_at = datetime.now(timezone.utc)
+        primary = []
+        event_candidate = {
+            'headline': 'Amazon to acquire Globalstar in all-cash deal',
+            'summary': 'The tie-up would expand Amazon satellite ambitions with Globalstar assets.',
+            'lane': 'event',
+            'source': 'Reuters',
+            'published_at': published_at,
+            'event_class': 'major_event',
+            'event_type': 'acquisition',
+            'must_keep': True,
+            'event_window_days': 7,
+        }
+        event_candidates = [event_candidate]
+        merged = _merge_macro_candidates(primary, event_candidates, max_macro_items=5, max_must_keep=2)
+        self.assertEqual(len(merged['selected_candidates']), 1)
+        self.assertEqual(merged['selected_candidates'][0]['lane'], 'event')
+        self.assertEqual(
+            merged['must_mention_events'],
+            ['acquisition: Amazon to acquire Globalstar in all-cash deal'],
+        )
 
     def test_build_signal_pack_includes_must_mention_events(self):
         return self.test_build_signal_pack_matches_task1_contract()
