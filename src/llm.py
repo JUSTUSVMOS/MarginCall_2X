@@ -9,7 +9,9 @@ from typing import Callable, Dict, List, Optional, Set, get_args, get_origin
 import httpx
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
 
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ HEAVY_MODELS = [
     "nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/elephant-alpha",
     "google/gemma-4-31b-it:free",
+    "deepseek/deepseek-v3.2",
 ]
 
 # 最終戰報彙整 (不需 tools，純文字推理)

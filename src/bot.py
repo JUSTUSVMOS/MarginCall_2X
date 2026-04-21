@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -14,8 +15,9 @@ import engine_risk as risk
 import engine_router as router
 import engine_technical as technical
 import fubon
-from config import PROJECT_ROOT, WDT_MESSAGES, system_prompt
+from config import PROJECT_ROOT, WDT_MESSAGES
 from src.agent import ask_agent, generate_final_report as agent_generate_final_report, reset_history, user_chat_history
+from src.llm import compact_history
 from src.tools import format_tool_error, get_tools
 
 
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 AUTHORIZED_USER_ID = None
 
 # 先載入所有工具模組，再從共享 registry 取出可用工具。
-_TOOL_MODULES = (portfolio, risk, fundamentals, technical)
+_TOOL_MODULES = (portfolio, risk, fundamentals, technical, market)
 
 bot = None
 
@@ -42,6 +44,14 @@ READ_ONLY_TOOLS = get_tools("read") + [
 _handlers_registered = False
 _runtime_initialized = False
 _v_turn_active = False
+_TRADE_ACTION_PATTERNS = (
+    ("sell", re.compile(r"(賣出|卖出|出場|减码|減碼|\bsell\b)", re.IGNORECASE)),
+    ("set", re.compile(r"(校正|更正|調整|调整|\bset\b)", re.IGNORECASE)),
+    ("buy", re.compile(r"(買入|买入|加碼|加码|補倉|补仓|進場|进场|\bbuy\b)", re.IGNORECASE)),
+)
+_TRADE_SHARES_PATTERN = re.compile(r"(?P<shares>\d+(?:\.\d+)?)\s*(?:股|shares?)", re.IGNORECASE)
+_TRADE_PRICE_PATTERN = re.compile(r"(?:(?:^|[\s(])(?:@|at|price|價格|均價|成本)\s*\$?|\$)(?P<price>\d+(?:\.\d+)?)", re.IGNORECASE)
+_TRADE_SYMBOL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _require_bot():
@@ -108,6 +118,69 @@ def _send_or_edit(chat_id, text, message_id=None):
             if mode is None:
                 raise
             logger.warning(f"Markdown delivery failed, retrying without parse mode: {exc}")
+
+
+def _append_history_turn(user_text: str, assistant_text: str):
+    updated_history = list(user_chat_history) + [
+        {"role": "user", "parts": [user_text]},
+        {"role": "model", "parts": [assistant_text]},
+    ]
+    user_chat_history.clear()
+    user_chat_history.extend(compact_history(updated_history))
+
+
+def _parse_trade_command(user_input: str):
+    payload = user_input.strip()
+    if not payload:
+        return None
+
+    action = "buy"
+    normalized_text = payload
+    for candidate_action, pattern in _TRADE_ACTION_PATTERNS:
+        match = pattern.search(normalized_text)
+        if not match:
+            continue
+        action = candidate_action
+        normalized_text = pattern.sub(" ", normalized_text, count=1).strip()
+        break
+
+    shares_match = _TRADE_SHARES_PATTERN.search(normalized_text)
+    if not shares_match:
+        return None
+    shares = float(shares_match.group("shares"))
+    normalized_text = (
+        normalized_text[:shares_match.start()] + " " + normalized_text[shares_match.end():]
+    ).strip()
+
+    price_match = _TRADE_PRICE_PATTERN.search(normalized_text)
+    if price_match:
+        price = float(price_match.group("price"))
+        normalized_text = (
+            normalized_text[:price_match.start()] + " " + normalized_text[price_match.end():]
+        ).strip()
+    else:
+        bare_numbers = list(re.finditer(r"\d+(?:\.\d+)?", normalized_text))
+        if not bare_numbers:
+            return None
+        price = float(bare_numbers[-1].group(0))
+        normalized_text = (
+            normalized_text[:bare_numbers[-1].start()] + " " + normalized_text[bare_numbers[-1].end():]
+        ).strip()
+
+    symbol_candidates = [
+        token
+        for token in _TRADE_SYMBOL_PATTERN.findall(normalized_text)
+        if token.upper() not in {"USD", "TWD", "NTD", "BUY", "SELL", "SET"}
+    ]
+    if not symbol_candidates:
+        return None
+
+    return {
+        "action": action,
+        "symbol": symbol_candidates[0],
+        "price": price,
+        "shares": shares,
+    }
 
 
 def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
@@ -210,15 +283,37 @@ def handle_trade_command(message):
 
     user_input = message.text.replace("/trade", "").strip()
     if not user_input:
-        bot_instance.reply_to(message, "📝 請輸入交易內容，例如：`/trade 買入 10 股 NVDA`", parse_mode="Markdown")
+        bot_instance.reply_to(message, "📝 請輸入交易內容，例如：`/trade ONDS $9.8 2股`", parse_mode="Markdown")
+        return
+
+    trade_payload = _parse_trade_command(user_input)
+    if not trade_payload:
+        bot_instance.reply_to(
+            message,
+            "📝 `/trade` 會直接記帳，請提供明確成交資料，例如：`/trade ONDS $9.8 2股` 或 `/trade 賣出 ONDS $9.8 2股`",
+            parse_mode="Markdown",
+        )
         return
 
     sent_msg = bot_instance.reply_to(message, "✍️ 【記帳模式啟動】正在寫入帳本...")
     bot_instance.send_chat_action(message.chat.id, "typing")
 
     try:
-        trade_prompt = system_prompt + "\n\n【⚠️ 記帳指令模式】你現在擁有「更新持倉 (update_position)」的權限。請根據使用者輸入精確執行買入、賣出或校正。"
-        result = ask_agent(user_input, tools=FULL_AGENT_TOOLS, system_prompt_override=trade_prompt, allow_retry=False)
+        result = portfolio.execute_position_update(
+            trade_payload["symbol"],
+            trade_payload["price"],
+            trade_payload["shares"],
+            action=trade_payload["action"],
+            sync_memory=True,
+            enforce_pretrade_gate=False,
+        )
+        history_summary = (
+            "[recent confirmed trade]\n"
+            f"action={trade_payload['action']} symbol={trade_payload['symbol']} "
+            f"price={trade_payload['price']:.4f} shares={trade_payload['shares']:.4f}\n"
+            f"{result}"
+        )
+        _append_history_turn(f"/trade {user_input}", history_summary)
         _send_or_edit(message.chat.id, result, sent_msg.message_id)
     except Exception as exc:
         logger.exception(f"Trade command failed for message: {getattr(message, 'text', '')}")
@@ -247,7 +342,7 @@ def handle_unknown_command(message):
         "❓ *未知指令*\n\n"
         "目前支援的指令如下：\n"
         "🔍 `/analyze <代號>` - 深度分析股票 (雙重視角戰報)\n"
-        "📝 `/trade <內容>` - 快速記帳模式\n"
+        "📝 `/trade <symbol> $<price> <shares>股` - 直接記帳模式\n"
         "🧹 `/reset` - 清空對話記憶\n"
         "🟢 `/vturn` - 切換 V 轉監控狀態"
     )
