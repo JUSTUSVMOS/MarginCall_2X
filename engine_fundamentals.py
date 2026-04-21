@@ -14,7 +14,8 @@ class FundamentalEngine:
     """
     def __init__(self, symbol: str):
         self.symbol = symbol.upper().replace('.', '-')
-        if self.symbol.isdigit() and len(self.symbol) <= 6:
+        is_tw = any(c.isdigit() for c in self.symbol) and len(self.symbol.replace(".TW", "").replace(".TWO", "")) <= 6
+        if is_tw and not (self.symbol.endswith(".TW") or self.symbol.endswith(".TWO")):
             self.symbol += ".TW"
         self.ticker = get_ticker(self.symbol, cache_level="daily")
         self._info = None

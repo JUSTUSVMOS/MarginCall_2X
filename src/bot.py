@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 AUTHORIZED_USER_ID = None
 
 # 先載入所有工具模組，再從共享 registry 取出可用工具。
-_TOOL_MODULES = (portfolio, risk, fundamentals, technical, market)
+_TOOL_MODULES = (portfolio, risk, fundamentals, technical, market, fubon)
 
 bot = None
 
