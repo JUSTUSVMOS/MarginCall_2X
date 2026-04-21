@@ -1,5 +1,44 @@
 # MarginCall_2X Superpowers Analysis
 
+## 系統架構圖 (System Architecture)
+
+```mermaid
+graph TD
+    subgraph "外部數據源 (Data Ingestion)"
+        YF[Yahoo Finance API]
+        FB[Fubon SDK]
+        NLP[NLP Alpha Signals]
+    end
+
+    subgraph "核心引擎 (Core Engines)"
+        EM[engine_market.py<br/>市場引擎]
+        ER[engine_router.py<br/>路由與信心縮放]
+        EP[engine_portfolio.py<br/>投組與風控引擎]
+        EMEM[engine_memory.py<br/>Brain 記憶體]
+    end
+
+    YF --> EM
+    FB --> EM
+    NLP --> ER
+
+    EM -- "候選股 Panel (Parallelized)" --> ER
+    ER -- "Adjusted Alpha / Confidence" --> EP
+    EP -- "Pre-trade Risk Gate<br/>(Sector/Single-name)" --> EP
+    
+    EP -- "Portfolio Health / MTM" --> ER
+    EP -- "Trade Logs / Positions" --> EMEM
+    ER -- "Frontal Lobe Context" --> EMEM
+
+    subgraph "輸出與交互 (Output & UI)"
+        TG[Telegram Bot / UI]
+        REB[Rebalance Proposal]
+    end
+
+    EP --> REB
+    ER --> TG
+    EM --> TG
+```
+
 ## Project Current State Summary
 MarginCall_2X is a quantitative trading and portfolio management system. It integrates market data (Yahoo Finance, Fubon SDK), NLP-driven alpha signals, and sophisticated risk management overlays.
 
