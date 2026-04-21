@@ -449,22 +449,77 @@ def _effective_group_count(texts) -> float:
     return round(total, 3)
 
 
+MACRO_EVENT_RULES = (
+    ('acquisition', 14, (
+        r'\bacquir(?:e|es|ed|ing|er|ers)?\b',
+        r'\bacquisition\b',
+        r'\bmerg(?:e|er|ers|ing)\b',
+        r'\btakeover\b',
+        r'\bbuyout\b',
+    )),
+    ('partnership', 10, (
+        r'\bpartnership\b',
+        r'\bpartner(?:s|ed|ing)?(?:\s+with)?\b',
+        r'\bcollaborat(?:e|es|ed|ing|ion)\b',
+        r'\bjoint venture\b',
+        r'\balliance\b',
+    )),
+    ('regulatory', 10, (
+        r'\b(?:fda|sec|fcc|ftc|doj|regulator(?:s)?|antitrust)\s+clearance\b',
+        r'\bclearance\s+from\s+(?:the\s+)?(?:fda|sec|fcc|ftc|doj|regulator(?:s)?|authorit(?:y|ies))\b',
+        r'\b(?:fda|sec|fcc|ftc|doj|regulator(?:s)?|antitrust)\s+approval\b',
+        r'\bapproval\s+from\s+(?:the\s+)?(?:fda|sec|fcc|ftc|doj|regulator(?:s)?|authorit(?:y|ies))\b',
+        r'\b(?:operating|export|import|spectrum|distribution|regulatory)\s+licen[cs]e\b',
+        r'\blicen[cs]e\s+(?:approval|permit|renewal|award|grant)\b',
+        r'\b(?:regulatory|government|federal|state|city|county|environmental|construction|operating|export|import|zoning)\s+permit\b',
+        r'\bpermit\s+from\s+(?:the\s+)?(?:regulator(?:s)?|authorit(?:y|ies)|government|federal|state|city|county)\b',
+    )),
+    ('financing', 7, (
+        r'\bfinancing\b',
+        r'\bfunding\s+(?:round|deal|package|facility|agreement|commitment)\b',
+        r'\b(?:raise(?:d|s|ing)?|secure(?:d|s)?|receiv(?:e|ed|es|ing))\s+funding\b',
+        r'\b(?:seed|series\s+[a-z]|equity|debt|bridge|growth|project|acquisition)\s+funding\b',
+        r'\bfundrais(?:e|ing)\b',
+        r'\bcapital raise\b',
+        r'\b(?:public|secondary|follow-on|equity|debt|share|shares|stock|notes?|bond)\s+offering\b',
+        r'\boffering\s+of\s+(?:common\s+stock|shares|notes?|bonds?|equity|debt)\b',
+        r'\bprivate placement\b',
+        r'\bconvertible notes?\b',
+    )),
+    ('customer', 10, (
+        r'\bmulti-year\s+contract\b',
+        r'\b(?:cloud|supply|service|commercial|sales?|purchase|procurement|licen[cs]ing)\s+contract\b',
+        r'\bcontract\s+(?:award|awarded|win|wins|won|extension|renewal)\b',
+        r'\border(?:s)?\s+(?:for|from|by)\b',
+        r'\bselected by\s+(?!.*\b(?:index|benchmark)\b).*\b(?:customer|client|enterprise|agency|department|ministry|bank|hospital|carrier|operator|retailer|manufacturer|utility|government)\b',
+        r'\bawarded\s+(?:a|an|the)?\s*(?:contract|deal|order|program|mandate|project)\b',
+        r'\bsupply agreement\b',
+        r'\bservice agreement\b',
+        r'\bcommercial agreement\b',
+    )),
+)
+
+
 def _annotate_macro_candidate(candidate: dict) -> dict:
-    """Lightweight heuristic to mark major acquisition-style events.
-    Marks candidate with event_class, event_type, must_keep, event_window_days when
-    headline/summary mentions Amazon and Globalstar in an acquisition context.
-    """
+    """Annotate macro candidates using the approved Task 1 major-event rule table."""
     try:
         text = " ".join([str(candidate.get('headline', '')), str(candidate.get('summary', ''))]).lower()
     except Exception:
         text = str(candidate).lower()
 
     annotated = dict(candidate)
-    if 'amazon' in text and 'globalstar' in text and any(k in text for k in ('acquir', 'buy', 'merge', 'offer', 'deal', 'takeover')):
-        annotated['event_class'] = 'major_event'
-        annotated['event_type'] = 'acquisition'
-        annotated['must_keep'] = True
-        annotated['event_window_days'] = max(7, int(annotated.get('event_window_days', 7)))
+    annotated.setdefault('event_class', 'normal')
+    annotated.setdefault('event_type', 'normal')
+    annotated.setdefault('must_keep', False)
+    annotated.setdefault('event_window_days', 3)
+
+    for event_type, event_window_days, patterns in MACRO_EVENT_RULES:
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
+            annotated['event_class'] = 'major_event'
+            annotated['event_type'] = event_type
+            annotated['must_keep'] = True
+            annotated['event_window_days'] = event_window_days
+            break
     return annotated
 
 
@@ -494,41 +549,82 @@ def _merge_macro_candidates(primary_candidates, event_candidates, max_macro_item
     selected = []
     must_mention = []
 
-    # prioritize primary, then event_candidates (so primary items get higher precedence)
-    for c in (primary_candidates or []) + (event_candidates or []):
+    for c in (event_candidates or []) + (primary_candidates or []):
         key = _norm_key(c)
         if key in seen:
             continue
         seen.add(key)
         selected.append(c)
         if c.get('must_keep'):
-            must_mention.append(c)
+            must_mention.append(f"{c.get('event_type', 'normal')}: {c.get('headline', '')}")
 
     # ensure must_mention length constraint
     if len(must_mention) > max_must_keep:
         must_mention = must_mention[:max_must_keep]
 
-    # ensure selected list respects max_macro_items but keep must_mention events even if beyond the cap
+    # ensure selected list respects max_macro_items
     if len(selected) > max_macro_items:
-        # keep all must_mention events, then fill remaining up to cap with others
-        non_must = [c for c in selected if not c.get('must_keep')]
-        kept = [c for c in selected if c.get('must_keep')]
-        kept += non_must[:max(0, max_macro_items - len(kept))]
-        selected = kept
+        selected = selected[:max_macro_items]
 
     return {'selected_candidates': selected, 'must_mention_events': must_mention}
 
 
-def _build_signal_pack(signal_pack: dict, must_mention_events: list = None) -> dict:
-    """Return signal_pack augmented with must_mention_events while preserving existing shape.
-    """
-    out = dict(signal_pack) if signal_pack else {}
-    out['must_mention_events'] = list(must_mention_events) if must_mention_events else []
-    # Preserve truncation semantics: ensure detail lists remain lists (no change to counts)
-    for key in ('sec_detail', 'macro_detail', 'retail_detail'):
-        if key in out and not isinstance(out[key], list):
-            out[key] = list(out[key])
-    return out
+def _build_signal_pack(
+    *,
+    sec_dir,
+    a_sec,
+    sec_detail,
+    mac_dir,
+    a_mac,
+    macro_detail,
+    ret_dir,
+    a_retail,
+    retail_detail,
+    divergence_alert,
+    nuclear_confirmed,
+    groups,
+    effective_counts,
+    nlp_alpha,
+    must_mention_events,
+) -> dict:
+    def _round_score(value, decimals):
+        return round(float(value), decimals)
+
+    def _trim_details(values):
+        return list(values)[:3]
+
+    def _count_sources(group_key, fallback_key):
+        values = groups.get(group_key)
+        if values is None:
+            values = groups.get(fallback_key, [])
+        if isinstance(values, (list, tuple, set)):
+            return len(values)
+        try:
+            return int(values)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        'sec_stance': sec_dir,
+        'sec_score': _round_score(a_sec, 3),
+        'sec_detail': _trim_details(sec_detail),
+        'macro_stance': mac_dir,
+        'macro_score': _round_score(a_mac, 3),
+        'macro_detail': _trim_details(macro_detail),
+        'retail_stance': ret_dir,
+        'retail_score': _round_score(a_retail, 3),
+        'retail_detail': _trim_details(retail_detail),
+        'divergence': divergence_alert or '無',
+        'nuclear_alert': nuclear_confirmed,
+        'source_counts': {
+            'sec': _count_sources('SEC', 'sec'),
+            'macro': _count_sources('Macro', 'macro'),
+            'retail': _count_sources('Retail', 'retail'),
+        },
+        'effective_counts': dict(effective_counts),
+        'composite_alpha': _round_score(nlp_alpha, 4),
+        'must_mention_events': list(must_mention_events),
+    }
 
 
 TRINITY_CATEGORY_ROUTING = {

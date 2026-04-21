@@ -118,6 +118,178 @@ class TestNLPWorker(unittest.TestCase):
         self.assertTrue(annotated.get('must_keep'))
         self.assertEqual(annotated.get('event_window_days'), 10)
 
+    def test_annotate_macro_candidate_keeps_settlement_agreement_normal_without_customer_context(self):
+        candidate = {
+            'headline': 'Company reaches settlement agreement with former supplier',
+            'summary': 'Litigation over patent claims is resolved.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_internal_board_approval_normal_without_regulator_context(self):
+        candidate = {
+            'headline': 'Board approved new stock compensation plan',
+            'summary': 'No regulator involved in the internal approval.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_judge_orders_story_normal(self):
+        candidate = {
+            'headline': 'Judge orders company to pay damages',
+            'summary': 'Court ruling resolves a civil dispute.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_clearance_sale_story_normal(self):
+        candidate = {
+            'headline': 'Retailer announces inventory clearance sale',
+            'summary': 'Seasonal markdown event begins this weekend.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_internal_hq_permit_story_normal(self):
+        candidate = {
+            'headline': 'Board grants permit for new HQ',
+            'summary': 'Internal expansion project approved for the campus.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_smart_contract_story_normal(self):
+        candidate = {
+            'headline': 'Smart contract platform expands',
+            'summary': 'Developers launch tooling for blockchain workflows.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_retention_award_story_normal(self):
+        candidate = {
+            'headline': 'Company awarded CEO retention package',
+            'summary': 'Board compensation committee approved the retention bonus.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_sec_adviser_hire_story_normal(self):
+        candidate = {
+            'headline': 'Company hires former SEC official as adviser',
+            'summary': 'The former regulator joins as a strategic adviser.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_internal_software_license_story_normal(self):
+        candidate = {
+            'headline': 'Company renews software license for internal systems',
+            'summary': 'Back-office tooling contract renewed for internal use.',
+            'lane': 'macro',
+            'source': 'Reuters',
+            'published_at': datetime.now(timezone.utc),
+        }
+        annotated = _annotate_macro_candidate(candidate.copy())
+        self.assertEqual(annotated.get('event_class'), 'normal')
+        self.assertEqual(annotated.get('event_type'), 'normal')
+        self.assertFalse(annotated.get('must_keep'))
+        self.assertEqual(annotated.get('event_window_days'), 3)
+
+    def test_annotate_macro_candidate_keeps_benign_task1_local_false_positives_normal(self):
+        benign_cases = [
+            {
+                'headline': 'Company says customer demand remains soft in Europe',
+                'summary': 'Management discussed regional weakness on the call.',
+            },
+            {
+                'headline': 'Company hires former FTC lawyer as policy chief',
+                'summary': 'The former regulator joins the legal team.',
+            },
+            {
+                'headline': 'Company faces DOJ probe over marketing practices',
+                'summary': 'The matter remains under investigation.',
+            },
+            {
+                'headline': 'Company expands cloud software offering for banks',
+                'summary': 'New product capabilities launch this quarter.',
+            },
+            {
+                'headline': 'Retailer launches holiday product offering',
+                'summary': 'Seasonal assortment expands ahead of shopping season.',
+            },
+            {
+                'headline': 'Congress debates stopgap government funding bill',
+                'summary': 'Lawmakers continue negotiations in Washington.',
+            },
+            {
+                'headline': 'Company selected by index committee for inclusion',
+                'summary': 'The stock will join the benchmark next month.',
+            },
+        ]
+
+        for case in benign_cases:
+            with self.subTest(headline=case['headline']):
+                candidate = {
+                    **case,
+                    'lane': 'macro',
+                    'source': 'Reuters',
+                    'published_at': datetime.now(timezone.utc),
+                }
+                annotated = _annotate_macro_candidate(candidate.copy())
+                self.assertEqual(annotated.get('event_class'), 'normal')
+                self.assertEqual(annotated.get('event_type'), 'normal')
+                self.assertFalse(annotated.get('must_keep'))
+                self.assertEqual(annotated.get('event_window_days'), 3)
+
     def test_merge_macro_candidates_prioritizes_event_and_formats_exact_must_mention(self):
         published_at = datetime.now(timezone.utc)
         primary = [{
@@ -201,21 +373,21 @@ class TestNLPWorker(unittest.TestCase):
             packed,
             {
                 'sec_stance': 'neutral',
-                'sec_score': 0.0,
+                'sec_score': 0.005,
                 'sec_detail': [
                     '10-Q updated guidance',
                     '8-K disclosed risk factor changes',
                     'Form 4 insider buy',
                 ],
                 'macro_stance': 'bullish',
-                'macro_score': 0.51,
+                'macro_score': 0.505,
                 'macro_detail': [
                     'Macro(Reuters | 1.0h | w=0.95): Nvidia enters strategic partnership with TSMC',
                     'Macro(Bloomberg | 3.0h | w=0.75): Microsoft wins multi-year cloud contract',
                     'Macro(CNBC | 5.0h | w=0.60): Financing round expands runway',
                 ],
                 'retail_stance': 'neutral',
-                'retail_score': -0.33,
+                'retail_score': -0.334,
                 'retail_detail': [
                     'Retail buzz muted',
                     'Retail chatter skeptical',
@@ -225,7 +397,7 @@ class TestNLPWorker(unittest.TestCase):
                 'nuclear_alert': True,
                 'source_counts': {'sec': 2, 'macro': 4, 'retail': 3},
                 'effective_counts': {'sec': 1.0, 'macro': 1.95, 'retail': 1.0},
-                'composite_alpha': 0.21,
+                'composite_alpha': 0.2149,
                 'must_mention_events': must_mention_events,
             },
         )
@@ -259,6 +431,49 @@ class TestNLPWorker(unittest.TestCase):
 
     def test_build_signal_pack_includes_must_mention_events(self):
         return self.test_build_signal_pack_matches_task1_contract()
+
+    def test_build_signal_pack_rounds_task1_precision(self):
+        packed = _build_signal_pack(
+            sec_dir='neutral',
+            a_sec=0.0049,
+            sec_detail=['sec item'],
+            mac_dir='bullish',
+            a_mac=0.4449,
+            macro_detail=['macro item'],
+            ret_dir='neutral',
+            a_retail=-0.3344,
+            retail_detail=['retail item'],
+            divergence_alert='',
+            nuclear_confirmed=False,
+            groups={'SEC': ['sec item'], 'Macro': ['macro item'], 'Retail': ['retail item']},
+            effective_counts={'sec': 1.0, 'macro': 1.0, 'retail': 1.0},
+            nlp_alpha=0.21494,
+            must_mention_events=[],
+        )
+
+        self.assertEqual(packed['macro_score'], 0.445)
+        self.assertEqual(packed['composite_alpha'], 0.2149)
+
+    def test_merge_macro_candidates_caps_selected_items_even_for_many_must_keep(self):
+        published_at = datetime.now(timezone.utc)
+        many_must_keep_items = [
+            {
+                'headline': f'Major event {idx}',
+                'summary': 'Material announcement',
+                'lane': 'event',
+                'source': 'Reuters',
+                'published_at': published_at,
+                'event_class': 'major_event',
+                'event_type': 'acquisition',
+                'must_keep': True,
+                'event_window_days': 7,
+            }
+            for idx in range(3)
+        ]
+
+        merged = _merge_macro_candidates([], many_must_keep_items, max_macro_items=2, max_must_keep=2)
+
+        self.assertEqual(len(merged['selected_candidates']), 2)
 
 if __name__ == '__main__':
     unittest.main()
