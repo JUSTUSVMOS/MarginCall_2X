@@ -132,12 +132,11 @@ class FundamentalEngine:
             None,
         )
         short_pct = None
-        if short_shares is not None and not pd.isna(short_shares) and short_shares >= 0 and base_shares:
+        short_percent_of_float = info.get('shortPercentOfFloat')
+        if short_percent_of_float is not None and not pd.isna(short_percent_of_float) and short_percent_of_float >= 0:
+            short_pct = short_percent_of_float * 100
+        elif short_shares is not None and not pd.isna(short_shares) and short_shares >= 0 and base_shares:
             short_pct = (short_shares / base_shares) * 100
-        else:
-            short_percent_of_float = info.get('shortPercentOfFloat')
-            if short_percent_of_float is not None and not pd.isna(short_percent_of_float) and short_percent_of_float >= 0:
-                short_pct = short_percent_of_float * 100
 
         if short_pct is not None:
             short_pct_float = f"{short_pct:.2f}%"
