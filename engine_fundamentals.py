@@ -173,7 +173,8 @@ class FundamentalEngine:
                 res['損益表'] = f"營收: {rev_arr} | 毛利: {gp_arr} | 淨利: {ni_arr}"
             
             if bal is not None and not bal.empty:
-                cash_arr = self._extract_last_5(bal, 'Cash And Cash Equivalents')
+                cash_key = 'Cash Cash Equivalents And Short Term Investments' if 'Cash Cash Equivalents And Short Term Investments' in bal.index else 'Cash And Cash Equivalents'
+                cash_arr = self._extract_last_5(bal, cash_key)
                 debt_arr = self._extract_last_5(bal, 'Total Debt')
                 assets_arr = self._extract_last_5(bal, 'Total Assets')
                 res['資產負債表'] = f"現金: {cash_arr} | 總債務: {debt_arr} | 總資產: {assets_arr}"
@@ -197,7 +198,7 @@ class FundamentalEngine:
             "最新毛利率": f"{info.get('grossMargins', 0)*100:.2f}%" if info.get('grossMargins') else 'N/A',
             "最新淨利率": f"{info.get('profitMargins', 0)*100:.2f}%" if info.get('profitMargins') else 'N/A',
             "流動比率(Current Ratio)": info.get('currentRatio', 'N/A'),
-            "債務權益比(D/E)": info.get('debtToEquity', 'N/A')
+            "債務權益比(D/E)": f"{info.get('debtToEquity'):.2f}%" if info.get('debtToEquity') is not None else 'N/A'
         }
         
         # 動態計算 5 季歷史比率陣列
@@ -304,9 +305,15 @@ class FundamentalEngine:
     # ==========================================
     def get_insider_trading(self) -> str:
         try:
+            import pandas as pd
             insider = self.ticker.insider_transactions
             if insider is not None and not insider.empty:
-                recent = insider.head(3)
+                # 過濾掉 0 價值與 NaN 價值的贈與/轉倉交易
+                valid = insider.dropna(subset=['Value'])
+                valid = valid[valid['Value'] > 0]
+                if valid.empty:
+                    return "近期無具備實質金額的申報紀錄"
+                recent = valid.head(3)
                 lines = []
                 for idx, row in recent.iterrows():
                     date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx).split(' ')[0]
