@@ -704,6 +704,344 @@ class DirectHelperRuntimeTests(unittest.TestCase):
             [],
         )
 
+    def test_audit_trade_plan_alerts_resolves_plan_alerts_when_symbol_missing_from_snapshots(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("MRVL", 85.2, 5.0, 426.0, 0),
+            )
+            conn.commit()
+
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_backfill",
+            entry_price=85.2,
+            stop_loss=80.0,
+            take_profit_1=95.0,
+            take_profit_2=None,
+            max_holding_days=30,
+            thesis_type="breakout_support",
+            thesis_text="breakout should hold prior support",
+            thesis_payload=None,
+            status="active",
+        )
+
+        snapshot = {
+            "symbol": "MRVL",
+            "market": "US",
+            "is_cash": False,
+            "is_us_stock": True,
+            "shares": 5.0,
+            "cost": 85.2,
+            "twd_cost": 426.0,
+            "current_price": 79.8,
+            "market_value_twd": 399.0,
+            "pnl_value_twd": -27.0,
+            "pnl_percent": -0.0634,
+        }
+
+        with patch.object(engine_portfolio, "_build_live_position_snapshots", return_value=[snapshot]):
+            engine_portfolio.audit_trade_plan_alerts()
+
+        with database.locked_connection() as conn:
+            conn.execute("DELETE FROM portfolio WHERE symbol = ?", ("MRVL",))
+            conn.commit()
+
+        engine_portfolio.audit_trade_plan_alerts()
+
+        self.assertEqual(engine_portfolio.get_open_trade_plan_alerts(symbol="MRVL", alert_type="stop_hit"), [])
+        with database.locked_connection() as conn:
+            resolved = conn.execute(
+                """
+                SELECT status, resolved_at
+                FROM trade_plan_alerts
+                WHERE plan_id = ? AND alert_type = ?
+                """,
+                (plan_id, "stop_hit"),
+            ).fetchone()
+
+        self.assertEqual(resolved[0], "resolved")
+        self.assertIsNotNone(resolved[1])
+
+    def test_evaluate_trade_plan_alerts_fires_take_profit_alerts(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("NVDA", 100.0, 3.0, 300.0, 0),
+            )
+            conn.commit()
+
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="NVDA",
+            source="manual_backfill",
+            entry_price=100.0,
+            stop_loss=92.0,
+            take_profit_1=110.0,
+            take_profit_2=120.0,
+            max_holding_days=30,
+            thesis_type="breakout_support",
+            thesis_text="trend should keep advancing",
+            thesis_payload=None,
+            status="active",
+        )
+
+        snapshot = {
+            "symbol": "NVDA",
+            "market": "US",
+            "is_cash": False,
+            "is_us_stock": True,
+            "shares": 3.0,
+            "cost": 100.0,
+            "twd_cost": 300.0,
+            "current_price": 121.5,
+            "market_value_twd": 364.5,
+            "pnl_value_twd": 64.5,
+            "pnl_percent": 0.215,
+        }
+
+        with patch.object(engine_portfolio, "_build_live_position_snapshots", return_value=[snapshot]):
+            engine_portfolio.audit_trade_plan_alerts()
+
+        alerts = engine_portfolio.get_open_trade_plan_alerts(symbol="NVDA")
+        payloads = {alert["alert_type"]: alert["payload"] for alert in alerts if alert["plan_id"] == plan_id}
+
+        self.assertEqual(payloads["tp1_hit"]["target_price"], 110.0)
+        self.assertEqual(payloads["tp2_hit"]["target_price"], 120.0)
+        self.assertEqual(payloads["tp2_hit"]["current_price"], 121.5)
+
+    def test_evaluate_trade_plan_alerts_fires_holding_expiry_with_payload(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("AMD", 100.0, 4.0, 400.0, 0),
+            )
+            conn.commit()
+
+        with patch.object(engine_portfolio, "_utc_now_iso", return_value="2024-01-01T00:00:00Z"):
+            plan_id = engine_portfolio.upsert_trade_plan(
+                symbol="AMD",
+                source="manual_backfill",
+                entry_price=100.0,
+                stop_loss=92.0,
+                take_profit_1=110.0,
+                take_profit_2=None,
+                max_holding_days=10,
+                thesis_type="breakout_support",
+                thesis_text="trend should stay intact",
+                thesis_payload=None,
+                status="active",
+            )
+
+        snapshot = {
+            "symbol": "AMD",
+            "market": "US",
+            "is_cash": False,
+            "is_us_stock": True,
+            "shares": 4.0,
+            "cost": 100.0,
+            "twd_cost": 400.0,
+            "current_price": 105.0,
+            "market_value_twd": 420.0,
+            "pnl_value_twd": 20.0,
+            "pnl_percent": 0.05,
+        }
+
+        with patch.object(engine_portfolio, "_utc_now_iso", return_value="2024-01-15T00:00:00Z"), patch.object(
+            engine_portfolio, "_build_live_position_snapshots", return_value=[snapshot]
+        ):
+            engine_portfolio.audit_trade_plan_alerts()
+
+        alerts = [
+            alert
+            for alert in engine_portfolio.get_open_trade_plan_alerts(symbol="AMD")
+            if alert["alert_type"] == "holding_expiry"
+        ]
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["plan_id"], plan_id)
+        self.assertEqual(
+            alerts[0]["payload"],
+            {
+                "symbol": "AMD",
+                "held_days": 14,
+                "max_days": 10,
+                "current_return_pct": 0.05,
+            },
+        )
+
+    def test_evaluate_trade_plan_alerts_fires_breakout_support_thesis_invalid(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("AAPL", 100.0, 2.0, 200.0, 0),
+            )
+            conn.commit()
+
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="AAPL",
+            source="manual_backfill",
+            entry_price=100.0,
+            stop_loss=85.0,
+            take_profit_1=115.0,
+            take_profit_2=None,
+            max_holding_days=30,
+            thesis_type="breakout_support",
+            thesis_text="breakout should hold support",
+            thesis_payload={"support_level": 95.0},
+            status="active",
+        )
+
+        snapshot = {
+            "symbol": "AAPL",
+            "market": "US",
+            "is_cash": False,
+            "is_us_stock": True,
+            "shares": 2.0,
+            "cost": 100.0,
+            "twd_cost": 200.0,
+            "current_price": 94.0,
+            "market_value_twd": 188.0,
+            "pnl_value_twd": -12.0,
+            "pnl_percent": -0.06,
+        }
+
+        with patch.object(engine_portfolio, "_build_live_position_snapshots", return_value=[snapshot]):
+            engine_portfolio.audit_trade_plan_alerts()
+
+        alerts = [
+            alert
+            for alert in engine_portfolio.get_open_trade_plan_alerts(symbol="AAPL")
+            if alert["alert_type"] == "thesis_invalid"
+        ]
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["plan_id"], plan_id)
+        self.assertEqual(alerts[0]["payload"]["thesis_type"], "breakout_support")
+        self.assertEqual(alerts[0]["payload"]["support_level"], 95.0)
+        self.assertEqual(alerts[0]["payload"]["current_price"], 94.0)
+
+    def test_evaluate_trade_plan_alerts_sector_rotation_respects_configured_lookback(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("MRVL", 100.0, 2.0, 200.0, 0),
+            )
+            conn.commit()
+
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_backfill",
+            entry_price=100.0,
+            stop_loss=90.0,
+            take_profit_1=115.0,
+            take_profit_2=None,
+            max_holding_days=30,
+            thesis_type="sector_rotation",
+            thesis_text="semi leadership should outperform",
+            thesis_payload={"proxy_symbol": "SOXX", "lookback_days": 5, "underperform_pct": -0.03},
+            status="active",
+        )
+
+        snapshot = {
+            "symbol": "MRVL",
+            "market": "US",
+            "is_cash": False,
+            "is_us_stock": True,
+            "shares": 2.0,
+            "cost": 100.0,
+            "twd_cost": 200.0,
+            "current_price": 98.0,
+            "market_value_twd": 196.0,
+            "pnl_value_twd": -4.0,
+            "pnl_percent": -0.02,
+        }
+
+        with patch.object(engine_portfolio, "_fetch_recent_change", side_effect=[-0.08, -0.02]), patch.object(
+            engine_portfolio, "_build_live_position_snapshots", return_value=[snapshot]
+        ):
+            engine_portfolio.audit_trade_plan_alerts()
+
+        alerts = [
+            alert
+            for alert in engine_portfolio.get_open_trade_plan_alerts(symbol="MRVL")
+            if alert["alert_type"] == "thesis_invalid"
+        ]
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["plan_id"], plan_id)
+        self.assertEqual(alerts[0]["payload"]["lookback_days"], 5)
+        self.assertEqual(alerts[0]["payload"]["relative_performance_pct"], -0.06)
+
+    def test_build_trade_plan_status_summary_exposes_briefing_keys_and_decoded_alerts(self):
+        engine_portfolio.init_db()
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="AMD",
+            source="manual_backfill",
+            entry_price=100.0,
+            stop_loss=92.0,
+            take_profit_1=110.0,
+            take_profit_2=None,
+            max_holding_days=30,
+            thesis_type="breakout_support",
+            thesis_text="trend should stay intact",
+            thesis_payload=None,
+            status="active",
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="AMD",
+            alert_type="stop_hit",
+            severity="critical",
+            plan_id=plan_id,
+            payload={"current_price": 89.5},
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="NVDA",
+            alert_type="missing_plan",
+            severity="warning",
+            payload={"reason": "live_portfolio_without_plan"},
+        )
+
+        summary = engine_portfolio.build_trade_plan_status_summary()
+
+        self.assertEqual(summary["open_alert_count"], 2)
+        self.assertEqual(summary["missing_plan_count"], 1)
+        self.assertEqual(len(summary["alerts"]), 2)
+        stop_alert = next(alert for alert in summary["alerts"] if alert["alert_type"] == "stop_hit")
+        self.assertEqual(stop_alert["payload"]["current_price"], 89.5)
+
+    def test_upsert_trade_plan_alert_locked_updates_without_row_factory(self):
+        engine_portfolio.init_db()
+
+        with database.locked_connection() as conn:
+            cursor = conn.cursor()
+            first_id = engine_portfolio._upsert_trade_plan_alert_locked(
+                cursor,
+                symbol="AMD",
+                alert_type="monitor_degraded",
+                severity="warning",
+                payload={"error": "first"},
+            )
+            second_id = engine_portfolio._upsert_trade_plan_alert_locked(
+                cursor,
+                symbol="AMD",
+                alert_type="monitor_degraded",
+                severity="warning",
+                payload={"error": "second"},
+            )
+            conn.commit()
+            payload_json = conn.execute(
+                "SELECT payload_json FROM trade_plan_alerts WHERE id = ?",
+                (first_id,),
+            ).fetchone()[0]
+
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(payload_json, '{"error": "second"}')
+
     def test_init_db_dedupes_legacy_open_trade_plan_alerts_before_creating_unique_index(self):
         with database.locked_connection() as conn:
             conn.execute(

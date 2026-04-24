@@ -88,6 +88,13 @@ TRADE_PLAN_ALERT_COLUMNS = (
     "resolved_at",
 )
 TRADE_PLAN_ALERT_SELECT = ", ".join(TRADE_PLAN_ALERT_COLUMNS)
+TRADE_PLAN_MONITOR_ALERT_TYPES = (
+    "stop_hit",
+    "tp1_hit",
+    "tp2_hit",
+    "holding_expiry",
+    "thesis_invalid",
+)
 
 TRADE_GOVERNOR_LIMITS = {
     "normal": {"single_name_cap": 0.15, "sector_cap": 0.35},
@@ -1137,10 +1144,12 @@ def _upsert_trade_plan_alert_locked(
     now = _utc_now_iso()
     serialized_payload = _serialize_json(payload)
     if existing:
-        # Callers set row_factory to sqlite3.Row before invoking this helper, so
-        # alert upserts can rely on mapping-style column access here.
-        existing_plan_id = existing["plan_id"]
-        alert_id = int(existing["id"])
+        if isinstance(existing, sqlite3.Row):
+            alert_id = int(existing["id"])
+            existing_plan_id = existing["plan_id"]
+        else:
+            alert_id = int(existing[0])
+            existing_plan_id = existing[1]
         cursor.execute(
             """
             UPDATE trade_plan_alerts
@@ -1207,7 +1216,6 @@ def upsert_trade_plan_alert(
     with db_lock:
         conn = get_connection()
         try:
-            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             alert_id = _upsert_trade_plan_alert_locked(
                 cursor,
@@ -1300,26 +1308,307 @@ def _build_trade_plan_snapshot_lookup(snapshots: List[Dict[str, Any]]) -> Dict[s
     return lookup
 
 
+def _parse_trade_plan_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _snapshot_current_return_pct(plan: Dict[str, Any], snapshot: Dict[str, Any]) -> float | None:
+    pnl_percent = snapshot.get("pnl_percent")
+    if isinstance(pnl_percent, (int, float)):
+        return round(float(pnl_percent), 4)
+    current_price = snapshot.get("current_price")
+    entry_price = plan.get("entry_price")
+    if not isinstance(current_price, (int, float)) or not isinstance(entry_price, (int, float)) or float(entry_price) == 0:
+        return None
+    return round((float(current_price) / float(entry_price)) - 1.0, 4)
+
+
+def _trade_plan_held_days(plan: Dict[str, Any], now_iso: str) -> int | None:
+    now_dt = _parse_trade_plan_timestamp(now_iso)
+    opened_dt = _parse_trade_plan_timestamp(plan.get("created_at"))
+    if now_dt is None or opened_dt is None or now_dt < opened_dt:
+        return None
+    return int((now_dt - opened_dt).days)
+
+
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_trade_plan_price_alert(
+    *,
+    alert_type: str,
+    severity: str,
+    symbol: str,
+    current_price: float,
+    threshold_key: str,
+    threshold_value: float,
+    thesis_type: str | None,
+) -> Dict[str, Any]:
+    return {
+        "alert_type": alert_type,
+        "severity": severity,
+        "payload": {
+            "symbol": symbol,
+            "current_price": round(float(current_price), 4),
+            threshold_key: float(threshold_value),
+            "thesis_type": thesis_type,
+        },
+    }
+
+
+def _evaluate_trade_plan_thesis_invalid_spec(
+    plan: Dict[str, Any],
+    snapshot: Dict[str, Any],
+    *,
+    now_iso: str,
+) -> Dict[str, Any] | None:
+    thesis_type = str(plan.get("thesis_type") or "").strip()
+    thesis_payload = _deserialize_json(plan.get("thesis_payload_json"))
+    current_price = _coerce_float(snapshot.get("current_price"))
+    symbol = normalize_ticker(plan["symbol"])
+    if not thesis_type or not isinstance(thesis_payload, dict) or current_price is None:
+        return None
+
+    if thesis_type == "breakout_support":
+        support_level = _coerce_float(
+            thesis_payload.get("support_level", thesis_payload.get("breakout_level"))
+        )
+        if support_level is None or current_price >= support_level:
+            return None
+        return {
+            "alert_type": "thesis_invalid",
+            "severity": "warning",
+            "payload": {
+                "symbol": symbol,
+                "thesis_type": thesis_type,
+                "current_price": round(current_price, 4),
+                "support_level": support_level,
+            },
+        }
+
+    if thesis_type == "sector_rotation":
+        proxy_symbol = thesis_payload.get("proxy_symbol")
+        if not proxy_symbol:
+            return None
+        lookback_days = _coerce_int(thesis_payload.get("lookback_days")) or 1
+        symbol_change = _fetch_recent_change(symbol, lookback_days)
+        proxy_change = _fetch_recent_change(str(proxy_symbol), lookback_days)
+        threshold = _coerce_float(thesis_payload.get("underperform_pct"))
+        if symbol_change is None or proxy_change is None:
+            return None
+        relative_performance = round(float(symbol_change) - float(proxy_change), 4)
+        threshold_pct = 0.0 if threshold is None else float(threshold)
+        if relative_performance > threshold_pct:
+            return None
+        return {
+            "alert_type": "thesis_invalid",
+            "severity": "warning",
+            "payload": {
+                "symbol": symbol,
+                "thesis_type": thesis_type,
+                "proxy_symbol": normalize_ticker(str(proxy_symbol)),
+                "symbol_change_pct": round(float(symbol_change), 4),
+                "proxy_change_pct": round(float(proxy_change), 4),
+                "relative_performance_pct": relative_performance,
+                "threshold_pct": threshold_pct,
+                "lookback_days": lookback_days,
+            },
+        }
+
+    if thesis_type == "mean_reversion":
+        recovery_window_days = _coerce_int(thesis_payload.get("recovery_window_days"))
+        held_days = _trade_plan_held_days(plan, now_iso)
+        recovery_price = _coerce_float(
+            thesis_payload.get("recovery_price", thesis_payload.get("reference_price", plan.get("entry_price")))
+        )
+        if (
+            recovery_window_days is None
+            or recovery_window_days < 0
+            or held_days is None
+            or held_days < recovery_window_days
+            or recovery_price is None
+            or current_price >= recovery_price
+        ):
+            return None
+        return {
+            "alert_type": "thesis_invalid",
+            "severity": "warning",
+            "payload": {
+                "symbol": symbol,
+                "thesis_type": thesis_type,
+                "current_price": round(current_price, 4),
+                "reference_price": recovery_price,
+                "held_days": held_days,
+                "recovery_window_days": recovery_window_days,
+            },
+        }
+
+    if thesis_type == "earnings":
+        review_window_days = _coerce_int(thesis_payload.get("review_window_days"))
+        held_days = _trade_plan_held_days(plan, now_iso)
+        expected_direction = str(thesis_payload.get("expected_direction") or "").strip().lower()
+        reference_price = _coerce_float(thesis_payload.get("reference_price", plan.get("entry_price")))
+        if (
+            review_window_days is None
+            or review_window_days < 0
+            or held_days is None
+            or held_days < review_window_days
+            or expected_direction not in {"up", "down"}
+            or reference_price is None
+            or reference_price == 0
+        ):
+            return None
+        move_pct = round((current_price / reference_price) - 1.0, 4)
+        moved_opposite = (expected_direction == "up" and move_pct < 0) or (
+            expected_direction == "down" and move_pct > 0
+        )
+        if not moved_opposite:
+            return None
+        return {
+            "alert_type": "thesis_invalid",
+            "severity": "warning",
+            "payload": {
+                "symbol": symbol,
+                "thesis_type": thesis_type,
+                "expected_direction": expected_direction,
+                "move_pct": move_pct,
+                "review_window_days": review_window_days,
+                "held_days": held_days,
+            },
+        }
+
+    if thesis_type == "event_driven":
+        deadline_raw = thesis_payload.get("invalidation_deadline", thesis_payload.get("catalyst_deadline"))
+        deadline_dt = _parse_trade_plan_timestamp(deadline_raw)
+        now_dt = _parse_trade_plan_timestamp(now_iso)
+        if deadline_dt is None or now_dt is None or now_dt <= deadline_dt:
+            return None
+        if thesis_payload.get("confirmed") is True or thesis_payload.get("catalyst_confirmed") is True:
+            return None
+        return {
+            "alert_type": "thesis_invalid",
+            "severity": "warning",
+            "payload": {
+                "symbol": symbol,
+                "thesis_type": thesis_type,
+                "deadline": deadline_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "confirmed": False,
+            },
+        }
+
+    return None
+
+
+def _resolve_stale_trade_plan_alerts(symbol: str, plan_id: int, active_alert_types: set[str]) -> None:
+    for alert in get_open_trade_plan_alerts(symbol=symbol):
+        if alert["plan_id"] != plan_id:
+            continue
+        if alert["alert_type"] not in TRADE_PLAN_MONITOR_ALERT_TYPES:
+            continue
+        if alert["alert_type"] in active_alert_types:
+            continue
+        resolve_trade_plan_alert(symbol=symbol, alert_type=alert["alert_type"], plan_id=plan_id)
+
+
 def _evaluate_trade_plan_alert_specs(
     plan: Dict[str, Any],
     snapshot: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     alerts: List[Dict[str, Any]] = []
-    current_price = snapshot.get("current_price")
-    stop_loss = plan.get("stop_loss")
-    if isinstance(current_price, (int, float)) and stop_loss is not None and float(current_price) <= float(stop_loss):
+    current_price = _coerce_float(snapshot.get("current_price"))
+    symbol = normalize_ticker(plan["symbol"])
+    thesis_type = plan.get("thesis_type")
+    now_iso = _utc_now_iso()
+
+    stop_loss = _coerce_float(plan.get("stop_loss"))
+    if current_price is not None and stop_loss is not None and current_price <= stop_loss:
+        alerts.append(
+            _build_trade_plan_price_alert(
+                alert_type="stop_hit",
+                severity="critical",
+                symbol=symbol,
+                current_price=current_price,
+                threshold_key="stop_loss",
+                threshold_value=stop_loss,
+                thesis_type=thesis_type,
+            )
+        )
+
+    take_profit_1 = _coerce_float(plan.get("take_profit_1"))
+    if current_price is not None and take_profit_1 is not None and current_price >= take_profit_1:
+        alerts.append(
+            _build_trade_plan_price_alert(
+                alert_type="tp1_hit",
+                severity="info",
+                symbol=symbol,
+                current_price=current_price,
+                threshold_key="target_price",
+                threshold_value=take_profit_1,
+                thesis_type=thesis_type,
+            )
+        )
+
+    take_profit_2 = _coerce_float(plan.get("take_profit_2"))
+    if current_price is not None and take_profit_2 is not None and current_price >= take_profit_2:
+        alerts.append(
+            _build_trade_plan_price_alert(
+                alert_type="tp2_hit",
+                severity="info",
+                symbol=symbol,
+                current_price=current_price,
+                threshold_key="target_price",
+                threshold_value=take_profit_2,
+                thesis_type=thesis_type,
+            )
+        )
+
+    max_holding_days = _coerce_int(plan.get("max_holding_days"))
+    held_days = _trade_plan_held_days(plan, now_iso)
+    if max_holding_days is not None and max_holding_days >= 0 and held_days is not None and held_days >= max_holding_days:
+        holding_payload = {
+            "symbol": symbol,
+            "held_days": held_days,
+            "max_days": max_holding_days,
+            "current_return_pct": _snapshot_current_return_pct(plan, snapshot),
+        }
         alerts.append(
             {
-                "alert_type": "stop_hit",
-                "severity": "critical",
-                "payload": {
-                    "symbol": normalize_ticker(plan["symbol"]),
-                    "current_price": round(float(current_price), 4),
-                    "stop_loss": float(stop_loss),
-                    "thesis_type": plan.get("thesis_type"),
-                },
+                "alert_type": "holding_expiry",
+                "severity": "warning",
+                "payload": holding_payload,
             }
         )
+
+    thesis_invalid_spec = _evaluate_trade_plan_thesis_invalid_spec(plan, snapshot, now_iso=now_iso)
+    if thesis_invalid_spec is not None:
+        alerts.append(thesis_invalid_spec)
     return alerts
 
 
@@ -1353,9 +1642,11 @@ def audit_trade_plan_alerts() -> Dict[str, Any]:
 
     for plan in active_plans:
         symbol = normalize_ticker(plan["symbol"])
-        resolve_trade_plan_alert(symbol=symbol, alert_type="monitor_degraded", plan_id=int(plan["id"]))
+        plan_id = int(plan["id"])
+        resolve_trade_plan_alert(symbol=symbol, alert_type="monitor_degraded", plan_id=plan_id)
         snapshot = snapshot_lookup.get(symbol)
         if snapshot is None:
+            _resolve_stale_trade_plan_alerts(symbol, plan_id, set())
             continue
 
         alert_specs = _evaluate_trade_plan_alert_specs(plan, snapshot)
@@ -1364,9 +1655,10 @@ def audit_trade_plan_alerts() -> Dict[str, Any]:
                 symbol=symbol,
                 alert_type=spec["alert_type"],
                 severity=spec["severity"],
-                plan_id=int(plan["id"]),
+                plan_id=plan_id,
                 payload=spec["payload"],
             )
+        _resolve_stale_trade_plan_alerts(symbol, plan_id, {spec["alert_type"] for spec in alert_specs})
         if alert_specs:
             result["symbols"].append(symbol)
             result["triggered"] += len(alert_specs)
@@ -1377,12 +1669,15 @@ def audit_trade_plan_alerts() -> Dict[str, Any]:
 def build_trade_plan_status_summary() -> Dict[str, Any]:
     active_plans = list_active_trade_plans()
     open_alerts = get_open_trade_plan_alerts()
+    missing_plan_count = sum(1 for alert in open_alerts if alert["alert_type"] == "missing_plan")
     return {
         "generated_at": _utc_now_iso(),
         "portfolio_symbols": get_current_portfolio_symbols(),
         "active_plan_count": len(active_plans),
         "active_plans": active_plans,
         "open_alert_count": len(open_alerts),
+        "missing_plan_count": missing_plan_count,
+        "alerts": open_alerts,
         "open_alerts": open_alerts,
     }
 
@@ -1491,23 +1786,30 @@ def _resolve_sync_lookup_symbol(symbol: str) -> str:
     return market._normalize_lookup_symbol(clean_symbol)
 
 
-def _fetch_recent_change_1d(symbol: str) -> float | None:
+def _fetch_recent_change(symbol: str, days: int = 1) -> float | None:
     try:
-        hist = get_ticker(symbol, cache_level="daily").history(period="5d")
+        lookback_days = max(int(days), 1)
+        hist = get_ticker(symbol, cache_level="daily").history(
+            period=f"{max(lookback_days * 2, lookback_days + 4)}d"
+        )
         closes = hist.get("Close") if isinstance(hist, pd.DataFrame) else None
         if closes is None:
             return None
         closes = pd.Series(closes).dropna()
-        if len(closes) < 2:
+        if len(closes) <= lookback_days:
             return None
-        prev_close = float(closes.iloc[-2])
+        prev_close = float(closes.iloc[-(lookback_days + 1)])
         last_close = float(closes.iloc[-1])
         if prev_close == 0:
             return None
         return round((last_close / prev_close) - 1.0, 4)
     except Exception as exc:
-        logger.debug(f"1d change lookup failed for {symbol}: {exc}")
+        logger.debug(f"Recent change lookup failed for {symbol}: {exc}")
         return None
+
+
+def _fetch_recent_change_1d(symbol: str) -> float | None:
+    return _fetch_recent_change(symbol, 1)
 
 
 def _fetch_latest_price_value(symbol: str) -> float | None:
