@@ -3,6 +3,7 @@ import sys
 import types
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 if "fubon_neo.sdk" not in sys.modules:
@@ -301,3 +302,134 @@ class TradePlanPersistenceTests(unittest.TestCase):
                 ("MSFT", "manual_refresh"),
             ],
         )
+
+
+class DirectHelperRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.db_path = Path(__file__).with_name("_task2_trade_plan_runtime.sqlite3")
+        self.csv_backup = Path(__file__).with_name("_task2_trade_plan_runtime.csv")
+        self.original_db_file = database.DB_FILE
+        self.original_csv_backup = engine_portfolio.CSV_BACKUP
+        database.DB_FILE = self.db_path
+        engine_portfolio.CSV_BACKUP = str(self.csv_backup)
+        self._cleanup_paths()
+
+    def tearDown(self):
+        database.DB_FILE = self.original_db_file
+        engine_portfolio.CSV_BACKUP = self.original_csv_backup
+        self._cleanup_paths()
+
+    def _cleanup_paths(self):
+        for path in (
+            self.db_path,
+            Path(f"{self.db_path}-wal"),
+            Path(f"{self.db_path}-shm"),
+            self.csv_backup,
+        ):
+            path.unlink(missing_ok=True)
+
+    def test_execute_position_update_rejects_buy_without_complete_trade_plan(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("CASH_USD", 1.0, 1000.0, 32000.0, 0),
+            )
+            conn.commit()
+
+        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0), patch.object(
+            engine_portfolio,
+            "_apply_pretrade_risk_gate",
+            return_value={
+                "allowed": True,
+                "approved_shares": 2.0,
+                "approved_twd_total": 6400.0,
+                "message": "",
+                "note": None,
+            },
+        ):
+            result = engine_portfolio.execute_position_update("AAPL", 100.0, 2.0, action="buy")
+
+        self.assertIn("交易計畫", result)
+        self.assertIn("停損", result)
+
+    def test_execute_position_update_buy_persists_active_trade_plan(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("CASH_USD", 1.0, 1000.0, 32000.0, 0),
+            )
+            conn.commit()
+
+        trade_plan = {
+            "stop_loss": 92.0,
+            "take_profit_1": 115.0,
+            "take_profit_2": 124.0,
+            "max_holding_days": 30,
+            "thesis_type": "breakout",
+            "thesis_text": "earnings revision acceleration",
+        }
+
+        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0), patch.object(
+            engine_portfolio,
+            "_apply_pretrade_risk_gate",
+            return_value={
+                "allowed": True,
+                "approved_shares": 2.0,
+                "approved_twd_total": 6400.0,
+                "message": "",
+                "note": None,
+            },
+        ):
+            result = engine_portfolio.execute_position_update(
+                "AAPL",
+                100.0,
+                2.0,
+                action="buy",
+                trade_plan=trade_plan,
+            )
+
+        active_plan = engine_portfolio.get_active_trade_plan("AAPL")
+
+        self.assertIn("✅ 買進成功", result)
+        self.assertIsNotNone(active_plan)
+        self.assertEqual(active_plan["source"], "bot_trade")
+        self.assertEqual(active_plan["status"], "active")
+        self.assertEqual(active_plan["entry_price"], 100.0)
+        self.assertEqual(active_plan["stop_loss"], 92.0)
+        self.assertEqual(active_plan["take_profit_1"], 115.0)
+        self.assertEqual(active_plan["take_profit_2"], 124.0)
+        self.assertEqual(active_plan["max_holding_days"], 30)
+        self.assertEqual(active_plan["thesis_type"], "breakout")
+        self.assertEqual(active_plan["thesis_text"], "earnings revision acceleration")
+
+    def test_execute_position_update_allows_buy_without_trade_plan_when_pretrade_gate_disabled(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("CASH_USD", 1.0, 1000.0, 32000.0, 0),
+            )
+            conn.commit()
+
+        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0), patch.object(
+            engine_portfolio,
+            "_apply_pretrade_risk_gate",
+            return_value={
+                "allowed": True,
+                "approved_shares": 2.0,
+                "approved_twd_total": 6400.0,
+                "message": "",
+                "note": None,
+            },
+        ):
+            result = engine_portfolio.execute_position_update(
+                "AAPL",
+                100.0,
+                2.0,
+                action="buy",
+                enforce_pretrade_gate=False,
+            )
+
+        self.assertIn("✅ 買進成功", result)

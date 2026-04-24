@@ -50,6 +50,13 @@ TRADE_PLAN_REQUIRED_FIELDS = (
     "thesis_type",
     "thesis_text",
 )
+TRADE_PLAN_FIELD_LABELS = {
+    "stop_loss": "停損",
+    "take_profit_1": "第一止盈",
+    "max_holding_days": "最長持有天數",
+    "thesis_type": "交易分類",
+    "thesis_text": "交易理由",
+}
 TRADE_PLAN_COLUMNS = (
     "id",
     "symbol",
@@ -777,14 +784,20 @@ def _merge_trade_plan_values(
     }
 
 
-def _validate_trade_plan_payload(plan_values: Dict[str, Any]) -> None:
-    if plan_values["status"] != "active":
-        return
+def validate_trade_plan_payload(payload: Dict[str, Any] | None) -> Dict[str, Any]:
+    payload = payload or {}
     missing_fields = [
         field
         for field in TRADE_PLAN_REQUIRED_FIELDS
-        if plan_values.get(field) is None or (isinstance(plan_values.get(field), str) and not plan_values.get(field).strip())
+        if payload.get(field) is None or (isinstance(payload.get(field), str) and not payload.get(field).strip())
     ]
+    return {"complete": not missing_fields, "missing_fields": missing_fields}
+
+
+def _validate_trade_plan_payload(plan_values: Dict[str, Any]) -> None:
+    if plan_values["status"] != "active":
+        return
+    missing_fields = validate_trade_plan_payload(plan_values)["missing_fields"]
     if missing_fields:
         raise ValueError(f"active trade plan requires fields: {', '.join(missing_fields)}")
 
@@ -798,6 +811,117 @@ def _query_trade_plan_rows(query: str, params: tuple[Any, ...] = ()) -> List[Dic
             return [dict(row) for row in rows]
         finally:
             conn.close()
+
+
+def _upsert_trade_plan_locked(
+    cursor,
+    *,
+    symbol: str,
+    source: str,
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit_1: float | None,
+    take_profit_2: float | None,
+    max_holding_days: int | None,
+    thesis_type: str | None,
+    thesis_text: str | None,
+    thesis_payload: Dict[str, Any] | None,
+    status: str = "draft",
+    opened_trade_log_id: int | None = None,
+    select_fragment: str = TRADE_PLAN_SELECT,
+) -> int:
+    normalized = normalize_ticker(symbol)
+    existing = cursor.execute(
+        f"""
+        SELECT {select_fragment}
+        FROM trade_plans
+        WHERE symbol = ? AND status IN ('draft', 'active')
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (normalized,),
+    ).fetchone()
+    now = _utc_now_iso()
+    plan_values = _merge_trade_plan_values(
+        existing,
+        source=source,
+        opened_trade_log_id=opened_trade_log_id,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit_1=take_profit_1,
+        take_profit_2=take_profit_2,
+        max_holding_days=max_holding_days,
+        thesis_type=thesis_type,
+        thesis_text=thesis_text,
+        thesis_payload=thesis_payload,
+        status=status,
+    )
+    _validate_trade_plan_payload(plan_values)
+    newly_active = status == "active" and (existing is None or existing["status"] != "active")
+    if existing:
+        plan_id = int(existing["id"])
+        cursor.execute(
+            """
+            UPDATE trade_plans
+            SET source = ?, opened_trade_log_id = ?,
+                entry_price = ?, stop_loss = ?, take_profit_1 = ?, take_profit_2 = ?,
+                max_holding_days = ?, thesis_type = ?, thesis_text = ?,
+                thesis_payload_json = ?, status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                plan_values["source"],
+                plan_values["opened_trade_log_id"],
+                plan_values["entry_price"],
+                plan_values["stop_loss"],
+                plan_values["take_profit_1"],
+                plan_values["take_profit_2"],
+                plan_values["max_holding_days"],
+                plan_values["thesis_type"],
+                plan_values["thesis_text"],
+                plan_values["thesis_payload_json"],
+                plan_values["status"],
+                now,
+                plan_id,
+            ),
+        )
+        _record_trade_plan_event(
+            cursor,
+            plan_id=plan_id,
+            event_type="plan_updated",
+            payload={"status": plan_values["status"]},
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO trade_plans (
+                symbol, status, source, opened_trade_log_id, entry_price, stop_loss,
+                take_profit_1, take_profit_2, max_holding_days, thesis_type,
+                thesis_text, thesis_payload_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized,
+                plan_values["status"],
+                plan_values["source"],
+                plan_values["opened_trade_log_id"],
+                plan_values["entry_price"],
+                plan_values["stop_loss"],
+                plan_values["take_profit_1"],
+                plan_values["take_profit_2"],
+                plan_values["max_holding_days"],
+                plan_values["thesis_type"],
+                plan_values["thesis_text"],
+                plan_values["thesis_payload_json"],
+                now,
+                now,
+            ),
+        )
+        plan_id = int(cursor.lastrowid)
+        _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_created", payload={"source": source})
+    if newly_active:
+        _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_activated")
+    return plan_id
 
 
 def upsert_trade_plan(
@@ -821,27 +945,16 @@ def upsert_trade_plan(
     On updates, ``None`` means "keep the current stored value" for optional fields,
     including ``thesis_payload``; this API has no sentinel-based clear behavior.
     """
-    normalized = normalize_ticker(symbol)
+    select_fragment = TRADE_PLAN_SELECT
     with db_lock:
         conn = get_connection()
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            existing = cursor.execute(
-                f"""
-                SELECT {TRADE_PLAN_SELECT}
-                FROM trade_plans
-                WHERE symbol = ? AND status IN ('draft', 'active')
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (normalized,),
-            ).fetchone()
-            now = _utc_now_iso()
-            plan_values = _merge_trade_plan_values(
-                existing,
+            plan_id = _upsert_trade_plan_locked(
+                cursor,
+                symbol=symbol,
                 source=source,
-                opened_trade_log_id=opened_trade_log_id,
                 entry_price=entry_price,
                 stop_loss=stop_loss,
                 take_profit_1=take_profit_1,
@@ -851,74 +964,9 @@ def upsert_trade_plan(
                 thesis_text=thesis_text,
                 thesis_payload=thesis_payload,
                 status=status,
+                opened_trade_log_id=opened_trade_log_id,
+                select_fragment=select_fragment,
             )
-            # Validation intentionally checks the merged persisted+incoming view while
-            # the row is locked so active-plan requirements apply to the final state.
-            _validate_trade_plan_payload(plan_values)
-            newly_active = status == "active" and (existing is None or existing["status"] != "active")
-            if existing:
-                plan_id = int(existing["id"])
-                cursor.execute(
-                    """
-                    UPDATE trade_plans
-                    SET source = ?, opened_trade_log_id = ?,
-                        entry_price = ?, stop_loss = ?, take_profit_1 = ?, take_profit_2 = ?,
-                        max_holding_days = ?, thesis_type = ?, thesis_text = ?,
-                        thesis_payload_json = ?, status = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        plan_values["source"],
-                        plan_values["opened_trade_log_id"],
-                        plan_values["entry_price"],
-                        plan_values["stop_loss"],
-                        plan_values["take_profit_1"],
-                        plan_values["take_profit_2"],
-                        plan_values["max_holding_days"],
-                        plan_values["thesis_type"],
-                        plan_values["thesis_text"],
-                        plan_values["thesis_payload_json"],
-                        plan_values["status"],
-                        now,
-                        plan_id,
-                    ),
-                )
-                _record_trade_plan_event(
-                    cursor,
-                    plan_id=plan_id,
-                    event_type="plan_updated",
-                    payload={"status": plan_values["status"]},
-                )
-            else:
-                cursor.execute(
-                    """
-                    INSERT INTO trade_plans (
-                        symbol, status, source, opened_trade_log_id, entry_price, stop_loss,
-                        take_profit_1, take_profit_2, max_holding_days, thesis_type,
-                        thesis_text, thesis_payload_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        normalized,
-                        plan_values["status"],
-                        plan_values["source"],
-                        plan_values["opened_trade_log_id"],
-                        plan_values["entry_price"],
-                        plan_values["stop_loss"],
-                        plan_values["take_profit_1"],
-                        plan_values["take_profit_2"],
-                        plan_values["max_holding_days"],
-                        plan_values["thesis_type"],
-                        plan_values["thesis_text"],
-                        plan_values["thesis_payload_json"],
-                        now,
-                        now,
-                    ),
-                )
-                plan_id = int(cursor.lastrowid)
-                _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_created", payload={"source": source})
-            if newly_active:
-                _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_activated")
             conn.commit()
             return plan_id
         finally:
@@ -943,6 +991,167 @@ def list_active_trade_plans() -> List[Dict[str, Any]]:
     return _query_trade_plan_rows(
         f"SELECT {TRADE_PLAN_SELECT} FROM trade_plans WHERE status = 'active' ORDER BY symbol, id DESC"
     )
+
+
+def _build_trade_plan_payload(
+    *,
+    symbol: str,
+    entry_price: float | None,
+    trade_plan: Dict[str, Any] | None = None,
+    source: str,
+    status: str,
+    opened_trade_log_id: int | None = None,
+) -> Dict[str, Any]:
+    trade_plan = trade_plan or {}
+    thesis_payload = trade_plan.get("thesis_payload")
+    return {
+        "symbol": normalize_ticker(symbol),
+        "source": source,
+        "opened_trade_log_id": opened_trade_log_id,
+        "entry_price": entry_price,
+        "stop_loss": trade_plan.get("stop_loss"),
+        "take_profit_1": trade_plan.get("take_profit_1"),
+        "take_profit_2": trade_plan.get("take_profit_2"),
+        "max_holding_days": trade_plan.get("max_holding_days"),
+        "thesis_type": trade_plan.get("thesis_type"),
+        "thesis_text": trade_plan.get("thesis_text"),
+        "thesis_payload": thesis_payload if isinstance(thesis_payload, dict) or thesis_payload is None else None,
+        "status": status,
+    }
+
+
+def _validate_buy_trade_plan_or_error(
+    symbol: str,
+    entry_price: float | None,
+    trade_plan: Dict[str, Any] | None = None,
+) -> str | None:
+    payload = _build_trade_plan_payload(
+        symbol=symbol,
+        entry_price=entry_price,
+        trade_plan=trade_plan,
+        source="bot_trade",
+        status="active",
+    )
+    validation = validate_trade_plan_payload(payload)
+    if validation["complete"]:
+        return None
+    missing_labels = ", ".join(
+        TRADE_PLAN_FIELD_LABELS.get(field, field) for field in validation["missing_fields"]
+    )
+    return format_tool_error(f"❌ 買進前需提供完整交易計畫，缺少：{missing_labels}。", data_unavailable=True)
+
+
+def _upsert_trade_plan_alert_locked(
+    cursor,
+    *,
+    symbol: str,
+    alert_type: str,
+    severity: str,
+    status: str = "open",
+    plan_id: int | None = None,
+    payload: Dict[str, Any] | None = None,
+) -> int:
+    normalized = normalize_ticker(symbol)
+    existing = cursor.execute(
+        """
+        SELECT id, plan_id
+        FROM trade_plan_alerts
+        WHERE symbol = ? AND alert_type = ? AND status = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (normalized, alert_type, status),
+    ).fetchone()
+    now = _utc_now_iso()
+    serialized_payload = _serialize_json(payload)
+    if existing:
+        existing_plan_id = existing["plan_id"] if isinstance(existing, sqlite3.Row) else existing[1]
+        alert_id = int(existing["id"] if isinstance(existing, sqlite3.Row) else existing[0])
+        cursor.execute(
+            """
+            UPDATE trade_plan_alerts
+            SET plan_id = ?, severity = ?, payload_json = ?, last_seen_at = ?
+            WHERE id = ?
+            """,
+            (
+                plan_id if plan_id is not None else existing_plan_id,
+                severity,
+                serialized_payload,
+                now,
+                alert_id,
+            ),
+        )
+        return alert_id
+
+    cursor.execute(
+        """
+        INSERT INTO trade_plan_alerts (
+            plan_id, symbol, alert_type, severity, status, payload_json, first_seen_at, last_seen_at, resolved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (plan_id, normalized, alert_type, severity, status, serialized_payload, now, now, None),
+    )
+    return int(cursor.lastrowid)
+
+
+def sync_trade_plan_backfills() -> Dict[str, Any]:
+    created_symbols: List[str] = []
+    rows = _load_portfolio_rows()
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            for symbol, cost, shares, _ in rows:
+                normalized = normalize_ticker(symbol)
+                if normalized.startswith("CASH") or float(shares or 0) <= 0:
+                    continue
+
+                existing = cursor.execute(
+                    f"""
+                    SELECT {TRADE_PLAN_SELECT}
+                    FROM trade_plans
+                    WHERE symbol = ? AND status IN ('draft', 'active')
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (normalized,),
+                ).fetchone()
+                if existing:
+                    continue
+
+                plan_id = _upsert_trade_plan_locked(
+                    cursor,
+                    symbol=normalized,
+                    source="manual_backfill",
+                    entry_price=float(cost or 0.0),
+                    stop_loss=None,
+                    take_profit_1=None,
+                    take_profit_2=None,
+                    max_holding_days=None,
+                    thesis_type=None,
+                    thesis_text=None,
+                    thesis_payload=None,
+                    status="draft",
+                )
+                _upsert_trade_plan_alert_locked(
+                    cursor,
+                    symbol=normalized,
+                    alert_type="missing_plan",
+                    severity="warning",
+                    plan_id=plan_id,
+                    payload={"reason": "live_holding_missing_trade_plan"},
+                )
+                created_symbols.append(normalized)
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    return {
+        "missing_plan_count": len(created_symbols),
+        "symbols": created_symbols,
+    }
 
 
 def _floor_trade_quantity(quantity: float, decimals: int = TRADE_SIZE_DECIMALS) -> float:
@@ -1687,6 +1896,7 @@ def execute_position_update(
     locked: int = None,
     sync_memory: bool = False,
     enforce_pretrade_gate: bool = True,
+    trade_plan: Dict[str, Any] | None = None,
 ) -> str:
     """Pure portfolio-write logic for direct callers and tests."""
     symbol = normalize_ticker(symbol)
@@ -1719,8 +1929,13 @@ def execute_position_update(
     settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
     gate_message = ""
     trade_note = None
+    persisted_trade_plan: Dict[str, Any] | None = None
 
     if action == "buy" and not is_cash:
+        if enforce_pretrade_gate:
+            trade_plan_error = _validate_buy_trade_plan_or_error(symbol, actual_unit_price, trade_plan)
+            if trade_plan_error:
+                return trade_plan_error
         gate = _apply_pretrade_risk_gate(symbol, action, shares, actual_twd_total)
         if enforce_pretrade_gate:
             if not gate.get("allowed", True):
@@ -1738,10 +1953,22 @@ def execute_position_update(
             gate_message = confirmed_feedback.get("message", "")
             trade_note = confirmed_feedback.get("note")
 
+        if trade_plan:
+            candidate_trade_plan = _build_trade_plan_payload(
+                symbol=symbol,
+                entry_price=actual_unit_price,
+                trade_plan=trade_plan,
+                source="bot_trade",
+                status="active",
+            )
+            if validate_trade_plan_payload(candidate_trade_plan)["complete"]:
+                persisted_trade_plan = candidate_trade_plan
+
     result_message = ""
     should_refresh_memory = False
     with db_lock:
         conn = get_connection()
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         try:
@@ -1766,7 +1993,7 @@ def execute_position_update(
                     cash_after = cash_before - settle_amount
                     _upsert_portfolio_row(cursor, symbol, new_cost, new_shares, new_twd_cost, current_locked)
                     _upsert_portfolio_row(cursor, settle_currency, cash_pos[0], cash_after, cash_pos[2] - actual_twd_total, 0)
-                    _record_trade_log(
+                    trade_log_id = _record_trade_log(
                         cursor,
                         symbol=symbol,
                         action='buy',
@@ -1779,6 +2006,10 @@ def execute_position_update(
                         cash_after=cash_after,
                         note=trade_note,
                     )
+                    if persisted_trade_plan:
+                        persisted_trade_plan["opened_trade_log_id"] = trade_log_id
+                        persisted_trade_plan["entry_price"] = actual_unit_price
+                        _upsert_trade_plan_locked(cursor, **persisted_trade_plan)
                     result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
                     if gate_message:
                         result_message = f"{gate_message} {result_message}".strip()
