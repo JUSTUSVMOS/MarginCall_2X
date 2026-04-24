@@ -76,6 +76,28 @@ class TradePlanFlowTests(unittest.TestCase):
         self.assertEqual(draft, ("MRVL", "draft", "manual_backfill"))
         self.assertEqual(alert, ("missing_plan", "open"))
 
+    def test_sync_trade_plan_backfills_passes_raw_symbol_to_plan_upsert_helper(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("mrvl", 85.2, 30.0, 81792.0, 0),
+            )
+            conn.commit()
+
+        observed_symbols = []
+        original_upsert = engine_portfolio._upsert_trade_plan_locked
+
+        def capture_upsert(cursor, **kwargs):
+            observed_symbols.append(kwargs["symbol"])
+            return original_upsert(cursor, **kwargs)
+
+        with patch.object(engine_portfolio, "_upsert_trade_plan_locked", side_effect=capture_upsert):
+            payload = engine_portfolio.sync_trade_plan_backfills()
+
+        self.assertEqual(observed_symbols, ["mrvl"])
+        self.assertEqual(payload["symbols"], ["MRVL"])
+
     def test_sync_trade_plan_backfills_isolates_symbol_failures_and_reports_them(self):
         engine_portfolio.init_db()
         with database.locked_connection() as conn:

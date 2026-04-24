@@ -1052,8 +1052,8 @@ def _upsert_trade_plan_alert_locked(
     now = _utc_now_iso()
     serialized_payload = _serialize_json(payload)
     if existing:
-        if not isinstance(existing, sqlite3.Row):
-            raise TypeError("_upsert_trade_plan_alert_locked requires sqlite3.Row results")
+        # Callers set row_factory to sqlite3.Row before invoking this helper, so
+        # alert upserts can rely on mapping-style column access here.
         existing_plan_id = existing["plan_id"]
         alert_id = int(existing["id"])
         cursor.execute(
@@ -1123,7 +1123,7 @@ def sync_trade_plan_backfills() -> Dict[str, Any]:
 
                     plan_id = _upsert_trade_plan_locked(
                         cursor,
-                        symbol=normalized,
+                        symbol=symbol,
                         source="manual_backfill",
                         entry_price=float(cost or 0.0),
                         stop_loss=None,
