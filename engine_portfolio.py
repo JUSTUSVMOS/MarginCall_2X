@@ -50,6 +50,24 @@ TRADE_PLAN_REQUIRED_FIELDS = (
     "thesis_type",
     "thesis_text",
 )
+TRADE_PLAN_COLUMNS = (
+    "id",
+    "symbol",
+    "status",
+    "source",
+    "opened_trade_log_id",
+    "entry_price",
+    "stop_loss",
+    "take_profit_1",
+    "take_profit_2",
+    "max_holding_days",
+    "thesis_type",
+    "thesis_text",
+    "thesis_payload_json",
+    "created_at",
+    "updated_at",
+)
+TRADE_PLAN_SELECT = ", ".join(TRADE_PLAN_COLUMNS)
 
 TRADE_GOVERNOR_LIMITS = {
     "normal": {"single_name_cap": 0.15, "sector_cap": 0.35},
@@ -206,6 +224,7 @@ def _serialize_json(payload: Dict[str, Any] | None) -> str | None:
     if payload is None:
         return None
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
 
 def _list_trade_followups(cursor, *, status: str | None = "pending"):
     if status is None:
@@ -796,6 +815,12 @@ def upsert_trade_plan(
     status: str = "draft",
     opened_trade_log_id: int | None = None,
 ) -> int:
+    """Create or update the latest draft/active trade plan for ``symbol``.
+
+    ``source`` always records the latest writer/provenance for the persisted row.
+    On updates, ``None`` means "keep the current stored value" for optional fields,
+    including ``thesis_payload``; this API has no sentinel-based clear behavior.
+    """
     normalized = normalize_ticker(symbol)
     with db_lock:
         conn = get_connection()
@@ -828,6 +853,8 @@ def upsert_trade_plan(
                 thesis_payload=thesis_payload,
                 status=status,
             )
+            # Validation intentionally checks the merged persisted+incoming view while
+            # the row is locked so active-plan requirements apply to the final state.
             _validate_trade_plan_payload(plan_values)
             newly_active = status == "active" and (existing is None or existing["status"] != "active")
             if existing:
@@ -900,14 +927,14 @@ def upsert_trade_plan(
 
 
 def get_trade_plan(plan_id: int) -> Dict[str, Any] | None:
-    rows = _query_trade_plan_rows("SELECT * FROM trade_plans WHERE id = ?", (plan_id,))
+    rows = _query_trade_plan_rows(f"SELECT {TRADE_PLAN_SELECT} FROM trade_plans WHERE id = ?", (plan_id,))
     return rows[0] if rows else None
 
 
 def get_active_trade_plan(symbol: str) -> Dict[str, Any] | None:
     normalized = normalize_ticker(symbol)
     rows = _query_trade_plan_rows(
-        "SELECT * FROM trade_plans WHERE symbol = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+        f"SELECT {TRADE_PLAN_SELECT} FROM trade_plans WHERE symbol = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
         (normalized,),
     )
     return rows[0] if rows else None
@@ -915,7 +942,7 @@ def get_active_trade_plan(symbol: str) -> Dict[str, Any] | None:
 
 def list_active_trade_plans() -> List[Dict[str, Any]]:
     return _query_trade_plan_rows(
-        "SELECT * FROM trade_plans WHERE status = 'active' ORDER BY symbol, id"
+        f"SELECT {TRADE_PLAN_SELECT} FROM trade_plans WHERE status = 'active' ORDER BY symbol, id DESC"
     )
 
 

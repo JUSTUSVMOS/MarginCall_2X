@@ -188,3 +188,89 @@ class TradePlanPersistenceTests(unittest.TestCase):
             event_types,
             ["plan_created", "plan_updated", "plan_activated", "plan_updated"],
         )
+
+    def test_list_active_trade_plans_orders_newest_plan_first_within_symbol(self):
+        engine_portfolio.init_db()
+
+        with database.locked_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO trade_plans (
+                    symbol, status, source, entry_price, stop_loss, take_profit_1,
+                    take_profit_2, max_holding_days, thesis_type, thesis_text,
+                    thesis_payload_json, created_at, updated_at
+                ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "AAPL",
+                    "legacy_import",
+                    180.0,
+                    170.0,
+                    195.0,
+                    205.0,
+                    30,
+                    "momentum",
+                    "older active plan",
+                    '{"window": 5}',
+                    "2024-01-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO trade_plans (
+                    symbol, status, source, entry_price, stop_loss, take_profit_1,
+                    take_profit_2, max_holding_days, thesis_type, thesis_text,
+                    thesis_payload_json, created_at, updated_at
+                ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "AAPL",
+                    "manual_refresh",
+                    182.0,
+                    171.0,
+                    198.0,
+                    208.0,
+                    35,
+                    "momentum",
+                    "newer active plan",
+                    '{"window": 10}',
+                    "2024-01-02T00:00:00Z",
+                    "2024-01-02T00:00:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO trade_plans (
+                    symbol, status, source, entry_price, stop_loss, take_profit_1,
+                    take_profit_2, max_holding_days, thesis_type, thesis_text,
+                    thesis_payload_json, created_at, updated_at
+                ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "MSFT",
+                    "manual_refresh",
+                    410.0,
+                    390.0,
+                    430.0,
+                    450.0,
+                    40,
+                    "breakout",
+                    "msft active plan",
+                    '{"window": 7}',
+                    "2024-01-03T00:00:00Z",
+                    "2024-01-03T00:00:00Z",
+                ),
+            )
+            conn.commit()
+
+        active_plans = engine_portfolio.list_active_trade_plans()
+
+        self.assertEqual(
+            [(plan["symbol"], plan["source"]) for plan in active_plans],
+            [
+                ("AAPL", "manual_refresh"),
+                ("AAPL", "legacy_import"),
+                ("MSFT", "manual_refresh"),
+            ],
+        )
