@@ -1,4 +1,5 @@
 import inspect
+import sqlite3
 import sys
 import types
 from pathlib import Path
@@ -482,4 +483,290 @@ class DirectHelperRuntimeTests(unittest.TestCase):
         self.assertNotIn(
             'elif trade_plan and trade_plan_validation and not trade_plan_validation["complete"]',
             source,
+        )
+
+    def test_evaluate_trade_plan_alerts_fires_stop_hit_and_dedupes(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("MRVL", 85.2, 5.0, 426.0, 0),
+            )
+            conn.commit()
+
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_backfill",
+            entry_price=85.2,
+            stop_loss=80.0,
+            take_profit_1=95.0,
+            take_profit_2=None,
+            max_holding_days=30,
+            thesis_type="breakout_support",
+            thesis_text="breakout should hold prior support",
+            thesis_payload=None,
+            status="active",
+        )
+
+        snapshot = {
+            "symbol": "MRVL",
+            "market": "US",
+            "is_cash": False,
+            "is_us_stock": True,
+            "shares": 5.0,
+            "cost": 85.2,
+            "twd_cost": 426.0,
+            "current_price": 79.8,
+            "market_value_twd": 399.0,
+            "pnl_value_twd": -27.0,
+            "pnl_percent": -0.0634,
+        }
+
+        with patch.object(engine_portfolio, "_build_live_position_snapshots", return_value=[snapshot]):
+            engine_portfolio.audit_trade_plan_alerts()
+            engine_portfolio.audit_trade_plan_alerts()
+
+        stop_alerts = [
+            alert
+            for alert in engine_portfolio.get_open_trade_plan_alerts(symbol="MRVL")
+            if alert["alert_type"] == "stop_hit"
+        ]
+
+        self.assertEqual(len(stop_alerts), 1)
+        self.assertEqual(stop_alerts[0]["plan_id"], plan_id)
+        self.assertEqual(stop_alerts[0]["payload"]["current_price"], 79.8)
+        self.assertEqual(stop_alerts[0]["payload"]["stop_loss"], 80.0)
+
+    def test_evaluate_trade_plan_alerts_marks_monitor_degraded_when_price_refresh_fails(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("AMD", 165.0, 4.0, 660.0, 0),
+            )
+            conn.commit()
+
+        engine_portfolio.upsert_trade_plan(
+            symbol="AMD",
+            source="manual_backfill",
+            entry_price=165.0,
+            stop_loss=150.0,
+            take_profit_1=180.0,
+            take_profit_2=None,
+            max_holding_days=20,
+            thesis_type="breakout_support",
+            thesis_text="ai leadership should keep trend intact",
+            thesis_payload=None,
+            status="active",
+        )
+
+        with patch.object(
+            engine_portfolio,
+            "_build_live_position_snapshots",
+            side_effect=RuntimeError("price refresh failed"),
+        ):
+            payload = engine_portfolio.audit_trade_plan_alerts()
+
+        degraded_alerts = [
+            alert
+            for alert in engine_portfolio.get_open_trade_plan_alerts(symbol="AMD")
+            if alert["alert_type"] == "monitor_degraded"
+        ]
+
+        self.assertEqual(payload["degraded"], 1)
+        self.assertEqual(len(degraded_alerts), 1)
+        self.assertEqual(degraded_alerts[0]["payload"]["error"], "price refresh failed")
+
+    def test_upsert_trade_plan_alert_dedupes_per_plan_id_not_symbol(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            plan_ids = []
+            for source, created_at in (
+                ("legacy_import", "2024-01-01T00:00:00Z"),
+                ("manual_refresh", "2024-01-02T00:00:00Z"),
+            ):
+                cursor = conn.execute(
+                    """
+                    INSERT INTO trade_plans (
+                        symbol, status, source, entry_price, stop_loss, take_profit_1,
+                        take_profit_2, max_holding_days, thesis_type, thesis_text,
+                        thesis_payload_json, created_at, updated_at
+                    ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "MRVL",
+                        source,
+                        85.2,
+                        80.0,
+                        95.0,
+                        None,
+                        30,
+                        "breakout_support",
+                        "support should hold",
+                        None,
+                        created_at,
+                        created_at,
+                    ),
+                )
+                plan_ids.append(cursor.lastrowid)
+            conn.commit()
+
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="MRVL",
+            alert_type="stop_hit",
+            severity="critical",
+            plan_id=plan_ids[0],
+            payload={"current_price": 79.8},
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="MRVL",
+            alert_type="stop_hit",
+            severity="critical",
+            plan_id=plan_ids[1],
+            payload={"current_price": 79.2},
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="MRVL",
+            alert_type="stop_hit",
+            severity="critical",
+            plan_id=plan_ids[0],
+            payload={"current_price": 79.5},
+        )
+
+        alerts = engine_portfolio.get_open_trade_plan_alerts(symbol="MRVL", alert_type="stop_hit")
+
+        self.assertEqual(len(alerts), 2)
+        payload_by_plan = {alert["plan_id"]: alert["payload"] for alert in alerts}
+        self.assertEqual(payload_by_plan[plan_ids[0]]["current_price"], 79.5)
+        self.assertEqual(payload_by_plan[plan_ids[1]]["current_price"], 79.2)
+
+    def test_resolve_trade_plan_alert_preserves_last_seen_at(self):
+        engine_portfolio.init_db()
+
+        with patch.object(engine_portfolio, "_utc_now_iso", return_value="2024-01-01T00:00:00Z"):
+            engine_portfolio.upsert_trade_plan_alert(
+                symbol="AMD",
+                alert_type="monitor_degraded",
+                severity="warning",
+                payload={"error": "price refresh failed"},
+            )
+
+        with patch.object(engine_portfolio, "_utc_now_iso", return_value="2024-01-01T00:05:00Z"):
+            resolved = engine_portfolio.resolve_trade_plan_alert(
+                symbol="AMD",
+                alert_type="monitor_degraded",
+            )
+
+        with database.locked_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT status, last_seen_at, resolved_at
+                FROM trade_plan_alerts
+                WHERE symbol = ? AND alert_type = ?
+                """,
+                ("AMD", "monitor_degraded"),
+            ).fetchone()
+
+        self.assertEqual(resolved, 1)
+        self.assertEqual(row[0], "resolved")
+        self.assertEqual(row[1], "2024-01-01T00:00:00Z")
+        self.assertEqual(row[2], "2024-01-01T00:05:00Z")
+
+    def test_evaluate_trade_plan_alerts_resolves_monitor_degraded_after_snapshot_recovery(self):
+        engine_portfolio.init_db()
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="AMD",
+            source="manual_backfill",
+            entry_price=165.0,
+            stop_loss=150.0,
+            take_profit_1=180.0,
+            take_profit_2=None,
+            max_holding_days=20,
+            thesis_type="breakout_support",
+            thesis_text="ai leadership should keep trend intact",
+            thesis_payload=None,
+            status="active",
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="AMD",
+            alert_type="monitor_degraded",
+            severity="warning",
+            plan_id=plan_id,
+            payload={"error": "price refresh failed"},
+        )
+
+        with patch.object(engine_portfolio, "_build_live_position_snapshots", return_value=[]):
+            payload = engine_portfolio.audit_trade_plan_alerts()
+
+        self.assertEqual(payload["degraded"], 0)
+        self.assertEqual(
+            engine_portfolio.get_open_trade_plan_alerts(symbol="AMD", alert_type="monitor_degraded"),
+            [],
+        )
+
+    def test_init_db_dedupes_legacy_open_trade_plan_alerts_before_creating_unique_index(self):
+        with database.locked_connection() as conn:
+            conn.execute(
+                """
+                CREATE TABLE trade_plan_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plan_id INTEGER,
+                    symbol TEXT NOT NULL,
+                    alert_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    payload_json TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    resolved_at TEXT
+                )
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO trade_plan_alerts (
+                    plan_id, symbol, alert_type, severity, status, payload_json, first_seen_at, last_seen_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (7, "MRVL", "stop_hit", "critical", "open", '{"current_price":79.8}', "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", None),
+                    (7, "MRVL", "stop_hit", "critical", "open", '{"current_price":79.5}', "2024-01-01T00:01:00Z", "2024-01-01T00:01:00Z", None),
+                ],
+            )
+            conn.commit()
+
+        engine_portfolio.init_db()
+
+        with database.locked_connection() as conn:
+            remaining = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM trade_plan_alerts
+                WHERE plan_id = ? AND alert_type = ? AND status = 'open'
+                """,
+                (7, "stop_hit"),
+            ).fetchone()[0]
+            indexes = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_trade_plan_alerts_open_%'"
+                ).fetchall()
+            }
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO trade_plan_alerts (
+                        plan_id, symbol, alert_type, severity, status, payload_json, first_seen_at, last_seen_at, resolved_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (7, "MRVL", "stop_hit", "critical", "open", '{"current_price":79.1}', "2024-01-01T00:02:00Z", "2024-01-01T00:02:00Z", None),
+                )
+
+        self.assertEqual(remaining, 1)
+        self.assertEqual(
+            indexes,
+            {
+                "idx_trade_plan_alerts_open_plan_type",
+                "idx_trade_plan_alerts_open_symbol_type_null_plan",
+            },
         )
