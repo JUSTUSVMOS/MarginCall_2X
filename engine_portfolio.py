@@ -829,12 +829,11 @@ def _upsert_trade_plan_locked(
     thesis_payload: Dict[str, Any] | None,
     status: str = "draft",
     opened_trade_log_id: int | None = None,
-    select_fragment: str = TRADE_PLAN_SELECT,
 ) -> int:
     normalized = normalize_ticker(symbol)
     existing = cursor.execute(
         f"""
-        SELECT {select_fragment}
+        SELECT {TRADE_PLAN_SELECT}
         FROM trade_plans
         WHERE symbol = ? AND status IN ('draft', 'active')
         ORDER BY id DESC
@@ -965,7 +964,6 @@ def upsert_trade_plan(
                 thesis_payload=thesis_payload,
                 status=status,
                 opened_trade_log_id=opened_trade_log_id,
-                select_fragment=TRADE_PLAN_SELECT,
             )
             conn.commit()
             return plan_id

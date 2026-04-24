@@ -59,15 +59,12 @@ class TradePlanPersistenceTests(unittest.TestCase):
 
         self.assertEqual(tables, {"trade_plans", "trade_plan_events", "trade_plan_alerts"})
 
-    def test_upsert_trade_plan_reuses_shared_select_fragment_for_merge_fetch(self):
-        shared_select_names = [
-            name for name in ("TRADE_PLAN_MERGE_SELECT", "TRADE_PLAN_SELECT") if hasattr(engine_portfolio, name)
-        ]
-
-        self.assertTrue(shared_select_names)
-        self.assertTrue(
-            any(name in inspect.getsource(engine_portfolio.upsert_trade_plan) for name in shared_select_names),
-            "upsert_trade_plan should reuse a shared trade-plan select fragment when fetching the existing row",
+    def test_upsert_trade_plan_helper_signature_no_longer_exposes_dead_select_fragment(self):
+        self.assertNotIn("select_fragment", inspect.signature(engine_portfolio._upsert_trade_plan_locked).parameters)
+        self.assertNotIn(
+            "select_fragment=",
+            inspect.getsource(engine_portfolio.upsert_trade_plan),
+            "upsert_trade_plan should not pass through a dead select fragment override",
         )
 
     def test_upsert_trade_plan_creates_active_plan_and_event(self):
