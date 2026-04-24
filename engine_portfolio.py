@@ -1972,9 +1972,9 @@ def execute_position_update(
             gate_message = confirmed_feedback.get("message", "")
             trade_note = confirmed_feedback.get("note")
 
-        if trade_plan and trade_plan_validation and trade_plan_validation["complete"]:
+        if trade_plan_validation["complete"]:
             persisted_trade_plan = candidate_trade_plan
-        elif trade_plan and trade_plan_validation and not trade_plan_validation["complete"] and not enforce_pretrade_gate:
+        elif trade_plan and not enforce_pretrade_gate:
             skipped_trade_plan_warning = "⚠️ 交易計畫未儲存（欄位不完整）"
 
     result_message = ""

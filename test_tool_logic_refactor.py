@@ -471,3 +471,15 @@ class DirectHelperRuntimeTests(unittest.TestCase):
         self.assertIn("✅ 買進成功", result)
         self.assertIn("交易計畫未儲存", result)
         self.assertIsNone(engine_portfolio.get_active_trade_plan("AAPL"))
+
+    def test_execute_position_update_buy_flow_source_does_not_recheck_trade_plan_validation_truthiness(self):
+        source = inspect.getsource(engine_portfolio.execute_position_update)
+
+        self.assertNotIn(
+            'if trade_plan and trade_plan_validation and trade_plan_validation["complete"]',
+            source,
+        )
+        self.assertNotIn(
+            'elif trade_plan and trade_plan_validation and not trade_plan_validation["complete"]',
+            source,
+        )
