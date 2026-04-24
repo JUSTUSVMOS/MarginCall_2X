@@ -785,6 +785,7 @@ def _merge_trade_plan_values(
 
 
 def validate_trade_plan_payload(payload: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Return completeness metadata for a candidate trade-plan payload."""
     payload = payload or {}
     missing_fields = [
         field
@@ -1020,19 +1021,7 @@ def _build_trade_plan_payload(
     }
 
 
-def _validate_buy_trade_plan_or_error(
-    symbol: str,
-    entry_price: float | None,
-    trade_plan: Dict[str, Any] | None = None,
-) -> str | None:
-    payload = _build_trade_plan_payload(
-        symbol=symbol,
-        entry_price=entry_price,
-        trade_plan=trade_plan,
-        source="bot_trade",
-        status="active",
-    )
-    validation = validate_trade_plan_payload(payload)
+def _format_trade_plan_validation_error(validation: Dict[str, Any]) -> str | None:
     if validation["complete"]:
         return None
     missing_labels = ", ".join(
@@ -1065,8 +1054,10 @@ def _upsert_trade_plan_alert_locked(
     now = _utc_now_iso()
     serialized_payload = _serialize_json(payload)
     if existing:
-        existing_plan_id = existing["plan_id"] if isinstance(existing, sqlite3.Row) else existing[1]
-        alert_id = int(existing["id"] if isinstance(existing, sqlite3.Row) else existing[0])
+        if not isinstance(existing, sqlite3.Row):
+            raise TypeError("_upsert_trade_plan_alert_locked requires sqlite3.Row results")
+        existing_plan_id = existing["plan_id"]
+        alert_id = int(existing["id"])
         cursor.execute(
             """
             UPDATE trade_plan_alerts
@@ -1095,7 +1086,9 @@ def _upsert_trade_plan_alert_locked(
 
 
 def sync_trade_plan_backfills() -> Dict[str, Any]:
+    """Backfill draft trade plans for live holdings missing tracked plans."""
     created_symbols: List[str] = []
+    failed_symbols: List[Dict[str, str]] = []
     rows = _load_portfolio_rows()
     with db_lock:
         conn = get_connection()
@@ -1107,42 +1100,50 @@ def sync_trade_plan_backfills() -> Dict[str, Any]:
                 if normalized.startswith("CASH") or float(shares or 0) <= 0:
                     continue
 
-                existing = cursor.execute(
-                    f"""
-                    SELECT {TRADE_PLAN_SELECT}
-                    FROM trade_plans
-                    WHERE symbol = ? AND status IN ('draft', 'active')
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (normalized,),
-                ).fetchone()
-                if existing:
-                    continue
+                cursor.execute("SAVEPOINT trade_plan_backfill_symbol")
+                try:
+                    existing = cursor.execute(
+                        f"""
+                        SELECT {TRADE_PLAN_SELECT}
+                        FROM trade_plans
+                        WHERE symbol = ? AND status IN ('draft', 'active')
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        (normalized,),
+                    ).fetchone()
+                    if existing:
+                        cursor.execute("RELEASE SAVEPOINT trade_plan_backfill_symbol")
+                        continue
 
-                plan_id = _upsert_trade_plan_locked(
-                    cursor,
-                    symbol=normalized,
-                    source="manual_backfill",
-                    entry_price=float(cost or 0.0),
-                    stop_loss=None,
-                    take_profit_1=None,
-                    take_profit_2=None,
-                    max_holding_days=None,
-                    thesis_type=None,
-                    thesis_text=None,
-                    thesis_payload=None,
-                    status="draft",
-                )
-                _upsert_trade_plan_alert_locked(
-                    cursor,
-                    symbol=normalized,
-                    alert_type="missing_plan",
-                    severity="warning",
-                    plan_id=plan_id,
-                    payload={"reason": "live_holding_missing_trade_plan"},
-                )
-                created_symbols.append(normalized)
+                    plan_id = _upsert_trade_plan_locked(
+                        cursor,
+                        symbol=normalized,
+                        source="manual_backfill",
+                        entry_price=float(cost or 0.0),
+                        stop_loss=None,
+                        take_profit_1=None,
+                        take_profit_2=None,
+                        max_holding_days=None,
+                        thesis_type=None,
+                        thesis_text=None,
+                        thesis_payload=None,
+                        status="draft",
+                    )
+                    _upsert_trade_plan_alert_locked(
+                        cursor,
+                        symbol=normalized,
+                        alert_type="missing_plan",
+                        severity="warning",
+                        plan_id=plan_id,
+                        payload={"reason": "live_holding_missing_trade_plan"},
+                    )
+                    created_symbols.append(normalized)
+                    cursor.execute("RELEASE SAVEPOINT trade_plan_backfill_symbol")
+                except Exception as exc:
+                    cursor.execute("ROLLBACK TO SAVEPOINT trade_plan_backfill_symbol")
+                    cursor.execute("RELEASE SAVEPOINT trade_plan_backfill_symbol")
+                    failed_symbols.append({"symbol": normalized, "error": str(exc)})
 
             conn.commit()
         finally:
@@ -1151,6 +1152,8 @@ def sync_trade_plan_backfills() -> Dict[str, Any]:
     return {
         "missing_plan_count": len(created_symbols),
         "symbols": created_symbols,
+        "failed_count": len(failed_symbols),
+        "failed_symbols": failed_symbols,
     }
 
 
@@ -1929,11 +1932,21 @@ def execute_position_update(
     settle_amount = actual_unit_price * shares if not is_taiwan else actual_twd_total
     gate_message = ""
     trade_note = None
+    candidate_trade_plan: Dict[str, Any] | None = None
+    trade_plan_validation: Dict[str, Any] | None = None
     persisted_trade_plan: Dict[str, Any] | None = None
 
     if action == "buy" and not is_cash:
+        candidate_trade_plan = _build_trade_plan_payload(
+            symbol=symbol,
+            entry_price=actual_unit_price,
+            trade_plan=trade_plan,
+            source="bot_trade",
+            status="active",
+        )
+        trade_plan_validation = validate_trade_plan_payload(candidate_trade_plan)
         if enforce_pretrade_gate:
-            trade_plan_error = _validate_buy_trade_plan_or_error(symbol, actual_unit_price, trade_plan)
+            trade_plan_error = _format_trade_plan_validation_error(trade_plan_validation)
             if trade_plan_error:
                 return trade_plan_error
         gate = _apply_pretrade_risk_gate(symbol, action, shares, actual_twd_total)
@@ -1953,16 +1966,8 @@ def execute_position_update(
             gate_message = confirmed_feedback.get("message", "")
             trade_note = confirmed_feedback.get("note")
 
-        if trade_plan:
-            candidate_trade_plan = _build_trade_plan_payload(
-                symbol=symbol,
-                entry_price=actual_unit_price,
-                trade_plan=trade_plan,
-                source="bot_trade",
-                status="active",
-            )
-            if validate_trade_plan_payload(candidate_trade_plan)["complete"]:
-                persisted_trade_plan = candidate_trade_plan
+        if trade_plan and trade_plan_validation and trade_plan_validation["complete"]:
+            persisted_trade_plan = candidate_trade_plan
 
     result_message = ""
     should_refresh_memory = False
@@ -2007,9 +2012,10 @@ def execute_position_update(
                         note=trade_note,
                     )
                     if persisted_trade_plan:
-                        persisted_trade_plan["opened_trade_log_id"] = trade_log_id
-                        persisted_trade_plan["entry_price"] = actual_unit_price
-                        _upsert_trade_plan_locked(cursor, **persisted_trade_plan)
+                        _upsert_trade_plan_locked(
+                            cursor,
+                            **(persisted_trade_plan | {"opened_trade_log_id": trade_log_id}),
+                        )
                     result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
                     if gate_message:
                         result_message = f"{gate_message} {result_message}".strip()
