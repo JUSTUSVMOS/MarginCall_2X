@@ -1075,6 +1075,100 @@ class DirectHelperRuntimeTests(unittest.TestCase):
         self.assertEqual(alerts[0]["payload"]["support_level"], 95.0)
         self.assertEqual(alerts[0]["payload"]["current_price"], 94.0)
 
+    def test_evaluate_trade_plan_thesis_invalid_breakout_support_requires_configured_close_confirmation(self):
+        plan = {
+            "symbol": "AAPL",
+            "thesis_type": "breakout_support",
+            "thesis_payload_json": (
+                '{"support_level": 95.0, "close_below_count": 2, "grace_rule": "close_below"}'
+            ),
+        }
+        snapshot = {"current_price": 94.0}
+
+        with patch.object(engine_portfolio, "_fetch_recent_closes", return_value=[96.0, 94.5], create=True):
+            result = engine_portfolio._evaluate_trade_plan_thesis_invalid_spec(
+                plan,
+                snapshot,
+                now_iso="2024-01-10T00:00:00Z",
+            )
+
+        self.assertIsNone(result)
+
+    def test_evaluate_trade_plan_thesis_invalid_mean_reversion_supports_proxy_underperformance_path(self):
+        plan = {
+            "symbol": "MRVL",
+            "entry_price": 100.0,
+            "created_at": "2024-01-01T00:00:00Z",
+            "thesis_type": "mean_reversion",
+            "thesis_payload_json": (
+                '{"recovery_window_days": 5, "reference_price": 100.0, "proxy_symbol": "SPY", '
+                '"lookback_days": 3, "underperform_pct": -0.05}'
+            ),
+        }
+        snapshot = {"current_price": 101.0}
+
+        with patch.object(engine_portfolio, "_fetch_recent_change", side_effect=[0.01, 0.08]):
+            result = engine_portfolio._evaluate_trade_plan_thesis_invalid_spec(
+                plan,
+                snapshot,
+                now_iso="2024-01-10T00:00:00Z",
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["payload"]["thesis_type"], "mean_reversion")
+        self.assertEqual(result["payload"]["proxy_symbol"], "SPY")
+        self.assertEqual(result["payload"]["relative_performance_pct"], -0.07)
+        self.assertEqual(result["payload"]["threshold_pct"], -0.05)
+        self.assertEqual(result["payload"]["lookback_days"], 3)
+
+    def test_evaluate_trade_plan_thesis_invalid_earnings_waits_for_event_window_end(self):
+        plan = {
+            "symbol": "AMD",
+            "entry_price": 100.0,
+            "created_at": "2024-01-01T00:00:00Z",
+            "thesis_type": "earnings",
+            "thesis_payload_json": (
+                '{"earnings_date": "2024-01-10T00:00:00Z", "review_window_days": 2, '
+                '"expected_direction": "up", "reference_price": 100.0}'
+            ),
+        }
+        snapshot = {"current_price": 95.0}
+
+        before_window = engine_portfolio._evaluate_trade_plan_thesis_invalid_spec(
+            plan,
+            snapshot,
+            now_iso="2024-01-11T00:00:00Z",
+        )
+        after_window = engine_portfolio._evaluate_trade_plan_thesis_invalid_spec(
+            plan,
+            snapshot,
+            now_iso="2024-01-13T00:00:00Z",
+        )
+
+        self.assertIsNone(before_window)
+        self.assertIsNotNone(after_window)
+        self.assertEqual(after_window["payload"]["thesis_type"], "earnings")
+        self.assertEqual(after_window["payload"]["expected_direction"], "up")
+        self.assertEqual(after_window["payload"]["review_window_days"], 2)
+
+    def test_evaluate_trade_plan_thesis_invalid_event_driven_accepts_catalyst_date_fallback(self):
+        plan = {
+            "symbol": "NVDA",
+            "thesis_type": "event_driven",
+            "thesis_payload_json": '{"catalyst_date": "2024-01-05T00:00:00Z", "catalyst_confirmed": false}',
+        }
+        snapshot = {"current_price": 105.0}
+
+        result = engine_portfolio._evaluate_trade_plan_thesis_invalid_spec(
+            plan,
+            snapshot,
+            now_iso="2024-01-06T00:00:00Z",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["payload"]["thesis_type"], "event_driven")
+        self.assertEqual(result["payload"]["deadline"], "2024-01-05T00:00:00Z")
+
     def test_evaluate_trade_plan_alerts_sector_rotation_respects_configured_lookback(self):
         engine_portfolio.init_db()
         with database.locked_connection() as conn:

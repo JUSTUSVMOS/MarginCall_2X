@@ -7,7 +7,7 @@ import logging
 import re
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import requests
 import numpy as np
 import pandas as pd
@@ -1400,7 +1400,41 @@ def _evaluate_trade_plan_thesis_invalid_spec(
         support_level = _coerce_float(
             thesis_payload.get("support_level", thesis_payload.get("breakout_level"))
         )
-        if support_level is None or current_price >= support_level:
+        close_below_count = _coerce_int(thesis_payload.get("close_below_count"))
+        confirmation_rule = str(
+            thesis_payload.get("grace_rule")
+            or thesis_payload.get("breach_basis")
+            or thesis_payload.get("invalidation_basis")
+            or ""
+        ).strip().lower()
+        uses_close_confirmation = (
+            thesis_payload.get("close_based") is True
+            or thesis_payload.get("use_close_confirmation") is True
+            or confirmation_rule in {"close", "close_below", "close_based", "daily_close"}
+            or (close_below_count is not None and close_below_count > 0)
+        )
+        if support_level is None:
+            return None
+        if uses_close_confirmation:
+            if close_below_count is None or close_below_count <= 0:
+                return None
+            recent_closes = _fetch_recent_closes(symbol, close_below_count)
+            if recent_closes is None or len(recent_closes) < close_below_count:
+                return None
+            if any(close >= support_level for close in recent_closes[-close_below_count:]):
+                return None
+            return {
+                "alert_type": "thesis_invalid",
+                "severity": "warning",
+                "payload": {
+                    "symbol": symbol,
+                    "thesis_type": thesis_type,
+                    "current_price": round(current_price, 4),
+                    "support_level": support_level,
+                    "close_below_count": close_below_count,
+                },
+            }
+        if current_price >= support_level:
             return None
         return {
             "alert_type": "thesis_invalid",
@@ -1453,9 +1487,33 @@ def _evaluate_trade_plan_thesis_invalid_spec(
             or recovery_window_days < 0
             or held_days is None
             or held_days < recovery_window_days
-            or recovery_price is None
-            or current_price >= recovery_price
         ):
+            return None
+        if recovery_price is not None and current_price < recovery_price:
+            return {
+                "alert_type": "thesis_invalid",
+                "severity": "warning",
+                "payload": {
+                    "symbol": symbol,
+                    "thesis_type": thesis_type,
+                    "current_price": round(current_price, 4),
+                    "reference_price": recovery_price,
+                    "held_days": held_days,
+                    "recovery_window_days": recovery_window_days,
+                },
+            }
+        proxy_symbol = thesis_payload.get("proxy_symbol")
+        lookback_days = _coerce_int(thesis_payload.get("lookback_days"))
+        threshold = _coerce_float(thesis_payload.get("underperform_pct"))
+        if not proxy_symbol or lookback_days is None or lookback_days <= 0 or threshold is None:
+            return None
+        symbol_change = _fetch_recent_change(symbol, lookback_days)
+        proxy_change = _fetch_recent_change(str(proxy_symbol), lookback_days)
+        if symbol_change is None or proxy_change is None:
+            return None
+        relative_performance = round(float(symbol_change) - float(proxy_change), 4)
+        threshold_pct = float(threshold)
+        if relative_performance > threshold_pct:
             return None
         return {
             "alert_type": "thesis_invalid",
@@ -1463,8 +1521,12 @@ def _evaluate_trade_plan_thesis_invalid_spec(
             "payload": {
                 "symbol": symbol,
                 "thesis_type": thesis_type,
-                "current_price": round(current_price, 4),
-                "reference_price": recovery_price,
+                "proxy_symbol": normalize_ticker(str(proxy_symbol)),
+                "symbol_change_pct": round(float(symbol_change), 4),
+                "proxy_change_pct": round(float(proxy_change), 4),
+                "relative_performance_pct": relative_performance,
+                "threshold_pct": threshold_pct,
+                "lookback_days": lookback_days,
                 "held_days": held_days,
                 "recovery_window_days": recovery_window_days,
             },
@@ -1472,14 +1534,18 @@ def _evaluate_trade_plan_thesis_invalid_spec(
 
     if thesis_type == "earnings":
         review_window_days = _coerce_int(thesis_payload.get("review_window_days"))
-        held_days = _trade_plan_held_days(plan, now_iso)
+        now_dt = _parse_trade_plan_timestamp(now_iso)
+        event_dt = _parse_trade_plan_timestamp(
+            thesis_payload.get("earnings_date", thesis_payload.get("event_date"))
+        )
         expected_direction = str(thesis_payload.get("expected_direction") or "").strip().lower()
         reference_price = _coerce_float(thesis_payload.get("reference_price", plan.get("entry_price")))
         if (
             review_window_days is None
             or review_window_days < 0
-            or held_days is None
-            or held_days < review_window_days
+            or now_dt is None
+            or event_dt is None
+            or now_dt < (event_dt + timedelta(days=review_window_days))
             or expected_direction not in {"up", "down"}
             or reference_price is None
             or reference_price == 0
@@ -1499,13 +1565,16 @@ def _evaluate_trade_plan_thesis_invalid_spec(
                 "thesis_type": thesis_type,
                 "expected_direction": expected_direction,
                 "move_pct": move_pct,
+                "event_date": event_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
                 "review_window_days": review_window_days,
-                "held_days": held_days,
             },
         }
 
     if thesis_type == "event_driven":
-        deadline_raw = thesis_payload.get("invalidation_deadline", thesis_payload.get("catalyst_deadline"))
+        deadline_raw = thesis_payload.get(
+            "invalidation_deadline",
+            thesis_payload.get("catalyst_deadline", thesis_payload.get("catalyst_date")),
+        )
         deadline_dt = _parse_trade_plan_timestamp(deadline_raw)
         now_dt = _parse_trade_plan_timestamp(now_iso)
         if deadline_dt is None or now_dt is None or now_dt <= deadline_dt:
@@ -1807,6 +1876,24 @@ def _fetch_recent_change(symbol: str, days: int = 1) -> float | None:
         return round((last_close / prev_close) - 1.0, 4)
     except Exception as exc:
         logger.debug(f"Recent change lookup failed for {symbol}: {exc}")
+        return None
+
+
+def _fetch_recent_closes(symbol: str, days: int = 1) -> List[float] | None:
+    try:
+        lookback_days = max(int(days), 1)
+        hist = get_ticker(symbol, cache_level="daily").history(
+            period=f"{max(lookback_days * 2, lookback_days + 4)}d"
+        )
+        closes = hist.get("Close") if isinstance(hist, pd.DataFrame) else None
+        if closes is None:
+            return None
+        closes = pd.Series(closes).dropna()
+        if len(closes) < lookback_days:
+            return None
+        return [round(float(close), 4) for close in closes.iloc[-lookback_days:]]
+    except Exception as exc:
+        logger.debug(f"Recent close lookup failed for {symbol}: {exc}")
         return None
 
 
