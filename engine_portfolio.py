@@ -207,23 +207,6 @@ def _serialize_json(payload: Dict[str, Any] | None) -> str | None:
         return None
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
-
-def _record_trade_plan_event(
-    cursor,
-    *,
-    plan_id: int,
-    event_type: str,
-    payload: Dict[str, Any] | None = None,
-):
-    cursor.execute(
-        """
-        INSERT INTO trade_plan_events (plan_id, event_type, payload_json, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (plan_id, event_type, _serialize_json(payload), _utc_now_iso()),
-    )
-
-
 def _list_trade_followups(cursor, *, status: str | None = "pending"):
     if status is None:
         cursor.execute(
@@ -729,6 +712,75 @@ def init_db():
         conn.close()
 
 
+def _record_trade_plan_event(
+    cursor,
+    *,
+    plan_id: int,
+    event_type: str,
+    payload: Dict[str, Any] | None = None,
+):
+    cursor.execute(
+        """
+        INSERT INTO trade_plan_events (plan_id, event_type, payload_json, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (plan_id, event_type, _serialize_json(payload), _utc_now_iso()),
+    )
+
+
+def _merge_trade_plan_values(
+    existing: sqlite3.Row | None,
+    *,
+    source: str,
+    opened_trade_log_id: int | None,
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit_1: float | None,
+    take_profit_2: float | None,
+    max_holding_days: int | None,
+    thesis_type: str | None,
+    thesis_text: str | None,
+    thesis_payload: Dict[str, Any] | None,
+    status: str,
+) -> Dict[str, Any]:
+    return {
+        "source": source,
+        "opened_trade_log_id": opened_trade_log_id if opened_trade_log_id is not None else (existing["opened_trade_log_id"] if existing else None),
+        "entry_price": entry_price if entry_price is not None else (existing["entry_price"] if existing else None),
+        "stop_loss": stop_loss if stop_loss is not None else (existing["stop_loss"] if existing else None),
+        "take_profit_1": take_profit_1 if take_profit_1 is not None else (existing["take_profit_1"] if existing else None),
+        "take_profit_2": take_profit_2 if take_profit_2 is not None else (existing["take_profit_2"] if existing else None),
+        "max_holding_days": max_holding_days if max_holding_days is not None else (existing["max_holding_days"] if existing else None),
+        "thesis_type": thesis_type if thesis_type is not None else (existing["thesis_type"] if existing else None),
+        "thesis_text": thesis_text if thesis_text is not None else (existing["thesis_text"] if existing else None),
+        "thesis_payload_json": _serialize_json(thesis_payload) if thesis_payload is not None else (existing["thesis_payload_json"] if existing else None),
+        "status": status,
+    }
+
+
+def _validate_trade_plan_payload(plan_values: Dict[str, Any]) -> None:
+    if plan_values["status"] != "active":
+        return
+    missing_fields = [
+        field
+        for field in TRADE_PLAN_REQUIRED_FIELDS
+        if plan_values.get(field) is None or (isinstance(plan_values.get(field), str) and not plan_values.get(field).strip())
+    ]
+    if missing_fields:
+        raise ValueError(f"active trade plan requires fields: {', '.join(missing_fields)}")
+
+
+def _query_trade_plan_rows(query: str, params: tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, params).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+
 def upsert_trade_plan(
     *,
     symbol: str,
@@ -748,40 +800,69 @@ def upsert_trade_plan(
     with db_lock:
         conn = get_connection()
         try:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             existing = cursor.execute(
-                "SELECT id FROM trade_plans WHERE symbol = ? AND status IN ('draft', 'active') ORDER BY id DESC LIMIT 1",
+                """
+                SELECT id, status, source, opened_trade_log_id, entry_price, stop_loss, take_profit_1,
+                       take_profit_2, max_holding_days, thesis_type, thesis_text, thesis_payload_json
+                FROM trade_plans
+                WHERE symbol = ? AND status IN ('draft', 'active')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
                 (normalized,),
             ).fetchone()
             now = _utc_now_iso()
+            plan_values = _merge_trade_plan_values(
+                existing,
+                source=source,
+                opened_trade_log_id=opened_trade_log_id,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit_1=take_profit_1,
+                take_profit_2=take_profit_2,
+                max_holding_days=max_holding_days,
+                thesis_type=thesis_type,
+                thesis_text=thesis_text,
+                thesis_payload=thesis_payload,
+                status=status,
+            )
+            _validate_trade_plan_payload(plan_values)
+            newly_active = status == "active" and (existing is None or existing["status"] != "active")
             if existing:
-                plan_id = int(existing[0])
+                plan_id = int(existing["id"])
                 cursor.execute(
                     """
                     UPDATE trade_plans
-                    SET source = ?, opened_trade_log_id = COALESCE(?, opened_trade_log_id),
+                    SET source = ?, opened_trade_log_id = ?,
                         entry_price = ?, stop_loss = ?, take_profit_1 = ?, take_profit_2 = ?,
                         max_holding_days = ?, thesis_type = ?, thesis_text = ?,
                         thesis_payload_json = ?, status = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
-                        source,
-                        opened_trade_log_id,
-                        entry_price,
-                        stop_loss,
-                        take_profit_1,
-                        take_profit_2,
-                        max_holding_days,
-                        thesis_type,
-                        thesis_text,
-                        _serialize_json(thesis_payload),
-                        status,
+                        plan_values["source"],
+                        plan_values["opened_trade_log_id"],
+                        plan_values["entry_price"],
+                        plan_values["stop_loss"],
+                        plan_values["take_profit_1"],
+                        plan_values["take_profit_2"],
+                        plan_values["max_holding_days"],
+                        plan_values["thesis_type"],
+                        plan_values["thesis_text"],
+                        plan_values["thesis_payload_json"],
+                        plan_values["status"],
                         now,
                         plan_id,
                     ),
                 )
-                _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_updated", payload={"status": status})
+                _record_trade_plan_event(
+                    cursor,
+                    plan_id=plan_id,
+                    event_type="plan_updated",
+                    payload={"status": plan_values["status"]},
+                )
             else:
                 cursor.execute(
                     """
@@ -793,24 +874,24 @@ def upsert_trade_plan(
                     """,
                     (
                         normalized,
-                        status,
-                        source,
-                        opened_trade_log_id,
-                        entry_price,
-                        stop_loss,
-                        take_profit_1,
-                        take_profit_2,
-                        max_holding_days,
-                        thesis_type,
-                        thesis_text,
-                        _serialize_json(thesis_payload),
+                        plan_values["status"],
+                        plan_values["source"],
+                        plan_values["opened_trade_log_id"],
+                        plan_values["entry_price"],
+                        plan_values["stop_loss"],
+                        plan_values["take_profit_1"],
+                        plan_values["take_profit_2"],
+                        plan_values["max_holding_days"],
+                        plan_values["thesis_type"],
+                        plan_values["thesis_text"],
+                        plan_values["thesis_payload_json"],
                         now,
                         now,
                     ),
                 )
                 plan_id = int(cursor.lastrowid)
                 _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_created", payload={"source": source})
-            if status == "active":
+            if newly_active:
                 _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_activated")
             conn.commit()
             return plan_id
@@ -819,42 +900,23 @@ def upsert_trade_plan(
 
 
 def get_trade_plan(plan_id: int) -> Dict[str, Any] | None:
-    with db_lock:
-        conn = get_connection()
-        try:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute("SELECT * FROM trade_plans WHERE id = ?", (plan_id,)).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+    rows = _query_trade_plan_rows("SELECT * FROM trade_plans WHERE id = ?", (plan_id,))
+    return rows[0] if rows else None
 
 
 def get_active_trade_plan(symbol: str) -> Dict[str, Any] | None:
     normalized = normalize_ticker(symbol)
-    with db_lock:
-        conn = get_connection()
-        try:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM trade_plans WHERE symbol = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
-                (normalized,),
-            ).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+    rows = _query_trade_plan_rows(
+        "SELECT * FROM trade_plans WHERE symbol = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+        (normalized,),
+    )
+    return rows[0] if rows else None
 
 
 def list_active_trade_plans() -> List[Dict[str, Any]]:
-    with db_lock:
-        conn = get_connection()
-        try:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM trade_plans WHERE status = 'active' ORDER BY symbol, id"
-            ).fetchall()
-            return [dict(row) for row in rows]
-        finally:
-            conn.close()
+    return _query_trade_plan_rows(
+        "SELECT * FROM trade_plans WHERE status = 'active' ORDER BY symbol, id"
+    )
 
 
 def _floor_trade_quantity(quantity: float, decimals: int = TRADE_SIZE_DECIMALS) -> float:

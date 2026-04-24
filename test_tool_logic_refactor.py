@@ -89,3 +89,102 @@ class TradePlanPersistenceTests(unittest.TestCase):
         self.assertEqual(fetched_plan["status"], "active")
         self.assertEqual(active_plan["id"], plan_id)
         self.assertEqual([row["id"] for row in active_plans], [plan_id])
+
+    def test_upsert_trade_plan_rejects_active_plan_missing_required_fields(self):
+        engine_portfolio.init_db()
+
+        with self.assertRaisesRegex(ValueError, "stop_loss"):
+            engine_portfolio.upsert_trade_plan(
+                symbol="MRVL",
+                source="manual_backfill",
+                entry_price=85.2,
+                stop_loss=None,
+                take_profit_1=95.0,
+                take_profit_2=105.0,
+                max_holding_days=60,
+                thesis_type="sector_rotation",
+                thesis_text="semi rotation re-accelerating",
+                thesis_payload={"proxy_symbol": "SOXX"},
+                status="active",
+            )
+
+        with database.locked_connection() as conn:
+            persisted = conn.execute("SELECT COUNT(*) FROM trade_plans").fetchone()[0]
+            event_count = conn.execute("SELECT COUNT(*) FROM trade_plan_events").fetchone()[0]
+
+        self.assertEqual(persisted, 0)
+        self.assertEqual(event_count, 0)
+
+    def test_upsert_trade_plan_preserves_existing_values_and_only_activates_once(self):
+        engine_portfolio.init_db()
+
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_backfill",
+            entry_price=85.2,
+            stop_loss=80.0,
+            take_profit_1=95.0,
+            take_profit_2=105.0,
+            max_holding_days=60,
+            thesis_type="sector_rotation",
+            thesis_text="initial thesis",
+            thesis_payload={"proxy_symbol": "SOXX", "lookback_days": 10},
+            status="draft",
+        )
+
+        activated_plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_refresh",
+            entry_price=None,
+            stop_loss=None,
+            take_profit_1=None,
+            take_profit_2=None,
+            max_holding_days=None,
+            thesis_type=None,
+            thesis_text="refined thesis",
+            thesis_payload=None,
+            status="active",
+        )
+        refreshed_plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_refresh",
+            entry_price=86.0,
+            stop_loss=None,
+            take_profit_1=None,
+            take_profit_2=None,
+            max_holding_days=None,
+            thesis_type=None,
+            thesis_text=None,
+            thesis_payload=None,
+            status="active",
+        )
+
+        self.assertEqual(plan_id, activated_plan_id)
+        self.assertEqual(plan_id, refreshed_plan_id)
+
+        plan = engine_portfolio.get_trade_plan(plan_id)
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["status"], "active")
+        self.assertEqual(plan["source"], "manual_refresh")
+        self.assertEqual(plan["entry_price"], 86.0)
+        self.assertEqual(plan["stop_loss"], 80.0)
+        self.assertEqual(plan["take_profit_1"], 95.0)
+        self.assertEqual(plan["take_profit_2"], 105.0)
+        self.assertEqual(plan["max_holding_days"], 60)
+        self.assertEqual(plan["thesis_type"], "sector_rotation")
+        self.assertEqual(plan["thesis_text"], "refined thesis")
+        self.assertEqual(plan["thesis_payload_json"], '{"lookback_days": 10, "proxy_symbol": "SOXX"}')
+
+        with database.locked_connection() as conn:
+            event_types = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT event_type FROM trade_plan_events WHERE plan_id = ? ORDER BY id",
+                    (plan_id,),
+                ).fetchall()
+            ]
+
+        self.assertEqual(
+            event_types,
+            ["plan_created", "plan_updated", "plan_activated", "plan_updated"],
+        )
