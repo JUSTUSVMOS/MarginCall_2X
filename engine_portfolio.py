@@ -42,6 +42,13 @@ TRADE_SIZE_DECIMALS = 4
 FUBON_SYNC_SHARE_TOL = 1e-6
 FUBON_SYNC_COST_TOL = 1e-4
 _TRADE_FOLLOWUP_UNSET = object()
+TRADE_PLAN_REQUIRED_FIELDS = (
+    "stop_loss",
+    "take_profit_1",
+    "max_holding_days",
+    "thesis_type",
+    "thesis_text",
+)
 
 TRADE_GOVERNOR_LIMITS = {
     "normal": {"single_name_cap": 0.15, "sector_cap": 0.35},
@@ -192,6 +199,28 @@ def _record_trade_followup(
         ),
     )
     return cursor.lastrowid
+
+
+def _serialize_json(payload: Dict[str, Any] | None) -> str | None:
+    if payload is None:
+        return None
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _record_trade_plan_event(
+    cursor,
+    *,
+    plan_id: int,
+    event_type: str,
+    payload: Dict[str, Any] | None = None,
+):
+    cursor.execute(
+        """
+        INSERT INTO trade_plan_events (plan_id, event_type, payload_json, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (plan_id, event_type, _serialize_json(payload), _utc_now_iso()),
+    )
 
 
 def _list_trade_followups(cursor, *, status: str | None = "pending"):
@@ -582,6 +611,57 @@ def init_db():
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS trade_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                source TEXT NOT NULL,
+                opened_trade_log_id INTEGER,
+                entry_price REAL,
+                stop_loss REAL,
+                take_profit_1 REAL,
+                take_profit_2 REAL,
+                max_holding_days INTEGER,
+                thesis_type TEXT,
+                thesis_text TEXT,
+                thesis_payload_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                FOREIGN KEY(opened_trade_log_id) REFERENCES trade_log(id) ON DELETE SET NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_plan_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                FOREIGN KEY(plan_id) REFERENCES trade_plans(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_plan_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER,
+                symbol TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                payload_json TEXT,
+                first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                resolved_at TEXT,
+                FOREIGN KEY(plan_id) REFERENCES trade_plans(id) ON DELETE SET NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS portfolio_nav_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -610,6 +690,18 @@ def init_db():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_followups_status ON trade_followups(status)")
         except Exception as e:
             logger.debug(f"Trade followup index skipped: {e}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_plans_symbol_status ON trade_plans(symbol, status)")
+        except Exception as e:
+            logger.debug(f"Trade plans index skipped: {e}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_plan_events_plan_id ON trade_plan_events(plan_id)")
+        except Exception as e:
+            logger.debug(f"Trade plan events index skipped: {e}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_plan_alerts_symbol_status ON trade_plan_alerts(symbol, status)")
+        except Exception as e:
+            logger.debug(f"Trade plan alerts index skipped: {e}")
         conn.commit()
 
         # 檢查是否需要從 CSV 遷移
@@ -634,6 +726,134 @@ def init_db():
             except Exception as e:
                 logger.warning(f"⚠️ 遷移失敗: {e}")
         conn.close()
+
+
+def upsert_trade_plan(
+    *,
+    symbol: str,
+    source: str,
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit_1: float | None,
+    take_profit_2: float | None,
+    max_holding_days: int | None,
+    thesis_type: str | None,
+    thesis_text: str | None,
+    thesis_payload: Dict[str, Any] | None,
+    status: str = "draft",
+    opened_trade_log_id: int | None = None,
+) -> int:
+    normalized = normalize_ticker(symbol)
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            existing = cursor.execute(
+                "SELECT id FROM trade_plans WHERE symbol = ? AND status IN ('draft', 'active') ORDER BY id DESC LIMIT 1",
+                (normalized,),
+            ).fetchone()
+            now = _utc_now_iso()
+            if existing:
+                plan_id = int(existing[0])
+                cursor.execute(
+                    """
+                    UPDATE trade_plans
+                    SET source = ?, opened_trade_log_id = COALESCE(?, opened_trade_log_id),
+                        entry_price = ?, stop_loss = ?, take_profit_1 = ?, take_profit_2 = ?,
+                        max_holding_days = ?, thesis_type = ?, thesis_text = ?,
+                        thesis_payload_json = ?, status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        source,
+                        opened_trade_log_id,
+                        entry_price,
+                        stop_loss,
+                        take_profit_1,
+                        take_profit_2,
+                        max_holding_days,
+                        thesis_type,
+                        thesis_text,
+                        _serialize_json(thesis_payload),
+                        status,
+                        now,
+                        plan_id,
+                    ),
+                )
+                _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_updated", payload={"status": status})
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO trade_plans (
+                        symbol, status, source, opened_trade_log_id, entry_price, stop_loss,
+                        take_profit_1, take_profit_2, max_holding_days, thesis_type,
+                        thesis_text, thesis_payload_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        normalized,
+                        status,
+                        source,
+                        opened_trade_log_id,
+                        entry_price,
+                        stop_loss,
+                        take_profit_1,
+                        take_profit_2,
+                        max_holding_days,
+                        thesis_type,
+                        thesis_text,
+                        _serialize_json(thesis_payload),
+                        now,
+                        now,
+                    ),
+                )
+                plan_id = int(cursor.lastrowid)
+                _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_created", payload={"source": source})
+            if status == "active":
+                _record_trade_plan_event(cursor, plan_id=plan_id, event_type="plan_activated")
+            conn.commit()
+            return plan_id
+        finally:
+            conn.close()
+
+
+def get_trade_plan(plan_id: int) -> Dict[str, Any] | None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM trade_plans WHERE id = ?", (plan_id,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+
+def get_active_trade_plan(symbol: str) -> Dict[str, Any] | None:
+    normalized = normalize_ticker(symbol)
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM trade_plans WHERE symbol = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+                (normalized,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+
+def list_active_trade_plans() -> List[Dict[str, Any]]:
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM trade_plans WHERE status = 'active' ORDER BY symbol, id"
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
 
 
 def _floor_trade_quantity(quantity: float, decimals: int = TRADE_SIZE_DECIMALS) -> float:
