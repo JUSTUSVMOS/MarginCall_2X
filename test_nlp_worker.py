@@ -1,5 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+import nlp_worker
 from nlp_worker import (
     parse_form4_insider,
     extract_section,
@@ -474,6 +476,102 @@ class TestNLPWorker(unittest.TestCase):
         merged = _merge_macro_candidates([], many_must_keep_items, max_macro_items=2, max_must_keep=2)
 
         self.assertEqual(len(merged['selected_candidates']), 2)
+
+    def test_merge_macro_candidates_preserves_all_must_mention_events_when_uncapped(self):
+        published_at = datetime.now(timezone.utc)
+        many_must_keep_items = [
+            {
+                'headline': f'Major event {idx}',
+                'summary': 'Material announcement',
+                'lane': 'event',
+                'source': 'Reuters',
+                'published_at': published_at,
+                'event_class': 'major_event',
+                'event_type': 'acquisition',
+                'must_keep': True,
+                'event_window_days': 7,
+            }
+            for idx in range(3)
+        ]
+
+        merged = _merge_macro_candidates([], many_must_keep_items, max_macro_items=2, max_must_keep=None)
+
+        self.assertEqual(len(merged['selected_candidates']), 2)
+        self.assertEqual(
+            merged['must_mention_events'],
+            [
+                'acquisition: Major event 0',
+                'acquisition: Major event 1',
+                'acquisition: Major event 2',
+            ],
+        )
+
+    def test_run_turbo_trinity_scout_keeps_primary_macro_when_event_fetch_fails(self):
+        class FakeFrame:
+            def __init__(self, rows):
+                self._rows = list(rows)
+                self.empty = len(self._rows) == 0
+
+            def head(self, count):
+                return FakeFrame(self._rows[:count])
+
+            def iterrows(self):
+                for idx, row in enumerate(self._rows):
+                    yield idx, row
+
+        class PrimaryDownloader:
+            def __init__(self):
+                self.dataframe = FakeFrame(
+                    [
+                        {
+                            "headline": "Primary lane headline",
+                            "summary": "Primary lane summary",
+                            "source": "Reuters",
+                            "datetime": datetime.now(timezone.utc),
+                        }
+                    ]
+                )
+
+            def download_date_range_stock(self, **kwargs):
+                return None
+
+        class EventDownloader:
+            dataframe = None
+
+            def download_date_range_stock(self, **kwargs):
+                raise RuntimeError("event api failed")
+
+        downloader_instances = [PrimaryDownloader(), EventDownloader()]
+
+        with patch.object(nlp_worker, "check_ollama", return_value=True), patch.object(
+            nlp_worker, "init_nlp_db", return_value=None
+        ), patch.object(
+            nlp_worker, "get_ticker", return_value=type("Ticker", (), {"info": {"longName": "Test", "sector": "Tech", "industry": "Semi"}})()
+        ), patch.object(
+            nlp_worker.requests, "get", return_value=type("Resp", (), {"status_code": 200, "json": lambda self: {"data": {"children": []}}})()
+        ), patch.object(
+            nlp_worker, "cloudscraper", type("CS", (), {"create_scraper": staticmethod(lambda **kwargs: type("Scraper", (), {"get": lambda self, *args, **kwargs: type("Resp", (), {"status_code": 200, "json": lambda self: {"messages": []}})()})())})()
+        ), patch.object(
+            nlp_worker, "Finnhub_Date_Range", side_effect=downloader_instances
+        ), patch.object(
+            nlp_worker, "_fetch_sec_data", return_value=None
+        ), patch.object(
+            nlp_worker, "_verify_nuclear_threat", return_value=(False, "")
+        ), patch.object(
+            nlp_worker, "compose_alpha_signal", return_value=0.1
+        ), patch.object(
+            nlp_worker, "semantic_reduce", return_value="summary"
+        ), patch.object(
+            nlp_worker, "_build_signal_pack", return_value={}
+        ), patch.object(
+            nlp_worker, "score_sentiment_groups", side_effect=lambda groups, stock: ({"sec": 0.0, "macro": 0.2, "retail": 0.0}, groups)
+        ), patch.object(
+            nlp_worker, "save_to_db"
+        ) as mock_save:
+            nlp_worker.run_turbo_trinity_scout("NVDA")
+
+        mock_save.assert_called_once()
+        self.assertEqual(mock_save.call_args.args[5], 1)
 
 if __name__ == '__main__':
     unittest.main()

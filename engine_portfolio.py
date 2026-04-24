@@ -4,6 +4,7 @@ import time
 import os
 import csv
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 import requests
@@ -38,6 +39,9 @@ PORTFOLIO_VOL_SOFT_SYMBOL_CAP = 5
 PORTFOLIO_VOL_HARD_SYMBOL_CAP = 8
 PORTFOLIO_VOL_MIN_WEIGHT_COVERAGE = 0.85
 TRADE_SIZE_DECIMALS = 4
+FUBON_SYNC_SHARE_TOL = 1e-6
+FUBON_SYNC_COST_TOL = 1e-4
+_TRADE_FOLLOWUP_UNSET = object()
 
 TRADE_GOVERNOR_LIMITS = {
     "normal": {"single_name_cap": 0.15, "sector_cap": 0.35},
@@ -121,13 +125,17 @@ def _record_trade_log(
     cash_before: float | None = None,
     cash_after: float | None = None,
     note: str | None = None,
+    decision_snapshot: Dict[str, Any] | str | None = None,
 ):
+    serialized_snapshot = decision_snapshot
+    if isinstance(decision_snapshot, dict):
+        serialized_snapshot = json.dumps(decision_snapshot, ensure_ascii=False, sort_keys=True)
     cursor.execute(
         """
         INSERT INTO trade_log (
             symbol, action, price, shares, settle_currency, settle_amount, fx_rate,
-            realized_pnl, cash_before, cash_after, note
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            realized_pnl, cash_before, cash_after, note, decision_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             symbol,
@@ -141,8 +149,382 @@ def _record_trade_log(
             cash_before,
             cash_after,
             note,
+            serialized_snapshot,
         ),
     )
+    return cursor.lastrowid
+
+
+def _record_trade_followup(
+    cursor,
+    *,
+    trade_log_id: int,
+    symbol: str,
+    action: str,
+    prompt_text: str,
+    prompt_state: str = "pending",
+    status: str = "pending",
+    user_reason: str | None = None,
+    target_price: float | None = None,
+    stop_price: float | None = None,
+    skipped: int = 0,
+):
+    cursor.execute(
+        """
+        INSERT INTO trade_followups (
+            trade_log_id, symbol, action, status, prompt_state, prompt_text,
+            user_reason, target_price, stop_price, skipped, created_at, responded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            trade_log_id,
+            symbol,
+            action,
+            status,
+            prompt_state,
+            prompt_text,
+            user_reason,
+            target_price,
+            stop_price,
+            int(skipped),
+            _utc_now_iso(),
+            None,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def _list_trade_followups(cursor, *, status: str | None = "pending"):
+    if status is None:
+        cursor.execute(
+            "SELECT id, trade_log_id, symbol, action, status, prompt_state, prompt_text, user_reason, target_price, stop_price, skipped, created_at, responded_at FROM trade_followups ORDER BY id"
+        )
+    else:
+        cursor.execute(
+            "SELECT id, trade_log_id, symbol, action, status, prompt_state, prompt_text, user_reason, target_price, stop_price, skipped, created_at, responded_at FROM trade_followups WHERE status = ? ORDER BY id",
+            (status,),
+        )
+    return cursor.fetchall()
+
+
+def _update_trade_followup_status(
+    cursor,
+    followup_id: int,
+    *,
+    status: str,
+    prompt_state: str | None = None,
+    user_reason: Any = _TRADE_FOLLOWUP_UNSET,
+    target_price: Any = _TRADE_FOLLOWUP_UNSET,
+    stop_price: Any = _TRADE_FOLLOWUP_UNSET,
+    skipped: Any = _TRADE_FOLLOWUP_UNSET,
+    responded_at: Any = _TRADE_FOLLOWUP_UNSET,
+):
+    fields = ["status = ?"]
+    params: List[Any] = [status]
+    if prompt_state is not None:
+        fields.append("prompt_state = ?")
+        params.append(prompt_state)
+    if user_reason is not _TRADE_FOLLOWUP_UNSET:
+        fields.append("user_reason = ?")
+        params.append(user_reason)
+    if target_price is not _TRADE_FOLLOWUP_UNSET:
+        fields.append("target_price = ?")
+        params.append(target_price)
+    if stop_price is not _TRADE_FOLLOWUP_UNSET:
+        fields.append("stop_price = ?")
+        params.append(stop_price)
+    if skipped is not _TRADE_FOLLOWUP_UNSET:
+        fields.append("skipped = ?")
+        params.append(int(skipped))
+    if responded_at is not _TRADE_FOLLOWUP_UNSET:
+        fields.append("responded_at = ?")
+        params.append(responded_at)
+    params.append(followup_id)
+    cursor.execute(f"UPDATE trade_followups SET {', '.join(fields)} WHERE id = ?", params)
+    if cursor.rowcount == 0:
+        raise ValueError(f"trade_followup {followup_id} not found")
+
+
+def list_pending_trade_followups() -> List[Dict[str, Any]]:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, trade_log_id, symbol, action, status, prompt_state, prompt_text,
+                       user_reason, target_price, stop_price, skipped, created_at, responded_at
+                FROM trade_followups
+                WHERE status = 'pending' AND prompt_state = 'pending'
+                ORDER BY id
+                """
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+    columns = [
+        "id",
+        "trade_log_id",
+        "symbol",
+        "action",
+        "status",
+        "prompt_state",
+        "prompt_text",
+        "user_reason",
+        "target_price",
+        "stop_price",
+        "skipped",
+        "created_at",
+        "responded_at",
+    ]
+    return [dict(zip(columns, row)) for row in rows]
+
+
+def claim_pending_trade_followups() -> List[Dict[str, Any]]:
+    columns = [
+        "id",
+        "trade_log_id",
+        "symbol",
+        "action",
+        "status",
+        "prompt_state",
+        "prompt_text",
+        "user_reason",
+        "target_price",
+        "stop_price",
+        "skipped",
+        "created_at",
+        "responded_at",
+    ]
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, trade_log_id, symbol, action, status, prompt_state, prompt_text,
+                       user_reason, target_price, stop_price, skipped, created_at, responded_at
+                FROM trade_followups
+                WHERE status = 'pending' AND prompt_state = 'pending'
+                ORDER BY id
+                """
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                return []
+
+            claimed_followups = []
+            for row in rows:
+                followup_id = int(row[0])
+                _update_trade_followup_status(cursor, followup_id, status="pending", prompt_state="sending")
+                followup = dict(zip(columns, row))
+                followup["prompt_state"] = "sending"
+                claimed_followups.append(followup)
+
+            conn.commit()
+            return claimed_followups
+        finally:
+            conn.close()
+
+
+def get_latest_prompted_trade_followup() -> Dict[str, Any] | None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, trade_log_id, symbol, action, status, prompt_state, prompt_text,
+                       user_reason, target_price, stop_price, skipped, created_at, responded_at
+                FROM trade_followups
+                WHERE status = 'pending' AND prompt_state = 'prompted'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+    if row is None:
+        return None
+
+    columns = [
+        "id",
+        "trade_log_id",
+        "symbol",
+        "action",
+        "status",
+        "prompt_state",
+        "prompt_text",
+        "user_reason",
+        "target_price",
+        "stop_price",
+        "skipped",
+        "created_at",
+        "responded_at",
+    ]
+    return dict(zip(columns, row))
+
+
+def get_latest_prompted_pending_trade_followup() -> Dict[str, Any] | None:
+    return get_latest_prompted_trade_followup()
+
+
+_TRADE_FOLLOWUP_TARGET_PATTERN = re.compile(
+    r"(?:目標價?|target(?:\s+price)?|tp)\s*[:：=]?\s*\$?(?P<target>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_TRADE_FOLLOWUP_STOP_PATTERN = re.compile(
+    r"(?:停損|止損|stop(?:\s+loss)?|sl)\s*[:：=]?\s*\$?(?P<stop>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_TRADE_FOLLOWUP_REASON_PREFIX_PATTERN = re.compile(r"^(?:原因|理由|原因是|理由是)[:：\s]*")
+_TRADE_FOLLOWUP_REASON_HINT_PATTERN = re.compile(r"^(?:原因|理由|原因是|理由是|因為|因为)[:：\s]*")
+
+
+def parse_trade_followup_reply(reply_text: str) -> Dict[str, Any] | None:
+    payload = (reply_text or "").strip()
+    if not payload:
+        return None
+
+    normalized = re.sub(r"\s+", " ", payload)
+    if "跳過" in normalized or "跳过" in normalized or re.search(r"\bskip\b", normalized, re.IGNORECASE):
+        return {"skipped": 1, "user_reason": None, "target_price": None, "stop_price": None}
+
+    target_price = None
+    stop_price = None
+    reason_text = normalized
+    reason_hint_match = _TRADE_FOLLOWUP_REASON_HINT_PATTERN.match(reason_text)
+
+    target_match = _TRADE_FOLLOWUP_TARGET_PATTERN.search(reason_text)
+    if target_match:
+        target_price = float(target_match.group("target"))
+        reason_text = (reason_text[: target_match.start()] + " " + reason_text[target_match.end() :]).strip()
+
+    stop_match = _TRADE_FOLLOWUP_STOP_PATTERN.search(reason_text)
+    if stop_match:
+        stop_price = float(stop_match.group("stop"))
+        reason_text = (reason_text[: stop_match.start()] + " " + reason_text[stop_match.end() :]).strip()
+
+    if _TRADE_FOLLOWUP_REASON_PREFIX_PATTERN.match(reason_text):
+        reason_text = _TRADE_FOLLOWUP_REASON_PREFIX_PATTERN.sub("", reason_text, count=1)
+
+    user_reason = reason_text
+    user_reason = re.sub(r"[，,。.;；:：\-_/]+", " ", user_reason)
+    user_reason = re.sub(r"\s+", " ", user_reason).strip()
+
+    has_structured_reply = (
+        target_price is not None or stop_price is not None or reason_hint_match is not None
+    )
+    if not has_structured_reply:
+        return None
+
+    if not user_reason and target_price is None and stop_price is None:
+        return None
+
+    return {
+        "skipped": 0,
+        "user_reason": user_reason or None,
+        "target_price": target_price,
+        "stop_price": stop_price,
+    }
+
+
+def parse_trade_followup_reply_text(reply_text: str) -> Dict[str, Any] | None:
+    return parse_trade_followup_reply(reply_text)
+
+
+def resolve_trade_followup_reply(followup_id: int, reply_text: str) -> Dict[str, Any] | None:
+    parsed = parse_trade_followup_reply(reply_text)
+    if parsed is None:
+        return None
+
+    responded_at = _utc_now_iso()
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _update_trade_followup_status(
+                cursor,
+                followup_id,
+                status="resolved",
+                prompt_state="resolved",
+                user_reason=parsed["user_reason"],
+                target_price=parsed["target_price"],
+                stop_price=parsed["stop_price"],
+                skipped=parsed["skipped"],
+                responded_at=responded_at,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    return {**parsed, "responded_at": responded_at}
+
+
+def format_trade_followup_confirmation(followup: Dict[str, Any], resolution: Dict[str, Any]) -> str:
+    symbol = str(followup.get("symbol") or "").strip() or "UNKNOWN"
+    if int(resolution.get("skipped") or 0):
+        return f"✅ 已略過 {symbol} 的追問。"
+
+    parts = [f"✅ 已記錄 {symbol} 的追問回覆"]
+    user_reason = str(resolution.get("user_reason") or "").strip()
+    if user_reason:
+        parts.append(f"原因：{user_reason}")
+    target_price = resolution.get("target_price")
+    if target_price is not None:
+        parts.append(f"目標價：{target_price:g}")
+    stop_price = resolution.get("stop_price")
+    if stop_price is not None:
+        parts.append(f"停損：{stop_price:g}")
+    return "\n".join(parts)
+
+
+def format_trade_followup_reply_confirmation(followup: Dict[str, Any], resolution: Dict[str, Any]) -> str:
+    return format_trade_followup_confirmation(followup, resolution)
+
+
+def mark_trade_followup_prompted(followup_id: int) -> None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _update_trade_followup_status(cursor, followup_id, status="pending", prompt_state="prompted")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def mark_trade_followup_pending(followup_id: int) -> None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _update_trade_followup_status(cursor, followup_id, status="pending", prompt_state="pending")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def build_trade_followup_prompt(followup: Dict[str, Any]) -> str:
+    symbol = str(followup.get("symbol") or "").strip() or "UNKNOWN"
+    action = str(followup.get("action") or "").strip()
+    action_labels = {
+        "sync_buy": "同步買進",
+        "sync_sell": "同步賣出",
+        "sync_adjust": "同步調整",
+    }
+    action_label = action_labels.get(action, action or "交易")
+    prompt_text = str(followup.get("prompt_text") or "").strip()
+    parts = [f"📣 交易追問：{symbol}（{action_label}）"]
+    if prompt_text:
+        parts.append(prompt_text)
+    parts.append("請回覆原因＋目標價/停損；若不處理可直接回「跳過」。")
+    return "\n".join(parts)
+
 
 # --- 資料庫初始化與遷移 ---
 def init_db():
@@ -173,7 +555,28 @@ def init_db():
                 realized_pnl REAL,
                 cash_before REAL,
                 cash_after REAL,
-                note TEXT
+                note TEXT,
+                decision_snapshot TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_followups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_log_id INTEGER NOT NULL UNIQUE,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                prompt_state TEXT NOT NULL DEFAULT 'pending',
+                prompt_text TEXT,
+                user_reason TEXT,
+                target_price REAL,
+                stop_price REAL,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                responded_at TEXT,
+                FOREIGN KEY(trade_log_id) REFERENCES trade_log(id) ON DELETE CASCADE
             )
             """
         )
@@ -199,6 +602,14 @@ def init_db():
             cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
         except Exception as e:
             logger.debug(f"Portfolio migration skipped: {e}")
+        try:
+            cursor.execute("ALTER TABLE trade_log ADD COLUMN decision_snapshot TEXT")
+        except Exception as e:
+            logger.debug(f"Trade log migration skipped: {e}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_followups_status ON trade_followups(status)")
+        except Exception as e:
+            logger.debug(f"Trade followup index skipped: {e}")
         conn.commit()
 
         # 檢查是否需要從 CSV 遷移
@@ -230,6 +641,379 @@ def _floor_trade_quantity(quantity: float, decimals: int = TRADE_SIZE_DECIMALS) 
         return 0.0
     factor = 10 ** max(int(decimals), 0)
     return math.floor(float(quantity) * factor) / factor
+
+
+def _is_fubon_sync_candidate(symbol: str, locked: int = 0) -> bool:
+    if symbol.startswith("CASH"):
+        return False
+    clean_symbol = _clean_fubon_sync_symbol(symbol)
+    is_taiwan = clean_symbol.isdigit() or (any(char.isdigit() for char in clean_symbol[:4]) and len(clean_symbol) <= 6)
+    is_trust = '_TRUST' in symbol or '_ESOP' in symbol
+    return is_taiwan and not is_trust and int(locked or 0) != 1
+
+
+def _clean_fubon_sync_symbol(symbol: str) -> str:
+    return normalize_ticker(symbol).replace('.TW', '').replace('.TWO', '').replace('_TRUST', '').replace('_ESOP', '')
+
+
+def _resolve_sync_lookup_symbol(symbol: str) -> str:
+    clean_symbol = normalize_ticker(symbol).replace('_TRUST', '').replace('_ESOP', '')
+    return market._normalize_lookup_symbol(clean_symbol)
+
+
+def _fetch_recent_change_1d(symbol: str) -> float | None:
+    try:
+        hist = get_ticker(symbol, cache_level="daily").history(period="5d")
+        closes = hist.get("Close") if isinstance(hist, pd.DataFrame) else None
+        if closes is None:
+            return None
+        closes = pd.Series(closes).dropna()
+        if len(closes) < 2:
+            return None
+        prev_close = float(closes.iloc[-2])
+        last_close = float(closes.iloc[-1])
+        if prev_close == 0:
+            return None
+        return round((last_close / prev_close) - 1.0, 4)
+    except Exception as exc:
+        logger.debug(f"1d change lookup failed for {symbol}: {exc}")
+        return None
+
+
+def _fetch_latest_price_value(symbol: str) -> float | None:
+    try:
+        ticker = get_ticker(symbol, cache_level="daily")
+        fast_info = getattr(ticker, "fast_info", {}) or {}
+        price = fast_info.get("last_price")
+        if price is not None:
+            return round(float(price), 4)
+        hist = ticker.history(period="5d")
+        closes = hist.get("Close") if isinstance(hist, pd.DataFrame) else None
+        if closes is None:
+            return None
+        closes = pd.Series(closes).dropna()
+        if closes.empty:
+            return None
+        return round(float(closes.iloc[-1]), 4)
+    except Exception as exc:
+        logger.debug(f"Latest price lookup failed for {symbol}: {exc}")
+        return None
+
+
+def _select_sector_proxy(profile: Dict[str, Any]) -> str:
+    sector = str(profile.get("sector") or "Unknown")
+    industry = str(profile.get("industry") or "")
+    industry_l = industry.lower()
+    if "semiconductor" in industry_l:
+        return "SOXX"
+    mapping = {
+        "Technology": "XLK",
+        "Communication Services": "XLC",
+        "Energy": "XLE",
+        "Financial Services": "XLF",
+        "Healthcare": "XLV",
+        "Industrials": "XLI",
+        "Utilities": "XLU",
+        "Consumer Discretionary": "XLY",
+        "Consumer Staples": "XLP",
+        "Real Estate": "XLRE",
+        "Materials": "XLB",
+        "Macro Hedge": "GLD",
+    }
+    return mapping.get(sector, "SPY")
+
+
+def _fetch_symbol_rsi_14(symbol: str) -> float | None:
+    try:
+        import engine_technical
+
+        hist = get_ticker(symbol, cache_level="daily").history(period="3mo")
+        if not isinstance(hist, pd.DataFrame) or hist.empty or "Close" not in hist:
+            return None
+        closes = pd.Series(hist["Close"]).dropna().astype(float)
+        if len(closes) < 15:
+            return None
+        calc = engine_technical.IndicatorCalculator()
+        rsi_series = pd.Series(calc.RSI(closes.to_numpy(dtype=float))).dropna()
+        if rsi_series.empty:
+            return None
+        return round(float(rsi_series.iloc[-1]), 2)
+    except Exception as exc:
+        logger.debug(f"RSI lookup failed for {symbol}: {exc}")
+        return None
+
+
+def _fetch_sync_nlp_alpha(symbol: str, lookup_symbol: str) -> float | None:
+    try:
+        import engine_router as router
+    except Exception as exc:
+        logger.debug(f"NLP router import failed during sync snapshot: {exc}")
+        return None
+
+    candidates = [normalize_ticker(symbol)]
+    if lookup_symbol not in candidates:
+        candidates.append(lookup_symbol)
+    base_lookup = lookup_symbol.replace(".TW", "").replace(".TWO", "")
+    if base_lookup not in candidates:
+        candidates.append(base_lookup)
+
+    for candidate in candidates:
+        payload = router.fetch_nlp_alpha(candidate)
+        if not payload.get("error") and isinstance(payload.get("nlp_alpha"), (int, float)):
+            return round(float(payload["nlp_alpha"]), 4)
+    return None
+
+
+def _build_sync_decision_snapshot(symbol: str) -> Dict[str, Any]:
+    lookup_symbol = _resolve_sync_lookup_symbol(symbol)
+    profile = market.get_asset_profile(lookup_symbol or symbol)
+    sector_proxy = _select_sector_proxy(profile)
+    snapshot: Dict[str, Any] = {
+        "captured_at": _utc_now_iso(),
+        "symbol": normalize_ticker(symbol),
+        "lookup_symbol": lookup_symbol,
+        "sector": profile.get("sector", "Unknown"),
+        "industry": profile.get("industry", "Unknown"),
+        "spy_change_1d": _fetch_recent_change_1d("SPY"),
+        "sector_proxy": sector_proxy,
+        "sector_proxy_change_1d": _fetch_recent_change_1d(sector_proxy),
+        "vix": _fetch_latest_price_value("^VIX"),
+        "rsi_14": _fetch_symbol_rsi_14(lookup_symbol or symbol),
+        "nlp_alpha": _fetch_sync_nlp_alpha(symbol, lookup_symbol),
+    }
+    try:
+        import engine_risk as risk_engine
+
+        risk_snapshot = risk_engine.get_global_risk_snapshot()
+        snapshot["risk_state"] = risk_snapshot.get("state")
+        snapshot["risk_score"] = risk_snapshot.get("riskScore")
+    except Exception as exc:
+        snapshot["risk_snapshot_error"] = str(exc)
+    return snapshot
+
+
+def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = False) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"synced": False, "event_count": 0, "followup_count": 0, "events": [], "message": "富邦未啟動。"}
+    if not fubon.fubon_ready:
+        return result
+
+    account_snapshot = fubon.get_fubon_account_snapshot()
+    if account_snapshot.get("success") is not True:
+        error_message = str(account_snapshot.get("error") or "broker snapshot unavailable")
+        result["message"] = f"Fubon sync skipped: {error_message}"
+        return result
+
+    fubon_inv = account_snapshot.get("inventories") or {}
+    fubon_cash = account_snapshot.get("cash_twd")
+    events: List[Dict[str, Any]] = []
+    followup_count = 0
+    skipped_aliases: set[str] = set()
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, cost, shares, twd_cost, locked FROM portfolio")
+            db_rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+    alias_groups: Dict[str, List[str]] = {}
+    existing_sync_symbols = []
+    for row in db_rows:
+        symbol = str(row[0])
+        if not _is_fubon_sync_candidate(symbol, int(row[4] or 0)):
+            continue
+        existing_sync_symbols.append(symbol)
+        alias_groups.setdefault(_clean_fubon_sync_symbol(symbol), []).append(symbol)
+    ambiguous_aliases = {alias for alias, symbols in alias_groups.items() if len(symbols) > 1}
+    snapshot_symbols = {normalize_ticker(symbol) for symbol in fubon_inv.keys()}
+    snapshot_symbols.update(existing_sync_symbols)
+    decision_cache = {
+        symbol: _build_sync_decision_snapshot(symbol)
+        for symbol in sorted(snapshot_symbols)
+    }
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            db_dict = {row[0]: list(row) for row in db_rows}
+            db_aliases = {
+                _clean_fubon_sync_symbol(row[0]): row[0]
+                for row in db_rows
+                if _is_fubon_sync_candidate(str(row[0]), int(row[4] or 0))
+                and _clean_fubon_sync_symbol(row[0]) not in ambiguous_aliases
+            }
+
+            for symbol, data in sorted(fubon_inv.items()):
+                normalized = normalize_ticker(symbol)
+                clean_alias = _clean_fubon_sync_symbol(normalized)
+                if clean_alias in ambiguous_aliases:
+                    skipped_aliases.add(clean_alias)
+                    continue
+                db_symbol = db_aliases.get(clean_alias, normalized)
+                fb_shares = float(data.get("shares") or 0.0)
+                fb_cost = float(data.get("cost") or 0.0)
+                old_pos = db_dict.get(db_symbol)
+
+                if old_pos is None:
+                    if fb_shares > 0:
+                        trade_log_id = _record_trade_log(
+                            cursor,
+                            symbol=normalized,
+                            action="sync_buy",
+                            price=fb_cost,
+                            shares=fb_shares,
+                            note=f"[auto sync:{source}] new broker position detected.",
+                            decision_snapshot=decision_cache.get(normalize_ticker(normalized)),
+                        )
+                        if source != "portfolio_query":
+                            _record_trade_followup(
+                                cursor,
+                                trade_log_id=trade_log_id,
+                                symbol=normalized,
+                                action="sync_buy",
+                                prompt_text=f"Broker sync detected a new position in {normalized}. Please outline the plan.",
+                            )
+                            followup_count += 1
+                        events.append(
+                            {"symbol": normalized, "action": "sync_buy", "shares_delta": fb_shares, "price": fb_cost}
+                        )
+                    _upsert_portfolio_row(cursor, normalized, fb_cost, fb_shares, fb_cost * fb_shares, 0)
+                    db_dict[normalized] = [normalized, fb_cost, fb_shares, fb_cost * fb_shares, 0]
+                    db_aliases[_clean_fubon_sync_symbol(normalized)] = normalized
+                    continue
+
+                old_cost = float(old_pos[1] or 0.0)
+                old_shares = float(old_pos[2] or 0.0)
+                old_locked = int(old_pos[4] or 0)
+
+                shares_changed = not math.isclose(fb_shares, old_shares, rel_tol=0.0, abs_tol=FUBON_SYNC_SHARE_TOL)
+                cost_changed = not math.isclose(fb_cost, old_cost, rel_tol=0.0, abs_tol=FUBON_SYNC_COST_TOL)
+
+                if fb_shares > old_shares + FUBON_SYNC_SHARE_TOL:
+                    added = fb_shares - old_shares
+                    old_total = old_shares * old_cost
+                    new_total = fb_shares * fb_cost
+                    inferred_price = (new_total - old_total) / added if added > 0 else fb_cost
+                    if inferred_price <= 0:
+                        inferred_price = fb_cost
+                    trade_log_id = _record_trade_log(
+                        cursor,
+                        symbol=db_symbol,
+                        action="sync_buy",
+                        price=inferred_price,
+                        shares=added,
+                        note=(
+                            f"[auto sync:{source}] broker sync inferred average add "
+                            f"(old_avg={old_cost:.4f} -> new_avg={fb_cost:.4f})."
+                        ),
+                        decision_snapshot=decision_cache.get(normalize_ticker(db_symbol)),
+                    )
+                    if source != "portfolio_query":
+                        _record_trade_followup(
+                            cursor,
+                            trade_log_id=trade_log_id,
+                            symbol=db_symbol,
+                            action="sync_buy",
+                            prompt_text=f"Broker sync increased {db_symbol}. Please outline the plan.",
+                        )
+                        followup_count += 1
+                    events.append(
+                        {"symbol": db_symbol, "action": "sync_buy", "shares_delta": round(added, 4), "price": round(inferred_price, 4)}
+                    )
+                elif fb_shares < old_shares - FUBON_SYNC_SHARE_TOL:
+                    reduced = old_shares - fb_shares
+                    placeholder_price = old_cost if old_cost > 0 else fb_cost
+                    _record_trade_log(
+                        cursor,
+                        symbol=db_symbol,
+                        action="sync_sell",
+                        price=placeholder_price,
+                        shares=reduced,
+                        note=(
+                            f"[auto sync:{source}] broker sync detected share reduction; "
+                            "execution price unavailable, stored previous average cost placeholder."
+                        ),
+                        decision_snapshot=decision_cache.get(normalize_ticker(db_symbol)),
+                    )
+                    events.append(
+                        {"symbol": db_symbol, "action": "sync_sell", "shares_delta": round(-reduced, 4), "price": round(placeholder_price, 4)}
+                    )
+                elif cost_changed:
+                    _record_trade_log(
+                        cursor,
+                        symbol=db_symbol,
+                        action="sync_adjust",
+                        price=fb_cost,
+                        shares=fb_shares,
+                        note=f"[auto sync:{source}] average cost adjusted ({old_cost:.4f} -> {fb_cost:.4f}).",
+                        decision_snapshot=decision_cache.get(normalize_ticker(db_symbol)),
+                    )
+                    events.append(
+                        {"symbol": db_symbol, "action": "sync_adjust", "shares_delta": 0.0, "price": round(fb_cost, 4)}
+                    )
+
+                new_twd_cost = fb_cost * fb_shares
+                if (
+                    shares_changed
+                    or cost_changed
+                    or not math.isclose(float(old_pos[3] or 0.0), new_twd_cost, rel_tol=0.0, abs_tol=FUBON_SYNC_COST_TOL)
+                ):
+                    _upsert_portfolio_row(cursor, db_symbol, fb_cost, fb_shares, new_twd_cost, old_locked)
+                    db_dict[db_symbol] = [db_symbol, fb_cost, fb_shares, new_twd_cost, old_locked]
+
+            fb_symbols = {_clean_fubon_sync_symbol(symbol) for symbol in fubon_inv.keys()}
+            for symbol, row in list(db_dict.items()):
+                clean_alias = _clean_fubon_sync_symbol(symbol)
+                if clean_alias in ambiguous_aliases:
+                    skipped_aliases.add(clean_alias)
+                    continue
+                if not _is_fubon_sync_candidate(symbol, row[4]) or clean_alias in fb_symbols:
+                    continue
+                old_cost = float(row[1] or 0.0)
+                old_shares = float(row[2] or 0.0)
+                placeholder_price = old_cost if old_cost > 0 else 0.0
+                _record_trade_log(
+                    cursor,
+                    symbol=symbol,
+                    action="sync_sell",
+                    price=placeholder_price,
+                    shares=old_shares,
+                    note=(
+                        f"[auto sync:{source}] broker sync detected position close-out; "
+                        "execution price unavailable, stored previous average cost placeholder."
+                    ),
+                    decision_snapshot=decision_cache.get(normalize_ticker(symbol)),
+                )
+                cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (symbol,))
+                del db_dict[symbol]
+                events.append(
+                    {"symbol": symbol, "action": "sync_sell", "shares_delta": round(-old_shares, 4), "price": round(placeholder_price, 4)}
+                )
+
+            if fubon_cash is not None:
+                cash_value = float(fubon_cash)
+                _upsert_portfolio_row(cursor, "CASH_TWD", 1.0, cash_value, cash_value, 0)
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    if sync_memory and events:
+        try:
+            refresh_portfolio_health_summary(source="fubon_sync")
+        except Exception as exc:
+            logger.warning(f"Portfolio health refresh failed after Fubon sync: {exc}")
+
+    result["synced"] = True
+    result["event_count"] = len(events)
+    result["events"] = events
+    result["followup_count"] = followup_count
+    result["skipped_aliases"] = sorted(skipped_aliases)
+    result["message"] = f"Fubon sync complete ({len(events)} inferred events)."
+    return result
 
 
 def _find_snapshot_by_symbol(snapshots: List[Dict[str, Any]], symbol: str) -> Dict[str, Any] | None:
@@ -822,75 +1606,20 @@ def get_symbol_name(symbol: str) -> str:
 
 def build_portfolio_raw_data() -> str:
     """Pure portfolio snapshot logic for direct callers and tests."""
+    if fubon.fubon_ready:
+        sync_fubon_portfolio_state(source="portfolio_query", sync_memory=False)
+
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
-        
-        # 1. 取得富邦實體數據 (包含股數與買進成本)
-        if fubon.fubon_ready:
-            fubon_inv = fubon.get_fubon_inventories()
-            fubon_cash = fubon.get_fubon_bank_remain()
-        else:
-            fubon_inv = {}
-            fubon_cash = None
-        
+
         try:
-            # 2. 取得資料庫目前的倉位
+            # 1. 取得資料庫目前的倉位
             cursor.execute("SELECT symbol, cost, shares, twd_cost, locked FROM portfolio")
             db_rows = cursor.fetchall()
             db_dict = {r[0]: list(r) for r in db_rows}
 
-            if fubon.fubon_ready:
-                # 3. 智能合併與清洗
-                # A. 遍歷富邦抓到的標的，更新或新增
-                for symbol, data in fubon_inv.items():
-                    fb_shares = data['shares']
-                    fb_cost = data['cost']
-                    
-                    if symbol in db_dict:
-                        # 已有紀錄，強制同步股數與平均成本 (Fubon 為準)
-                        update_needed = False
-                        if db_dict[symbol][2] != fb_shares or db_dict[symbol][1] != fb_cost:
-                            db_dict[symbol][2] = fb_shares
-                            db_dict[symbol][1] = fb_cost
-                            db_dict[symbol][3] = fb_cost * fb_shares
-                            update_needed = True
-                        
-                        if update_needed:
-                            cursor.execute("UPDATE portfolio SET shares = ?, cost = ?, twd_cost = ? WHERE symbol = ?", (fb_shares, fb_cost, fb_cost * fb_shares, symbol))
-                    else:
-                        # 資料庫沒記錄，自動新增
-                        cursor.execute("INSERT INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)", (symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0))
-                        db_dict[symbol] = [symbol, fb_cost, fb_shares, fb_cost * fb_shares, 0]
-
-                # B. 【清洗邏輯】如果資料庫中的台股標的不在富邦清單內，且未被鎖定，則刪除
-                fb_symbols = set(fubon_inv.keys())
-                to_delete = []
-                for sym in db_dict.keys():
-                    # 判斷是否為台股 (非 CASH, 非海外股)
-                    clean_sym = sym.replace('.TW', '').replace('.TWO', '').replace('_TRUST', '').replace('_ESOP', '')
-                    is_taiwan = (any(char.isdigit() for char in clean_sym) and len(clean_sym) <= 6)
-                    is_locked = db_dict[sym][4] == 1
-                    is_trust = '_TRUST' in sym or '_ESOP' in sym
-                    
-                    # 只有一般台股才需要跟 Fubon 同步清理，鎖定單或信託/ESOP單不受券商清單影響
-                    if is_taiwan and not is_trust and sym not in fb_symbols and not is_locked:
-                        to_delete.append(sym)
-                
-                for sym in to_delete:
-                    cursor.execute("DELETE FROM portfolio WHERE symbol = ?", (sym,))
-                    del db_dict[sym]
-                    print(f"🧹 已自動清理幽靈庫存: {sym}")
-
-                # C. 自動同步台幣現金
-                if fubon_cash is not None:
-                    cursor.execute("INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES ('CASH_TWD', 1.0, ?, ?, 0)", (float(fubon_cash), float(fubon_cash)))
-                    # 更新 db_dict 讓回傳的 JSON 也有資料
-                    db_dict['CASH_TWD'] = ['CASH_TWD', 1.0, float(fubon_cash), float(fubon_cash), 0]
-
-            conn.commit()
-
-            # 4. 組裝回傳資料
+            # 2. 組裝回傳資料
             records = []
             for sym, data in db_dict.items():
                 # 【V5.4 強化】精準市場分類邏輯
@@ -1357,10 +2086,165 @@ def build_portfolio_analytics_report() -> str:
     return report
 
 
+def build_trade_followup_weekly_report(days: int = 7) -> str:
+    lookback_days = max(int(days), 1)
+    cutoff = datetime.now(timezone.utc) - pd.Timedelta(days=lookback_days)
+    cutoff_iso = cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            followups = pd.read_sql(
+                """
+                SELECT
+                    tf.id AS followup_id,
+                    tf.symbol,
+                    tf.status,
+                    tf.prompt_state,
+                    tf.user_reason,
+                    tf.target_price,
+                    tf.stop_price,
+                    tf.skipped,
+                    tf.responded_at,
+                    tf.created_at,
+                    tl.timestamp AS followup_timestamp,
+                    tl.decision_snapshot
+                FROM trade_followups tf
+                JOIN trade_log tl ON tl.id = tf.trade_log_id
+                WHERE tl.timestamp >= ?
+                ORDER BY tf.symbol, tl.timestamp, tf.id
+                """,
+                conn,
+                params=(cutoff_iso,),
+            )
+            sells = pd.read_sql(
+                """
+                SELECT
+                    id AS sell_trade_log_id,
+                    timestamp,
+                    symbol,
+                    settle_amount,
+                    fx_rate,
+                    realized_pnl
+                FROM trade_log
+                WHERE action = 'sell' AND timestamp >= ?
+                ORDER BY symbol, timestamp, id
+                """,
+                conn,
+                params=(cutoff_iso,),
+            )
+        finally:
+            conn.close()
+
+    if followups.empty:
+        return format_tool_error(f"❌ 過去 {lookback_days} 天沒有 broker trade follow-up。", data_unavailable=True)
+
+    followups["followup_timestamp"] = pd.to_datetime(followups["followup_timestamp"], utc=True, errors="coerce")
+    followups = followups.dropna(subset=["followup_timestamp"]).copy()
+    if followups.empty:
+        return format_tool_error("❌ trade_followups 缺少可用的時間戳，無法建立週報。", data_unavailable=True)
+
+    followups["next_followup_timestamp"] = followups.groupby("symbol")["followup_timestamp"].shift(-1)
+
+    if sells.empty:
+        sells = pd.DataFrame(columns=["sell_trade_log_id", "timestamp", "symbol", "settle_amount", "fx_rate", "realized_pnl"])
+    else:
+        sells["timestamp"] = pd.to_datetime(sells["timestamp"], utc=True, errors="coerce")
+        for column in ("settle_amount", "fx_rate", "realized_pnl"):
+            sells[column] = pd.to_numeric(sells[column], errors="coerce")
+        sells["fx_rate"] = sells["fx_rate"].replace(0, np.nan).fillna(1.0)
+        sells["cost_basis_twd"] = (sells["settle_amount"] * sells["fx_rate"]) - sells["realized_pnl"]
+        sells = sells.dropna(subset=["timestamp", "realized_pnl", "cost_basis_twd"]).copy()
+        sells = sells[sells["cost_basis_twd"] > 0].copy()
+
+    bucket_stats: Dict[str, Dict[str, Any]] = {
+        "planned": {"count": 0, "pending_count": 0, "closed_count": 0, "win_count": 0, "return_sum": 0.0, "pnl_sum": 0.0, "alpha_sum": 0.0, "alpha_count": 0},
+        "unplanned": {"count": 0, "pending_count": 0, "closed_count": 0, "win_count": 0, "return_sum": 0.0, "pnl_sum": 0.0, "alpha_sum": 0.0, "alpha_count": 0},
+    }
+
+    for row in followups.itertuples(index=False):
+        has_plan = (
+            str(row.status or "").strip() == "resolved"
+            and int(row.skipped or 0) == 0
+            and any(value not in (None, "") for value in (row.user_reason, row.target_price, row.stop_price))
+        )
+        bucket_name = "planned" if has_plan else "unplanned"
+        bucket = bucket_stats[bucket_name]
+        bucket["count"] += 1
+        if str(row.status or "").strip() != "resolved":
+            bucket["pending_count"] += 1
+
+        snapshot = {}
+        if row.decision_snapshot:
+            try:
+                snapshot = json.loads(row.decision_snapshot)
+            except (TypeError, json.JSONDecodeError):
+                snapshot = {}
+        nlp_alpha = snapshot.get("nlp_alpha")
+        if isinstance(nlp_alpha, (int, float)):
+            bucket["alpha_sum"] += float(nlp_alpha)
+            bucket["alpha_count"] += 1
+
+        if sells.empty:
+            continue
+
+        matched_sells = sells[
+            (sells["symbol"] == row.symbol)
+            & (sells["timestamp"] >= row.followup_timestamp)
+            & (
+                sells["timestamp"] < row.next_followup_timestamp
+                if pd.notna(row.next_followup_timestamp)
+                else True
+            )
+        ]
+        if matched_sells.empty:
+            continue
+
+        realized_pnl = float(matched_sells["realized_pnl"].sum())
+        cost_basis_twd = float(matched_sells["cost_basis_twd"].sum())
+        if cost_basis_twd <= 0:
+            continue
+
+        bucket["closed_count"] += 1
+        bucket["pnl_sum"] += realized_pnl
+        bucket["return_sum"] += realized_pnl / cost_basis_twd
+        if realized_pnl > 0:
+            bucket["win_count"] += 1
+
+    report = f"📝 === Trade Follow-up Weekly Review ({lookback_days}d) ===\n"
+    report += f"● Follow-ups: {len(followups)} 筆\n"
+    for bucket_name, label in (("planned", "有計畫"), ("unplanned", "無計畫")):
+        bucket = bucket_stats[bucket_name]
+        line = f"● {label}: {bucket['count']} 筆"
+        if bucket["pending_count"] > 0:
+            line += f" | 待補 {bucket['pending_count']} 筆"
+        line += f" | 已平倉 {bucket['closed_count']} 筆"
+        if bucket["closed_count"] > 0:
+            win_rate = bucket["win_count"] / bucket["closed_count"]
+            avg_return = bucket["return_sum"] / bucket["closed_count"]
+            avg_pnl = bucket["pnl_sum"] / bucket["closed_count"]
+            line += f" | 勝率 {win_rate:.1%} | 平均報酬 {avg_return:.1%} | 平均已實現 NT${avg_pnl:,.0f}"
+        else:
+            line += " | 勝率 N/A | 平均報酬 N/A"
+        if bucket["alpha_count"] > 0:
+            avg_alpha = bucket["alpha_sum"] / bucket["alpha_count"]
+            line += f" | 平均偵測 Alpha {avg_alpha:+.2f}"
+        report += line + "\n"
+
+    report += "● 註記: 以 trade_followups 分 bucket，並將同 symbol 後續 sell audit 歸到最近一筆 follow-up；未平倉不納入勝率/平均報酬。"
+    return report
+
+
 @tool()
 def get_portfolio_analytics() -> str:
     """Returns realized closed-book performance analytics built from trade_log sells."""
     return build_portfolio_analytics_report()
+
+
+@tool()
+def get_trade_followup_weekly_report(days: int = 7) -> str:
+    """Returns the weekly planned-vs-unplanned report for broker-detected trade followups."""
+    return build_trade_followup_weekly_report(days)
 
 
 def compute_portfolio_beta_attribution(
