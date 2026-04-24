@@ -5,6 +5,7 @@ import os
 import csv
 import logging
 import re
+import sqlite3
 import threading
 from datetime import datetime, timezone
 import requests
