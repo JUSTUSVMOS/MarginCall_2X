@@ -1540,12 +1540,13 @@ def _resolve_stale_trade_plan_alerts(symbol: str, plan_id: int, active_alert_typ
 def _evaluate_trade_plan_alert_specs(
     plan: Dict[str, Any],
     snapshot: Dict[str, Any],
+    *,
+    now_iso: str,
 ) -> List[Dict[str, Any]]:
     alerts: List[Dict[str, Any]] = []
     current_price = _coerce_float(snapshot.get("current_price"))
     symbol = normalize_ticker(plan["symbol"])
     thesis_type = plan.get("thesis_type")
-    now_iso = _utc_now_iso()
 
     stop_loss = _coerce_float(plan.get("stop_loss"))
     if current_price is not None and stop_loss is not None and current_price <= stop_loss:
@@ -1640,6 +1641,7 @@ def audit_trade_plan_alerts() -> Dict[str, Any]:
         result["symbols"] = [normalize_ticker(plan["symbol"]) for plan in active_plans]
         return result
 
+    run_now_iso = _utc_now_iso()
     for plan in active_plans:
         symbol = normalize_ticker(plan["symbol"])
         plan_id = int(plan["id"])
@@ -1649,7 +1651,7 @@ def audit_trade_plan_alerts() -> Dict[str, Any]:
             _resolve_stale_trade_plan_alerts(symbol, plan_id, set())
             continue
 
-        alert_specs = _evaluate_trade_plan_alert_specs(plan, snapshot)
+        alert_specs = _evaluate_trade_plan_alert_specs(plan, snapshot, now_iso=run_now_iso)
         for spec in alert_specs:
             upsert_trade_plan_alert(
                 symbol=symbol,

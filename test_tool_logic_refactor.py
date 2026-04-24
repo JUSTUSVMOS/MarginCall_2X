@@ -872,6 +872,157 @@ class DirectHelperRuntimeTests(unittest.TestCase):
             },
         )
 
+    def test_audit_trade_plan_alerts_uses_one_shared_timestamp_for_time_rules(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("AAPL", 100.0, 2.0, 200.0, 0),
+                    ("AMD", 100.0, 4.0, 400.0, 0),
+                ],
+            )
+            conn.commit()
+
+        with patch.object(engine_portfolio, "_utc_now_iso", return_value="2024-01-01T00:00:00Z"):
+            for symbol in ("AAPL", "AMD"):
+                engine_portfolio.upsert_trade_plan(
+                    symbol=symbol,
+                    source="manual_backfill",
+                    entry_price=100.0,
+                    stop_loss=92.0,
+                    take_profit_1=110.0,
+                    take_profit_2=None,
+                    max_holding_days=11,
+                    thesis_type="breakout_support",
+                    thesis_text="trend should stay intact",
+                    thesis_payload=None,
+                    status="active",
+                )
+
+        snapshots = [
+            {
+                "symbol": "AAPL",
+                "market": "US",
+                "is_cash": False,
+                "is_us_stock": True,
+                "shares": 2.0,
+                "cost": 100.0,
+                "twd_cost": 200.0,
+                "current_price": 105.0,
+                "market_value_twd": 210.0,
+                "pnl_value_twd": 10.0,
+                "pnl_percent": 0.05,
+            },
+            {
+                "symbol": "AMD",
+                "market": "US",
+                "is_cash": False,
+                "is_us_stock": True,
+                "shares": 4.0,
+                "cost": 100.0,
+                "twd_cost": 400.0,
+                "current_price": 105.0,
+                "market_value_twd": 420.0,
+                "pnl_value_twd": 20.0,
+                "pnl_percent": 0.05,
+            },
+        ]
+
+        with patch.object(
+            engine_portfolio,
+            "_utc_now_iso",
+            side_effect=["2024-01-11T23:59:59Z", "2024-01-12T00:00:01Z"],
+        ) as mocked_now, patch.object(
+            engine_portfolio, "resolve_trade_plan_alert", return_value=0
+        ), patch.object(
+            engine_portfolio, "upsert_trade_plan_alert", return_value=1
+        ), patch.object(
+            engine_portfolio, "_build_live_position_snapshots", return_value=snapshots
+        ):
+            payload = engine_portfolio.audit_trade_plan_alerts()
+
+        self.assertEqual(mocked_now.call_count, 1)
+        self.assertEqual(payload["triggered"], 0)
+        self.assertEqual(payload["symbols"], [])
+        self.assertEqual(engine_portfolio.get_open_trade_plan_alerts(alert_type="holding_expiry"), [])
+
+    def test_audit_trade_plan_alerts_shares_timestamp_with_time_based_thesis_invalid(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("AAPL", 100.0, 2.0, 200.0, 0),
+                    ("AMD", 100.0, 4.0, 400.0, 0),
+                ],
+            )
+            conn.commit()
+
+        thesis_payload = {"invalidation_deadline": "2024-01-11T00:00:00Z", "confirmed": False}
+        with patch.object(engine_portfolio, "_utc_now_iso", return_value="2024-01-01T00:00:00Z"):
+            for symbol in ("AAPL", "AMD"):
+                engine_portfolio.upsert_trade_plan(
+                    symbol=symbol,
+                    source="manual_backfill",
+                    entry_price=100.0,
+                    stop_loss=92.0,
+                    take_profit_1=110.0,
+                    take_profit_2=None,
+                    max_holding_days=30,
+                    thesis_type="event_driven",
+                    thesis_text="catalyst must land before deadline",
+                    thesis_payload=thesis_payload,
+                    status="active",
+                )
+
+        snapshots = [
+            {
+                "symbol": "AAPL",
+                "market": "US",
+                "is_cash": False,
+                "is_us_stock": True,
+                "shares": 2.0,
+                "cost": 100.0,
+                "twd_cost": 200.0,
+                "current_price": 105.0,
+                "market_value_twd": 210.0,
+                "pnl_value_twd": 10.0,
+                "pnl_percent": 0.05,
+            },
+            {
+                "symbol": "AMD",
+                "market": "US",
+                "is_cash": False,
+                "is_us_stock": True,
+                "shares": 4.0,
+                "cost": 100.0,
+                "twd_cost": 400.0,
+                "current_price": 105.0,
+                "market_value_twd": 420.0,
+                "pnl_value_twd": 20.0,
+                "pnl_percent": 0.05,
+            },
+        ]
+
+        with patch.object(
+            engine_portfolio,
+            "_utc_now_iso",
+            side_effect=["2024-01-10T23:59:59Z", "2024-01-11T00:00:01Z"],
+        ) as mocked_now, patch.object(
+            engine_portfolio, "resolve_trade_plan_alert", return_value=0
+        ), patch.object(
+            engine_portfolio, "upsert_trade_plan_alert", return_value=1
+        ) as mocked_upsert, patch.object(
+            engine_portfolio, "_build_live_position_snapshots", return_value=snapshots
+        ):
+            payload = engine_portfolio.audit_trade_plan_alerts()
+
+        self.assertEqual(mocked_now.call_count, 1)
+        mocked_upsert.assert_not_called()
+        self.assertEqual(payload["triggered"], 0)
+        self.assertEqual(payload["symbols"], [])
+
     def test_evaluate_trade_plan_alerts_fires_breakout_support_thesis_invalid(self):
         engine_portfolio.init_db()
         with database.locked_connection() as conn:
