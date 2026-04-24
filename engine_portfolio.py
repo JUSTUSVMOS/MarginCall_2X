@@ -75,6 +75,19 @@ TRADE_PLAN_COLUMNS = (
     "updated_at",
 )
 TRADE_PLAN_SELECT = ", ".join(TRADE_PLAN_COLUMNS)
+TRADE_PLAN_ALERT_COLUMNS = (
+    "id",
+    "plan_id",
+    "symbol",
+    "alert_type",
+    "severity",
+    "status",
+    "payload_json",
+    "first_seen_at",
+    "last_seen_at",
+    "resolved_at",
+)
+TRADE_PLAN_ALERT_SELECT = ", ".join(TRADE_PLAN_ALERT_COLUMNS)
 
 TRADE_GOVERNOR_LIMITS = {
     "normal": {"single_name_cap": 0.15, "sector_cap": 0.35},
@@ -712,6 +725,30 @@ def init_db():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_plan_alerts_symbol_status ON trade_plan_alerts(symbol, status)")
         except Exception as e:
             logger.debug(f"Trade plan alerts index skipped: {e}")
+        try:
+            _dedupe_open_trade_plan_alerts_locked(cursor)
+        except Exception as e:
+            logger.debug(f"Trade plan alert dedupe migration skipped: {e}")
+        try:
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_plan_alerts_open_plan_type
+                ON trade_plan_alerts(plan_id, alert_type)
+                WHERE status = 'open' AND plan_id IS NOT NULL
+                """
+            )
+        except Exception as e:
+            logger.debug(f"Trade plan alert plan dedupe index skipped: {e}")
+        try:
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_plan_alerts_open_symbol_type_null_plan
+                ON trade_plan_alerts(symbol, alert_type)
+                WHERE status = 'open' AND plan_id IS NULL
+                """
+            )
+        except Exception as e:
+            logger.debug(f"Trade plan alert symbol dedupe index skipped: {e}")
         conn.commit()
 
         # 檢查是否需要從 CSV 遷移
@@ -751,6 +788,42 @@ def _record_trade_plan_event(
         VALUES (?, ?, ?, ?)
         """,
         (plan_id, event_type, _serialize_json(payload), _utc_now_iso()),
+    )
+
+
+def _dedupe_open_trade_plan_alerts_locked(cursor) -> None:
+    cursor.execute(
+        """
+        DELETE FROM trade_plan_alerts
+        WHERE id IN (
+            SELECT older.id
+            FROM trade_plan_alerts AS older
+            JOIN trade_plan_alerts AS newer
+              ON older.id < newer.id
+             AND older.status = 'open'
+             AND newer.status = 'open'
+             AND older.plan_id IS NOT NULL
+             AND newer.plan_id = older.plan_id
+             AND newer.alert_type = older.alert_type
+        )
+        """
+    )
+    cursor.execute(
+        """
+        DELETE FROM trade_plan_alerts
+        WHERE id IN (
+            SELECT older.id
+            FROM trade_plan_alerts AS older
+            JOIN trade_plan_alerts AS newer
+              ON older.id < newer.id
+             AND older.status = 'open'
+             AND newer.status = 'open'
+             AND older.plan_id IS NULL
+             AND newer.plan_id IS NULL
+             AND newer.symbol = older.symbol
+             AND newer.alert_type = older.alert_type
+        )
+        """
     )
 
 
@@ -1039,16 +1112,28 @@ def _upsert_trade_plan_alert_locked(
     payload: Dict[str, Any] | None = None,
 ) -> int:
     normalized = normalize_ticker(symbol)
-    existing = cursor.execute(
-        """
-        SELECT id, plan_id
-        FROM trade_plan_alerts
-        WHERE symbol = ? AND alert_type = ? AND status = ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (normalized, alert_type, status),
-    ).fetchone()
+    if plan_id is None:
+        existing = cursor.execute(
+            """
+            SELECT id, plan_id
+            FROM trade_plan_alerts
+            WHERE symbol = ? AND plan_id IS NULL AND alert_type = ? AND status = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (normalized, alert_type, status),
+        ).fetchone()
+    else:
+        existing = cursor.execute(
+            """
+            SELECT id, plan_id
+            FROM trade_plan_alerts
+            WHERE plan_id = ? AND alert_type = ? AND status = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (plan_id, alert_type, status),
+        ).fetchone()
     now = _utc_now_iso()
     serialized_payload = _serialize_json(payload)
     if existing:
@@ -1081,6 +1166,225 @@ def _upsert_trade_plan_alert_locked(
         (plan_id, normalized, alert_type, severity, status, serialized_payload, now, now, None),
     )
     return int(cursor.lastrowid)
+
+
+def _deserialize_json(payload_json: str | None) -> Dict[str, Any] | None:
+    if not payload_json:
+        return None
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _hydrate_trade_plan_alert(row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+    payload_json = row["payload_json"]
+    return {
+        "id": int(row["id"]),
+        "plan_id": int(row["plan_id"]) if row["plan_id"] is not None else None,
+        "symbol": normalize_ticker(row["symbol"]),
+        "alert_type": row["alert_type"],
+        "severity": row["severity"],
+        "status": row["status"],
+        "payload_json": payload_json,
+        "payload": _deserialize_json(payload_json),
+        "first_seen_at": row["first_seen_at"],
+        "last_seen_at": row["last_seen_at"],
+        "resolved_at": row["resolved_at"],
+    }
+
+
+def upsert_trade_plan_alert(
+    *,
+    symbol: str,
+    alert_type: str,
+    severity: str,
+    status: str = "open",
+    plan_id: int | None = None,
+    payload: Dict[str, Any] | None = None,
+) -> int:
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            alert_id = _upsert_trade_plan_alert_locked(
+                cursor,
+                symbol=symbol,
+                alert_type=alert_type,
+                severity=severity,
+                status=status,
+                plan_id=plan_id,
+                payload=payload,
+            )
+            conn.commit()
+            return alert_id
+        finally:
+            conn.close()
+
+
+def resolve_trade_plan_alert(*, symbol: str, alert_type: str, plan_id: int | None = None) -> int:
+    normalized = normalize_ticker(symbol)
+    now = _utc_now_iso()
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            if plan_id is None:
+                cursor.execute(
+                    """
+                    UPDATE trade_plan_alerts
+                    SET status = 'resolved', resolved_at = ?
+                    WHERE symbol = ? AND alert_type = ? AND status = 'open'
+                    """,
+                    (now, normalized, alert_type),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE trade_plan_alerts
+                    SET status = 'resolved', resolved_at = ?
+                    WHERE symbol = ? AND alert_type = ? AND plan_id = ? AND status = 'open'
+                    """,
+                    (now, normalized, alert_type, plan_id),
+                )
+            resolved_count = int(cursor.rowcount)
+            conn.commit()
+            return resolved_count
+        finally:
+            conn.close()
+
+
+def get_open_trade_plan_alerts(
+    *,
+    symbol: str | None = None,
+    alert_type: str | None = None,
+) -> List[Dict[str, Any]]:
+    query = [f"SELECT {TRADE_PLAN_ALERT_SELECT} FROM trade_plan_alerts WHERE status = 'open'"]
+    params: List[Any] = []
+    if symbol is not None:
+        query.append("AND symbol = ?")
+        params.append(normalize_ticker(symbol))
+    if alert_type is not None:
+        query.append("AND alert_type = ?")
+        params.append(alert_type)
+    query.append("ORDER BY symbol, alert_type, id DESC")
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(" ".join(query), tuple(params)).fetchall()
+            return [_hydrate_trade_plan_alert(row) for row in rows]
+        finally:
+            conn.close()
+
+
+def get_current_portfolio_symbols() -> List[str]:
+    symbols = {
+        normalize_ticker(symbol)
+        for symbol, _cost, shares, _twd_cost in _load_portfolio_rows()
+        if float(shares or 0) > 0 and not normalize_ticker(symbol).startswith("CASH")
+    }
+    return sorted(symbols)
+
+
+def _build_trade_plan_snapshot_lookup(snapshots: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for snapshot in snapshots:
+        symbol = snapshot.get("symbol")
+        if not symbol:
+            continue
+        lookup[normalize_ticker(str(symbol))] = snapshot
+    return lookup
+
+
+def _evaluate_trade_plan_alert_specs(
+    plan: Dict[str, Any],
+    snapshot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    alerts: List[Dict[str, Any]] = []
+    current_price = snapshot.get("current_price")
+    stop_loss = plan.get("stop_loss")
+    if isinstance(current_price, (int, float)) and stop_loss is not None and float(current_price) <= float(stop_loss):
+        alerts.append(
+            {
+                "alert_type": "stop_hit",
+                "severity": "critical",
+                "payload": {
+                    "symbol": normalize_ticker(plan["symbol"]),
+                    "current_price": round(float(current_price), 4),
+                    "stop_loss": float(stop_loss),
+                    "thesis_type": plan.get("thesis_type"),
+                },
+            }
+        )
+    return alerts
+
+
+def audit_trade_plan_alerts() -> Dict[str, Any]:
+    active_plans = list_active_trade_plans()
+    result: Dict[str, Any] = {
+        "audited": len(active_plans),
+        "triggered": 0,
+        "degraded": 0,
+        "symbols": [],
+    }
+    if not active_plans:
+        return result
+
+    try:
+        snapshot_lookup = _build_trade_plan_snapshot_lookup(
+            _build_live_position_snapshots(_load_portfolio_rows())
+        )
+    except Exception as exc:
+        for plan in active_plans:
+            upsert_trade_plan_alert(
+                symbol=plan["symbol"],
+                alert_type="monitor_degraded",
+                severity="warning",
+                plan_id=int(plan["id"]),
+                payload={"error": str(exc), "reason": "live_snapshot_build_failed"},
+            )
+        result["degraded"] = len(active_plans)
+        result["symbols"] = [normalize_ticker(plan["symbol"]) for plan in active_plans]
+        return result
+
+    for plan in active_plans:
+        symbol = normalize_ticker(plan["symbol"])
+        resolve_trade_plan_alert(symbol=symbol, alert_type="monitor_degraded", plan_id=int(plan["id"]))
+        snapshot = snapshot_lookup.get(symbol)
+        if snapshot is None:
+            continue
+
+        alert_specs = _evaluate_trade_plan_alert_specs(plan, snapshot)
+        for spec in alert_specs:
+            upsert_trade_plan_alert(
+                symbol=symbol,
+                alert_type=spec["alert_type"],
+                severity=spec["severity"],
+                plan_id=int(plan["id"]),
+                payload=spec["payload"],
+            )
+        if alert_specs:
+            result["symbols"].append(symbol)
+            result["triggered"] += len(alert_specs)
+
+    return result
+
+
+def build_trade_plan_status_summary() -> Dict[str, Any]:
+    active_plans = list_active_trade_plans()
+    open_alerts = get_open_trade_plan_alerts()
+    return {
+        "generated_at": _utc_now_iso(),
+        "portfolio_symbols": get_current_portfolio_symbols(),
+        "active_plan_count": len(active_plans),
+        "active_plans": active_plans,
+        "open_alert_count": len(open_alerts),
+        "open_alerts": open_alerts,
+    }
 
 
 def sync_trade_plan_backfills() -> Dict[str, Any]:
