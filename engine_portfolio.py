@@ -1940,6 +1940,7 @@ def execute_position_update(
     candidate_trade_plan: Dict[str, Any] | None = None
     trade_plan_validation: Dict[str, Any] | None = None
     persisted_trade_plan: Dict[str, Any] | None = None
+    skipped_trade_plan_warning = ""
 
     if action == "buy" and not is_cash:
         candidate_trade_plan = _build_trade_plan_payload(
@@ -1973,6 +1974,8 @@ def execute_position_update(
 
         if trade_plan and trade_plan_validation and trade_plan_validation["complete"]:
             persisted_trade_plan = candidate_trade_plan
+        elif trade_plan and trade_plan_validation and not trade_plan_validation["complete"] and not enforce_pretrade_gate:
+            skipped_trade_plan_warning = "⚠️ 交易計畫未儲存（欄位不完整）"
 
     result_message = ""
     should_refresh_memory = False
@@ -2024,6 +2027,8 @@ def execute_position_update(
                     result_message = f"✅ 買進成功！從 {settle_currency} 扣款 {settle_amount:.2f}"
                     if gate_message:
                         result_message = f"{gate_message} {result_message}".strip()
+                    if skipped_trade_plan_warning:
+                        result_message = f"{result_message} {skipped_trade_plan_warning}".strip()
                     should_refresh_memory = True
             
             elif action == 'sell':

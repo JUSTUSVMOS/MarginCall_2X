@@ -346,17 +346,7 @@ class DirectHelperRuntimeTests(unittest.TestCase):
             )
             conn.commit()
 
-        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0), patch.object(
-            engine_portfolio,
-            "_apply_pretrade_risk_gate",
-            return_value={
-                "allowed": True,
-                "approved_shares": 2.0,
-                "approved_twd_total": 6400.0,
-                "message": "",
-                "note": None,
-            },
-        ):
+        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0):
             result = engine_portfolio.execute_position_update("AAPL", 100.0, 2.0, action="buy")
 
         self.assertIn("交易計畫", result)
@@ -442,3 +432,42 @@ class DirectHelperRuntimeTests(unittest.TestCase):
             )
 
         self.assertIn("✅ 買進成功", result)
+        self.assertNotIn("交易計畫未儲存", result)
+
+    def test_execute_position_update_warns_when_gate_disabled_buy_drops_incomplete_trade_plan(self):
+        engine_portfolio.init_db()
+        with database.locked_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked) VALUES (?, ?, ?, ?, ?)",
+                ("CASH_USD", 1.0, 1000.0, 32000.0, 0),
+            )
+            conn.commit()
+
+        trade_plan = {
+            "stop_loss": 92.0,
+            "take_profit_1": 115.0,
+        }
+
+        with patch.object(engine_portfolio, "fetch_exchange_rate", return_value=32.0), patch.object(
+            engine_portfolio,
+            "_apply_pretrade_risk_gate",
+            return_value={
+                "allowed": True,
+                "approved_shares": 2.0,
+                "approved_twd_total": 6400.0,
+                "message": "",
+                "note": None,
+            },
+        ):
+            result = engine_portfolio.execute_position_update(
+                "AAPL",
+                100.0,
+                2.0,
+                action="buy",
+                trade_plan=trade_plan,
+                enforce_pretrade_gate=False,
+            )
+
+        self.assertIn("✅ 買進成功", result)
+        self.assertIn("交易計畫未儲存", result)
+        self.assertIsNone(engine_portfolio.get_active_trade_plan("AAPL"))
