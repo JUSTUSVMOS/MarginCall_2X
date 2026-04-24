@@ -1,5 +1,21 @@
+import inspect
+import sys
+import types
 from pathlib import Path
 import unittest
+
+
+if "fubon_neo.sdk" not in sys.modules:
+    fubon_neo = types.ModuleType("fubon_neo")
+    sdk_module = types.ModuleType("fubon_neo.sdk")
+    sdk_module.FubonSDK = type("FubonSDK", (), {})
+    rest_base_module = types.ModuleType("fubon_neo.fugle_marketdata.rest.base_rest")
+    rest_base_module.FugleAPIError = type("FugleAPIError", (Exception,), {})
+    sys.modules["fubon_neo"] = fubon_neo
+    sys.modules["fubon_neo.sdk"] = sdk_module
+    sys.modules["fubon_neo.fugle_marketdata"] = types.ModuleType("fubon_neo.fugle_marketdata")
+    sys.modules["fubon_neo.fugle_marketdata.rest"] = types.ModuleType("fubon_neo.fugle_marketdata.rest")
+    sys.modules["fubon_neo.fugle_marketdata.rest.base_rest"] = rest_base_module
 
 import engine_portfolio
 from src import database
@@ -41,6 +57,17 @@ class TradePlanPersistenceTests(unittest.TestCase):
             }
 
         self.assertEqual(tables, {"trade_plans", "trade_plan_events", "trade_plan_alerts"})
+
+    def test_upsert_trade_plan_reuses_shared_select_fragment_for_merge_fetch(self):
+        shared_select_names = [
+            name for name in ("TRADE_PLAN_MERGE_SELECT", "TRADE_PLAN_SELECT") if hasattr(engine_portfolio, name)
+        ]
+
+        self.assertTrue(shared_select_names)
+        self.assertTrue(
+            any(name in inspect.getsource(engine_portfolio.upsert_trade_plan) for name in shared_select_names),
+            "upsert_trade_plan should reuse a shared trade-plan select fragment when fetching the existing row",
+        )
 
     def test_upsert_trade_plan_creates_active_plan_and_event(self):
         engine_portfolio.init_db()

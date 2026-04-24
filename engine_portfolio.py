@@ -828,9 +828,8 @@ def upsert_trade_plan(
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             existing = cursor.execute(
-                """
-                SELECT id, status, source, opened_trade_log_id, entry_price, stop_loss, take_profit_1,
-                       take_profit_2, max_holding_days, thesis_type, thesis_text, thesis_payload_json
+                f"""
+                SELECT {TRADE_PLAN_SELECT}
                 FROM trade_plans
                 WHERE symbol = ? AND status IN ('draft', 'active')
                 ORDER BY id DESC
