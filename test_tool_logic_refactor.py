@@ -328,6 +328,18 @@ class DirectHelperRuntimeTests(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    def test_format_trade_plan_validation_error_does_not_mark_missing_fields_as_data_unavailable(self):
+        result = engine_portfolio._format_trade_plan_validation_error(
+            {
+                "complete": False,
+                "missing_fields": ["stop_loss", "take_profit_1"],
+            }
+        )
+
+        self.assertIn("停損", result)
+        self.assertIn("第一止盈", result)
+        self.assertNotIn("[資料不可用]", result)
+
     def test_execute_position_update_rejects_buy_without_complete_trade_plan(self):
         engine_portfolio.init_db()
         with database.locked_connection() as conn:

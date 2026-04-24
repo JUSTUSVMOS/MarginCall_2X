@@ -946,7 +946,6 @@ def upsert_trade_plan(
     On updates, ``None`` means "keep the current stored value" for optional fields,
     including ``thesis_payload``; this API has no sentinel-based clear behavior.
     """
-    select_fragment = TRADE_PLAN_SELECT
     with db_lock:
         conn = get_connection()
         try:
@@ -966,7 +965,7 @@ def upsert_trade_plan(
                 thesis_payload=thesis_payload,
                 status=status,
                 opened_trade_log_id=opened_trade_log_id,
-                select_fragment=select_fragment,
+                select_fragment=TRADE_PLAN_SELECT,
             )
             conn.commit()
             return plan_id
@@ -1003,6 +1002,7 @@ def _build_trade_plan_payload(
     status: str,
     opened_trade_log_id: int | None = None,
 ) -> Dict[str, Any]:
+    """Normalize runtime trade-plan input into the persisted payload shape."""
     trade_plan = trade_plan or {}
     thesis_payload = trade_plan.get("thesis_payload")
     return {
@@ -1027,7 +1027,7 @@ def _format_trade_plan_validation_error(validation: Dict[str, Any]) -> str | Non
     missing_labels = ", ".join(
         TRADE_PLAN_FIELD_LABELS.get(field, field) for field in validation["missing_fields"]
     )
-    return format_tool_error(f"❌ 買進前需提供完整交易計畫，缺少：{missing_labels}。", data_unavailable=True)
+    return format_tool_error(f"❌ 買進前需提供完整交易計畫，缺少：{missing_labels}。")
 
 
 def _upsert_trade_plan_alert_locked(
@@ -1086,7 +1086,14 @@ def _upsert_trade_plan_alert_locked(
 
 
 def sync_trade_plan_backfills() -> Dict[str, Any]:
-    """Backfill draft trade plans for live holdings missing tracked plans."""
+    """Backfill draft trade plans for live holdings missing tracked plans.
+
+    This helper is best-effort and idempotent, not fully atomic: it snapshots
+    current portfolio rows before re-entering ``db_lock`` to upsert missing
+    plans and alerts. Callers should treat the result as a best-effort backfill
+    against a potentially changing portfolio view rather than a single locked
+    transaction over both reads and writes.
+    """
     created_symbols: List[str] = []
     failed_symbols: List[Dict[str, str]] = []
     rows = _load_portfolio_rows()

@@ -45,6 +45,14 @@ class TradePlanFlowTests(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    def test_sync_trade_plan_backfills_docstring_describes_best_effort_non_atomic_behavior(self):
+        doc = engine_portfolio.sync_trade_plan_backfills.__doc__
+
+        self.assertIsNotNone(doc)
+        self.assertIn("best-effort", doc)
+        self.assertIn("idempotent", doc)
+        self.assertIn("not fully atomic", doc)
+
     def test_sync_trade_plan_backfills_creates_missing_plan_alert_for_live_holding(self):
         engine_portfolio.init_db()
         with database.locked_connection() as conn:
