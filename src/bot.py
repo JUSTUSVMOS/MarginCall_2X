@@ -395,6 +395,8 @@ def handle_all_text(message):
     if not _is_authorized(message):
         return
 
+    if _maybe_handle_trade_plan_reply(message):
+        return
     if _maybe_handle_trade_followup_reply(message):
         return
 
@@ -444,3 +446,34 @@ def run_polling():
         except Exception as exc:
             logger.error(f"🚨 Polling 崩潰: {exc}")
             time.sleep(5)
+
+def send_morning_briefing():
+    bot_instance = _require_bot()
+    import engine_briefing as briefing
+    if AUTHORIZED_USER_ID is None:
+        logger.error("AUTHORIZED_USER_ID 尚未初始化")
+        return
+    bot_instance.send_message(AUTHORIZED_USER_ID, briefing.build_morning_briefing())
+
+def send_pending_trade_plan_prompts():
+    bot_instance = _require_bot()
+    pending = portfolio.claim_pending_trade_plan_prompts()
+    sent = 0
+    for item in pending:
+        if AUTHORIZED_USER_ID is None:
+            logger.error("AUTHORIZED_USER_ID 尚未初始化")
+            return 0
+        bot_instance.send_message(AUTHORIZED_USER_ID, portfolio.format_trade_plan_prompt(item))
+        portfolio.mark_trade_plan_prompted(int(item["id"]))
+        sent += 1
+    return sent
+
+def _maybe_handle_trade_plan_reply(message) -> bool:
+    plan = portfolio.get_latest_prompted_trade_plan()
+    if not plan:
+        return False
+    resolution = portfolio.resolve_trade_plan_reply(int(plan["id"]), getattr(message, "text", ""))
+    if resolution is None:
+        return False
+    _require_bot().reply_to(message, portfolio.format_trade_plan_confirmation(plan, resolution))
+    return True

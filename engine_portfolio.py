@@ -4676,3 +4676,112 @@ def calculate_pnl(symbol: str, current_price: float, shares: float, historical_t
     Converts foreign values to TWD and accounts for estimated exchange fees.
     """
     return calculate_position_pnl(symbol, current_price, shares, historical_twd_cost, is_us_stock)
+
+_TRADE_PLAN_REPLY_PATTERNS = {
+    "thesis_type": re.compile(r"^(?:類型|type)\s*[:：]\s*(?P<value>\w+)$", re.IGNORECASE | re.MULTILINE),
+    "thesis_text": re.compile(r"^(?:理由|原因)\s*[:：]\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE),
+    "stop_loss": re.compile(r"^(?:停損|止損|stop)\s*[:：]\s*\$?(?P<value>\d+(?:\.\d+)?)$", re.IGNORECASE | re.MULTILINE),
+    "take_profit_1": re.compile(r"^(?:目標1|tp1)\s*[:：]\s*\$?(?P<value>\d+(?:\.\d+)?)$", re.IGNORECASE | re.MULTILINE),
+    "take_profit_2": re.compile(r"^(?:目標2|tp2)\s*[:：]\s*\$?(?P<value>\d+(?:\.\d+)?)$", re.IGNORECASE | re.MULTILINE),
+    "max_holding_days": re.compile(r"^(?:期限|持有天數|days)\s*[:：]\s*(?P<value>\d+)$", re.IGNORECASE | re.MULTILINE),
+}
+
+def parse_trade_plan_reply(reply_text: str) -> Dict[str, Any] | None:
+    payload = (reply_text or "").strip()
+    if not payload:
+        return None
+    parsed: Dict[str, Any] = {"thesis_payload": {}}
+    for field, pattern in _TRADE_PLAN_REPLY_PATTERNS.items():
+        match = pattern.search(payload)
+        if not match:
+            continue
+        value = match.group("value").strip()
+        if field in {"stop_loss", "take_profit_1", "take_profit_2"}:
+            parsed[field] = float(value)
+        elif field == "max_holding_days":
+            parsed[field] = int(value)
+        else:
+            parsed[field] = value
+    return parsed if validate_trade_plan_payload(parsed).get("complete") else None
+
+def resolve_trade_plan_reply(plan_id: int, reply_text: str) -> Dict[str, Any] | None:
+    parsed = parse_trade_plan_reply(reply_text)
+    if parsed is None:
+        return None
+    plan = get_trade_plan(plan_id)
+    upsert_trade_plan(
+        symbol=plan["symbol"],
+        source="plan_revision",
+        status="active",
+        entry_price=plan["entry_price"],
+        stop_loss=parsed["stop_loss"],
+        take_profit_1=parsed["take_profit_1"],
+        take_profit_2=parsed.get("take_profit_2"),
+        max_holding_days=parsed["max_holding_days"],
+        thesis_type=parsed["thesis_type"],
+        thesis_text=parsed["thesis_text"],
+        thesis_payload=parsed.get("thesis_payload", {}),
+    )
+    resolve_trade_plan_alert(symbol=plan["symbol"], plan_id=plan_id, alert_type="missing_plan")
+    return parsed
+
+def claim_pending_trade_plan_prompts() -> List[Dict[str, Any]]:
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT tp.*
+                FROM trade_plans tp
+                JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
+                WHERE tp.status = 'draft' AND ta.alert_type = 'missing_plan' AND ta.status = 'open'
+                ORDER BY tp.updated_at, tp.id
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+def mark_trade_plan_prompted(plan_id: int) -> None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _record_trade_plan_event(cursor, plan_id=plan_id, event_type="prompt_sent")
+            conn.commit()
+        finally:
+            conn.close()
+
+def get_latest_prompted_trade_plan() -> Dict[str, Any] | None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT tp.*
+                FROM trade_plans tp
+                JOIN trade_plan_events te ON te.plan_id = tp.id
+                WHERE tp.status = 'draft' AND te.event_type = 'prompt_sent'
+                ORDER BY te.id DESC LIMIT 1
+                """
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+def format_trade_plan_prompt(plan: Dict[str, Any]) -> str:
+    return (
+        f"⚠️ {plan['symbol']} 目前沒有完整交易計畫。\n"
+        "請用以下格式回覆：\n"
+        "類型: sector_rotation\n"
+        "理由: semi rotation 回來\n"
+        "停損: 80\n"
+        "目標1: 95\n"
+        "目標2: 105\n"
+        "期限: 60"
+    )
+
+def format_trade_plan_confirmation(plan: Dict[str, Any], resolution: Dict[str, Any]) -> str:
+    return f"✅ 已記錄 {plan['symbol']} 的交易計畫"

@@ -1,3 +1,5 @@
+from typing import List, Dict, Any
+import datetime
 import os
 import re
 import datetime
@@ -2480,3 +2482,28 @@ if __name__ == "__main__":
     print(get_market_movers())
     print("\n")
     print(get_market_calendar())
+
+def get_market_calendar_events(symbols: List[str] | None = None, days: int = 1) -> List[Dict[str, Any]]:
+    watch = _parse_symbol_input(symbols) if symbols else ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "GOOG", "META"]
+    events: List[Dict[str, Any]] = []
+    now = datetime.datetime.now()
+    end_date = now + datetime.timedelta(days=days)
+    for symbol in watch:
+        try:
+            dates = get_ticker(symbol).earnings_dates
+        except Exception as exc:
+            logger.debug(f"Structured market calendar fetch failed for {symbol}: {exc}")
+            continue
+        if dates is None or dates.empty:
+            continue
+        dates.index = dates.index.tz_localize(None)
+        for event_dt, _ in dates[(dates.index >= now) & (dates.index <= end_date)].iterrows():
+            events.append(
+                {
+                    "symbol": symbol,
+                    "event_type": "earnings",
+                    "starts_at": event_dt.isoformat(),
+                    "label": f"{symbol} earnings",
+                }
+            )
+    return events

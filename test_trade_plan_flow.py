@@ -132,3 +132,94 @@ class TradePlanFlowTests(unittest.TestCase):
             ]
 
         self.assertEqual(symbols, ["MRVL"])
+
+    def test_send_pending_trade_plan_prompts_sends_missing_plan_message(self):
+        import engine_portfolio
+        engine_portfolio.init_db()
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_backfill",
+            entry_price=85.2,
+            stop_loss=None,
+            take_profit_1=None,
+            take_profit_2=None,
+            max_holding_days=None,
+            thesis_type=None,
+            thesis_text=None,
+            thesis_payload={},
+            status="draft",
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="MRVL",
+            plan_id=plan_id,
+            alert_type="missing_plan",
+            severity="high",
+            payload={"reason": "holding_without_active_plan"},
+        )
+
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        import src.bot as bot_module
+
+        fake_bot = SimpleNamespace(send_message=Mock())
+        bot_module.bot = fake_bot
+        bot_module.AUTHORIZED_USER_ID = 123
+
+        sent = bot_module.send_pending_trade_plan_prompts()
+
+        self.assertEqual(sent, 1)
+        fake_bot.send_message.assert_called_once()
+        self.assertIn("MRVL", fake_bot.send_message.call_args.args[1])
+        self.assertIn("類型", fake_bot.send_message.call_args.args[1])
+        self.assertIn("停損", fake_bot.send_message.call_args.args[1])
+
+    def test_handle_all_text_records_structured_trade_plan_reply(self):
+        import engine_portfolio
+        engine_portfolio.init_db()
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="MRVL",
+            source="manual_backfill",
+            entry_price=85.2,
+            stop_loss=None,
+            take_profit_1=None,
+            take_profit_2=None,
+            max_holding_days=None,
+            thesis_type=None,
+            thesis_text=None,
+            thesis_payload={},
+            status="draft",
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="MRVL",
+            plan_id=plan_id,
+            alert_type="missing_plan",
+            severity="high",
+            payload={"reason": "holding_without_active_plan"},
+        )
+        
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        import src.bot as bot_module
+        from src import database
+
+        engine_portfolio.mark_trade_plan_prompted(plan_id)
+        message = SimpleNamespace(text="類型: sector_rotation\n理由: semi rotation 回來\n停損: 80\n目標1: 95\n目標2: 105\n期限: 60", chat=SimpleNamespace(id=1), from_user=SimpleNamespace(id=123))
+
+        fake_bot = SimpleNamespace(reply_to=Mock(), send_message=Mock())
+        bot_module.bot = fake_bot
+        bot_module.AUTHORIZED_USER_ID = 123
+
+        bot_module.handle_all_text(message)
+
+        with database.locked_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT status, stop_loss, take_profit_1, take_profit_2, max_holding_days, thesis_type, thesis_text
+                FROM trade_plans WHERE id = ?
+                """,
+                (plan_id,),
+            ).fetchone()
+        self.assertEqual(row, ("active", 80.0, 95.0, 105.0, 60, "sector_rotation", "semi rotation 回來"))
+
+if __name__ == '__main__':
+    unittest.main()

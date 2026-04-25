@@ -156,3 +156,7 @@ def start_scheduler():
 
     _scheduler = scheduler
     return _scheduler
+
+def morning_briefing_push():
+    from src import bot as bot_runtime
+    bot_runtime.send_morning_briefing()
