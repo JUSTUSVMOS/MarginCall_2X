@@ -36,7 +36,7 @@ TOOL_SUPPORTED_MODELS = {
 HEAVY_MODELS = [
     "gemma-4-31b-it",
     "gemini-3.1-flash-lite-preview",
-    "minimax/minimax-m2.5:free",
+    # "minimax/minimax-m2.5:free",
     "openai/gpt-oss-120b:free",
     "nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/elephant-alpha",

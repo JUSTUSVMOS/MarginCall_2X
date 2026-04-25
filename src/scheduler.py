@@ -49,6 +49,25 @@ def daily_portfolio_review():
         return None
 
 
+def fubon_portfolio_sync(source: str = "scheduler"):
+    try:
+        import engine_portfolio as portfolio
+
+        data = portfolio.sync_fubon_portfolio_state(source=source, sync_memory=True)
+        if int(data.get("followup_count") or 0) > 0:
+            try:
+                from src import bot as bot_runtime
+
+                bot_runtime.send_pending_trade_followups()
+            except Exception as exc:
+                logger.error(f"Trade follow-up prompt delivery failed: {exc}")
+        logger.info(f"🏦 [FubonSync] {data['message']}")
+        return data
+    except Exception as exc:
+        logger.error(f"Fubon portfolio sync failed: {exc}")
+        return None
+
+
 def macro_brain_heartbeat(force=False):
     result = memory.sync_market_brain(force=force, max_age_minutes=180)
     logger.info(f"🧠 [MacroHeartbeat] {result['message']}")
@@ -112,8 +131,32 @@ def start_scheduler():
         id="daily-db-backup",
         replace_existing=True,
     )
+    scheduler.add_job(
+        fubon_portfolio_sync,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-13",
+        minute="0,30",
+        kwargs={"source": "scheduler"},
+        id="fubon-portfolio-sync-intraday",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        fubon_portfolio_sync,
+        "cron",
+        day_of_week="mon-fri",
+        hour=13,
+        minute=35,
+        kwargs={"source": "close_sync"},
+        id="fubon-portfolio-sync-close",
+        replace_existing=True,
+    )
     scheduler.add_job(daily_nlp_scout, "interval", hours=4, id="daily-nlp-scout", replace_existing=True)
     scheduler.start()
 
     _scheduler = scheduler
     return _scheduler
+
+def morning_briefing_push():
+    from src import bot as bot_runtime
+    bot_runtime.send_morning_briefing()

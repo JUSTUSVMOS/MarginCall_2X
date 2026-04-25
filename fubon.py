@@ -16,6 +16,74 @@ fubon_ready = False
 
 from datetime import datetime, timedelta
 
+
+def _get_fubon_login_account():
+    global fubon_sdk, fubon_ready
+    if not fubon_ready:
+        return None
+
+    my_id = os.getenv("FUBON_ID")
+    api_key = os.getenv("FUBON_API_KEY")
+    cert_pwd = os.getenv("FUBON_CERT_PWD")
+    cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R124949189.pfx")
+
+    login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
+    if not login_res.is_success or not login_res.data:
+        return None
+    return login_res.data[0]
+
+
+def _build_inventory_map(account) -> dict:
+    inv_res = fubon_sdk.accounting.inventories(account)
+    if not inv_res.is_success:
+        raise RuntimeError(getattr(inv_res, "message", "inventories unavailable"))
+
+    inventory_map = {}
+    for item in inv_res.data:
+        reg_qty = getattr(item, 'today_qty', 0)
+        odd_qty = getattr(getattr(item, 'odd', None), 'today_qty', 0)
+        total_qty = reg_qty + odd_qty
+        if total_qty > 0:
+            inventory_map[item.stock_no] = {'shares': total_qty, 'cost': 0.0}
+
+    unreal_res = fubon_sdk.accounting.unrealized_gains_and_loses(account)
+    if not unreal_res.is_success:
+        raise RuntimeError(getattr(unreal_res, "message", "unrealized unavailable"))
+
+    for item in unreal_res.data:
+        symbol = item.stock_no
+        qty = getattr(item, 'today_qty', 0)
+        cost = getattr(item, 'cost_price', getattr(item, 'buy_price', getattr(item, 'price_avg', 0.0)))
+        if symbol in inventory_map:
+            inventory_map[symbol]['cost'] = cost
+        elif qty > 0:
+            inventory_map[symbol] = {'shares': qty, 'cost': cost}
+
+    return inventory_map
+
+
+def get_fubon_account_snapshot() -> dict:
+    """Single-login account snapshot for portfolio sync paths."""
+    global fubon_ready
+    if not fubon_ready:
+        return {"success": False, "inventories": {}, "cash_twd": None, "error": "fubon not ready"}
+
+    try:
+        account = _get_fubon_login_account()
+        if not account:
+            return {"success": False, "inventories": {}, "cash_twd": None, "error": "login failed"}
+
+        inventory_map = _build_inventory_map(account)
+        cash_twd = None
+        cash_res = fubon_sdk.accounting.bank_remain(account)
+        if cash_res.is_success:
+            cash_twd = int(cash_res.data.available_balance)
+
+        return {"success": True, "inventories": inventory_map, "cash_twd": cash_twd, "error": None}
+    except Exception as e:
+        logger.warning(f"Fubon data fetch error: {e}")
+        return {"success": False, "inventories": {}, "cash_twd": None, "error": str(e)}
+
 def get_fubon_technical(symbol: str) -> str:
     if not fubon_ready: return "❌ 富邦 SDK 未啟動"
     try:
@@ -208,75 +276,12 @@ def init_fubon():
         fubon_sdk = None
 def get_fubon_inventories():
     """【深度掃描】獲取富邦實體帳戶庫存與成本字典 {symbol: {'shares': qty, 'cost': price}}"""
-    global fubon_sdk, fubon_ready
-    if not fubon_ready: return {}
-    try:
-        my_id = os.getenv("FUBON_ID")
-        api_key = os.getenv("FUBON_API_KEY")
-        cert_pwd = os.getenv("FUBON_CERT_PWD")
-        cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R124949189.pfx")
-
-        login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
-        if not login_res.is_success or not login_res.data:
-            return {}
-
-        acc = login_res.data[0]
-        inventory_map = {}
-
-        # 1. 從 inventories 抓取基礎庫存
-        inv_res = fubon_sdk.accounting.inventories(acc)
-        if inv_res.is_success:
-            for item in inv_res.data:
-                # 處理整股與零股 (odd lots)
-                reg_qty = getattr(item, 'today_qty', 0)
-                odd_qty = 0
-                if hasattr(item, 'odd'):
-                    odd_qty = getattr(item.odd, 'today_qty', 0)
-                
-                total_qty = reg_qty + odd_qty
-                if total_qty > 0:
-                    inventory_map[item.stock_no] = {'shares': total_qty, 'cost': 0.0}
-
-        # 2. 從未實現損益補完數據 (包含 FMP 抓不到的成本資訊)
-        unreal_res = fubon_sdk.accounting.unrealized_gains_and_loses(acc)
-        if unreal_res.is_success:
-            for item in unreal_res.data:
-                s = item.stock_no
-                qty = getattr(item, 'today_qty', 0)
-                # 嘗試多種可能的成本欄位名稱
-                cost = getattr(item, 'cost_price', getattr(item, 'buy_price', getattr(item, 'price_avg', 0.0)))
-
-                if s in inventory_map:
-                    inventory_map[s]['cost'] = cost
-                elif qty > 0:
-                    inventory_map[s] = {'shares': qty, 'cost': cost}
-
-        return inventory_map
-    except Exception as e:
-        logger.warning(f"Fubon data fetch error: {e}")
-        return {}
+    return get_fubon_account_snapshot().get("inventories", {})
 
 
 def get_fubon_bank_remain():
     """獲取富邦銀行可用餘額 (TWD)"""
-    global fubon_sdk, fubon_ready
-    if not fubon_ready: return None
-    try:
-        my_id = os.getenv("FUBON_ID")
-        api_key = os.getenv("FUBON_API_KEY")
-        cert_pwd = os.getenv("FUBON_CERT_PWD")
-        cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R124949189.pfx")
-        login_res = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)
-        if login_res.is_success and login_res.data:
-            acc = login_res.data[0]
-            res = fubon_sdk.accounting.bank_remain(acc)
-            if res.is_success:
-                # 確保回傳整數
-                return int(res.data.available_balance)
-        return None
-    except Exception as e:
-        logger.warning(f"Fubon data fetch error: {e}")
-        return None
+    return get_fubon_account_snapshot().get("cash_twd")
 
 def _normalize_tw_symbol(symbol: str) -> str:
     clean_sym = symbol.upper().replace('.TW', '').replace('.TWO', '')
