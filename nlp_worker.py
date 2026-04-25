@@ -558,8 +558,8 @@ def _merge_macro_candidates(primary_candidates, event_candidates, max_macro_item
         if c.get('must_keep'):
             must_mention.append(f"{c.get('event_type', 'normal')}: {c.get('headline', '')}")
 
-    # ensure must_mention length constraint
-    if len(must_mention) > max_must_keep:
+    # cap only when caller explicitly wants a limited must-mention list
+    if max_must_keep is not None and max_must_keep > 0 and len(must_mention) > max_must_keep:
         must_mention = must_mention[:max_must_keep]
 
     # ensure selected list respects max_macro_items
@@ -1064,27 +1064,82 @@ def run_turbo_trinity_scout(stock="NVDA"):
         logger.warning(f"   ⚠️ StockTwits 穿甲異常: {e}")
 
     # C. Finnhub 全網媒體聚合
+    macro_selection = {'selected_candidates': [], 'must_mention_events': []}
     try:
         end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+        primary_start_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+        event_start_date = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
         
         # 確保抓到 KEY
         fh_key = os.getenv("FINNHUB_API_KEY")
         if not fh_key:
             logger.warning("   ⚠️ 未設定 FINNHUB_API_KEY，跳過新聞抓取。")
         else:
-            fh_downloader = Finnhub_Date_Range(fh_key)
-            fh_downloader.download_date_range_stock(stock=stock, start_date=start_date, end_date=end_date)
-            
-            # 只有在 downloader 存在且有資料時才處理
-            if hasattr(fh_downloader, 'dataframe') and fh_downloader.dataframe is not None and not fh_downloader.dataframe.empty:
-                df_fh = fh_downloader.dataframe.head(15) 
-                for _, row in df_fh.iterrows():
-                    source = row.get('source', 'News')
-                    headline = row.get('headline', '')
-                    summary = row.get('summary', '')[:300]
-                    raw_texts.append(_format_macro_news_item(source, headline, summary, row.get('datetime')))
-                logger.info(f"   ✅ Macro(Finnhub): {len(df_fh)} 筆")
+            primary_candidates = []
+            event_candidates = []
+
+            try:
+                primary_downloader = Finnhub_Date_Range(fh_key)
+                primary_downloader.download_date_range_stock(stock=stock, start_date=primary_start_date, end_date=end_date)
+                if (
+                    hasattr(primary_downloader, 'dataframe')
+                    and primary_downloader.dataframe is not None
+                    and not primary_downloader.dataframe.empty
+                ):
+                    for _, row in primary_downloader.dataframe.head(15).iterrows():
+                        primary_candidates.append(
+                            _annotate_macro_candidate(
+                                {
+                                    'headline': row.get('headline', ''),
+                                    'summary': row.get('summary', '')[:300],
+                                    'source': row.get('source', 'News'),
+                                    'published_at': row.get('datetime'),
+                                    'lane': 'primary',
+                                }
+                            )
+                        )
+            except Exception as exc:
+                logger.warning(f"   ⚠️ Finnhub primary lane 異常: {exc}")
+
+            try:
+                event_downloader = Finnhub_Date_Range(fh_key)
+                event_downloader.download_date_range_stock(stock=stock, start_date=event_start_date, end_date=end_date)
+                if (
+                    hasattr(event_downloader, 'dataframe')
+                    and event_downloader.dataframe is not None
+                    and not event_downloader.dataframe.empty
+                ):
+                    for _, row in event_downloader.dataframe.iterrows():
+                        annotated = _annotate_macro_candidate(
+                            {
+                                'headline': row.get('headline', ''),
+                                'summary': row.get('summary', '')[:300],
+                                'source': row.get('source', 'News'),
+                                'published_at': row.get('datetime'),
+                                'lane': 'event',
+                            }
+                        )
+                        if annotated.get('event_class') == 'major_event':
+                            event_candidates.append(annotated)
+            except Exception as exc:
+                logger.warning(f"   ⚠️ Finnhub event lane 異常: {exc}")
+
+            macro_selection = _merge_macro_candidates(
+                primary_candidates,
+                event_candidates,
+                max_macro_items=15,
+                max_must_keep=None,
+            )
+            for candidate in macro_selection['selected_candidates']:
+                raw_texts.append(
+                    _format_macro_news_item(
+                        candidate.get('source', 'News'),
+                        candidate.get('headline', ''),
+                        candidate.get('summary', ''),
+                        candidate.get('published_at'),
+                    )
+                )
+            logger.info(f"   ✅ Macro(Finnhub): {len(macro_selection['selected_candidates'])} 筆")
     except Exception as e: 
         logger.warning(f"   ⚠️ Finnhub 流程異常: {e}")
 
@@ -1160,26 +1215,23 @@ def run_turbo_trinity_scout(stock="NVDA"):
     if nuclear_confirmed:
         nlp_alpha = -0.95
 
-    signal_pack = {
-        "sec_stance": sec_dir,
-        "sec_score": round(a_sec, 3),
-        "sec_detail": categorized_tags["SEC"][:3],
-        "macro_stance": mac_dir,
-        "macro_score": round(a_mac, 3),
-        "macro_detail": categorized_tags["Macro"][:3],
-        "retail_stance": ret_dir,
-        "retail_score": round(a_retail, 3),
-        "retail_detail": categorized_tags["Retail"][:3],
-        "divergence": divergence_alert or "無",
-        "nuclear_alert": nuclear_confirmed,
-        "source_counts": {
-            "sec": len(groups["SEC"]),
-            "macro": len(groups["Macro"]),
-            "retail": len(groups["Retail"]),
-        },
-        "effective_counts": effective_counts,
-        "composite_alpha": round(nlp_alpha, 4),
-    }
+    signal_pack = _build_signal_pack(
+        sec_dir=sec_dir,
+        a_sec=a_sec,
+        sec_detail=categorized_tags["SEC"],
+        mac_dir=mac_dir,
+        a_mac=a_mac,
+        macro_detail=categorized_tags["Macro"],
+        ret_dir=ret_dir,
+        a_retail=a_retail,
+        retail_detail=categorized_tags["Retail"],
+        divergence_alert=divergence_alert,
+        nuclear_confirmed=nuclear_confirmed,
+        groups=groups,
+        effective_counts=effective_counts,
+        nlp_alpha=nlp_alpha,
+        must_mention_events=macro_selection["must_mention_events"],
+    )
 
     semantic_summary = semantic_reduce(categorized_tags, stock, company_name, sector)
     report_header = f"📊 {stock} 戰報\n綜合 Alpha: {nlp_alpha:+.2f} | SEC:{sec_dir} Macro:{mac_dir} Retail:{ret_dir}\n"
