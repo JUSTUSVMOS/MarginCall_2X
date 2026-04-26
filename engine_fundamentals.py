@@ -327,6 +327,25 @@ class FundamentalEngine:
             return "數據獲取失敗 (台股不適用或無資料)"
 
     def get_full_fundamental_report(self) -> str:
+        # 1. ETF Look-through Check
+        if hasattr(self.ticker, 'get_holdings'):
+            holdings = self.ticker.get_holdings()
+            if holdings:
+                report = f"🏢 === {self.symbol} ETF Analysis Report ===\n"
+                report += f"【🔝 Top 10 Holdings】\n"
+                for h in holdings:
+                    report += f"- {h['Symbol']} ({h['Name']}): {h['Percent']*100:.2f}%\n"
+                
+                # Try to append basic profile info if available
+                try:
+                    profile = self.get_company_profile()
+                    if profile.get("公司簡介", "N/A") != "N/A":
+                        report += f"\n【📄 Profile】\n{profile['公司簡介']}\n"
+                except Exception:
+                    pass
+                    
+                return report
+
         profile = self.get_company_profile()
         val = self.get_valuation_metrics()
         stmts = self.get_financial_statements_summary()
