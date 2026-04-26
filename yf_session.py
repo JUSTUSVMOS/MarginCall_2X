@@ -101,11 +101,13 @@ class CachedTicker:
                 df = funds_data.top_holdings
                 holdings = []
                 for idx, row in df.iterrows():
+
                     holdings.append({
                         "Symbol": str(idx),
                         "Name": row.get('Name', 'N/A'),
                         "Percent": float(row.get('Holding Percent', 0.0))
                     })
+
                 
                 if holdings:
                     conn = sqlite3.connect(self.db_path)

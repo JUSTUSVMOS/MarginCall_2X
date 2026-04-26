@@ -13,7 +13,10 @@ class FundamentalEngine:
     嚴格執行：100% 涵蓋 OpenAlice 要求的模組，並補齊資產/現金流的動態趨勢(QoQ)與 EPS 未來預估/歷史驚喜。
     """
     def __init__(self, symbol: str):
-        self.symbol = symbol.upper().replace('.', '-')
+        sym = symbol.upper()
+        if '.' in sym and not any(sym.endswith(s) for s in ['.TW', '.TWO', '.HK', '.L']):
+            sym = sym.replace('.', '-')
+        self.symbol = sym
         is_tw = any(c.isdigit() for c in self.symbol) and len(self.symbol.replace(".TW", "").replace(".TWO", "")) <= 6
         if is_tw and not (self.symbol.endswith(".TW") or self.symbol.endswith(".TWO")):
             self.symbol += ".TW"
@@ -381,6 +384,7 @@ def get_deep_fundamentals(symbol: str) -> str:
     Retrieves a comprehensive fundamental analysis report for a stock.
     Includes company profile, valuation metrics, financial statements (5-quarter trend),
     earnings estimates, and insider trading activity.
+    Crucially, if the symbol is an ETF, it retrieves the Top 10 holdings / constituents / components.
     """
     return FundamentalEngine(symbol).get_full_fundamental_report()
 

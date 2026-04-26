@@ -119,7 +119,7 @@ def get_alive_models(models: Optional[List[str]] = None) -> List[str]:
     seen: Set[str] = set()
     with _lock:
         for model_name in candidates:
-        logger.info(f"🤖 [LLM_SELECT] Attempting quick_call with: {model_name}")
+            logger.info(f"🤖 [LLM_SELECT] Attempting quick_call with: {model_name}")
             if model_name in seen:
                 continue
             seen.add(model_name)
