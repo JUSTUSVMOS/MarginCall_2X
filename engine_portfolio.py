@@ -4785,3 +4785,52 @@ def format_trade_plan_prompt(plan: Dict[str, Any]) -> str:
 
 def format_trade_plan_confirmation(plan: Dict[str, Any], resolution: Dict[str, Any]) -> str:
     return f"✅ 已記錄 {plan['symbol']} 的交易計畫"
+
+@tool()
+def get_portfolio_exposure_report() -> str:
+    """
+    Calculates true exposure by looking through ETF holdings.
+    """
+    rows = _load_portfolio_rows()
+    snapshots = _build_live_position_snapshots(rows)
+    
+    exposure = {} # symbol -> market_value_twd
+    total_mv_twd = 0
+    
+    for s in snapshots:
+        symbol = s['symbol']
+        mv_twd = s['market_value_twd']
+        total_mv_twd += mv_twd
+        
+        ticker = get_ticker(symbol)
+        holdings = ticker.get_holdings() if hasattr(ticker, 'get_holdings') else []
+        
+        if holdings:
+            covered_weight = 0
+            for h in holdings:
+                h_sym = h['Symbol']
+                h_weight = h['Percent']
+                exposure[h_sym] = exposure.get(h_sym, 0) + (mv_twd * h_weight)
+                covered_weight += h_weight
+            
+            others_weight = max(0, 1.0 - covered_weight)
+            if others_weight > 0:
+                other_name = f"OTHERS({symbol})"
+                exposure[other_name] = exposure.get(other_name, 0) + (mv_twd * others_weight)
+        else:
+            exposure[symbol] = exposure.get(symbol, 0) + mv_twd
+    
+    if not exposure: return "Portfolio is empty."
+    
+    sorted_exp = sorted(exposure.items(), key=lambda x: x[1], reverse=True)
+    
+    report = "📊 === Portfolio True Exposure (Look-through) ===\n"
+    for sym, val in sorted_exp[:15]:
+        pct = (val / total_mv_twd) * 100 if total_mv_twd > 0 else 0
+        report += f"- {sym}: {val:,.0f} TWD ({pct:.2f}%)\n"
+    
+    risks = [f"{sym}({ (val/total_mv_twd)*100 :.1f}%)" for sym, val in sorted_exp if total_mv_twd > 0 and (val/total_mv_twd) > 0.15 and not sym.startswith("OTHERS")]
+    if risks:
+        report += f"\n⚠️ Concentration Risk Alert: {', '.join(risks)}"
+        
+    return report
