@@ -2451,6 +2451,41 @@ def _apply_pretrade_risk_gate(
 
     single_name_cap_twd = current_nav_twd * limits["single_name_cap"]
     position_headroom_twd = max(0.0, single_name_cap_twd - current_position_mv)
+
+    # ETF Look-through Pre-trade Check
+    ticker = get_ticker(symbol)
+    holdings = ticker.get_holdings() if hasattr(ticker, 'get_holdings') else []
+    if holdings:
+        # Calculate current total exposure for all assets
+        exposure_map = {}
+        for s in snapshots:
+            sym = s['symbol']
+            mv = s['market_value_twd']
+            t_ticker = get_ticker(sym)
+            t_holdings = t_ticker.get_holdings() if hasattr(t_ticker, 'get_holdings') else []
+            if t_holdings:
+                for th in t_holdings:
+                    exposure_map[th['Symbol']] = exposure_map.get(th['Symbol'], 0) + (mv * th['Percent'])
+            else:
+                exposure_map[sym] = exposure_map.get(sym, 0) + mv
+        
+        # Check against single_name_cap for each component
+        for h in holdings:
+            h_sym = h['Symbol']
+            h_weight = h['Percent']
+            h_current_exp = exposure_map.get(h_sym, 0.0)
+            h_requested_add = requested_twd_total * h_weight
+            h_headroom = max(0.0, single_name_cap_twd - h_current_exp)
+            if h_headroom < h_requested_add:
+                return {
+                    **gate_result,
+                    "allowed": False,
+                    "message": (
+                        f"❌ 風控拒單：ETF 穿透風險檢查未通過。買入 {symbol} 將使底層成分股 {h_sym} "
+                        f"的總曝險達到 {(h_current_exp + h_requested_add) / current_nav_twd * 100:.1f}%，"
+                        f"超過單一持股上限 {limits['single_name_cap'] * 100:.1f}%。"
+                    ),
+                }
     if position_headroom_twd <= 0:
         return {
             **gate_result,
