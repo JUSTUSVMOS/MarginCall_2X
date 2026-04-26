@@ -28,6 +28,13 @@ def init_db(db_path):
             PRIMARY KEY (symbol, interval, period)
         )
     """)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS etf_holdings (
+            symbol TEXT PRIMARY KEY,
+            holdings_json TEXT,
+            timestamp DATETIME
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -66,6 +73,55 @@ class CachedTicker:
     def __getattr__(self, item):
         """透傳其他屬性到 yf.Ticker (如 quarterly_income_stmt 等)"""
         return getattr(self._ticker, item)
+
+
+    def get_holdings(self, ttl_days=7):
+        """
+        Retrieves Top 10 holdings with local cache for ETFs.
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT holdings_json, timestamp FROM etf_holdings WHERE symbol=?", (self.symbol,))
+            row = cursor.fetchone()
+            if row:
+                holdings_json, timestamp_str = row
+                cache_time = datetime.fromisoformat(timestamp_str)
+                if datetime.now() - cache_time < timedelta(days=ttl_days):
+                    return json.loads(holdings_json)
+        except Exception as e:
+            logger.error(f"Error reading ETF cache for {self.symbol}: {e}")
+        finally:
+            conn.close()
+
+        # Fetch from network
+        try:
+            funds_data = self._ticker.get_funds_data()
+            if hasattr(funds_data, 'top_holdings') and funds_data.top_holdings is not None:
+                df = funds_data.top_holdings
+                holdings = []
+                for idx, row in df.iterrows():
+                    holdings.append({
+                        "Symbol": str(idx),
+                        "Name": row.get('Name', 'N/A'),
+                        "Percent": float(row.get('Holding Percent', 0.0))
+                    })
+                
+                if holdings:
+                    conn = sqlite3.connect(self.db_path)
+                    try:
+                        conn.execute("""
+                            INSERT OR REPLACE INTO etf_holdings (symbol, holdings_json, timestamp)
+                            VALUES (?, ?, ?)
+                        """, (self.symbol, json.dumps(holdings), datetime.now().isoformat()))
+                        conn.commit()
+                    finally:
+                        conn.close()
+                return holdings
+        except Exception as e:
+            logger.error(f"Error fetching ETF holdings for {self.symbol}: {e}")
+        
+        return []
 
     def history(self, period="1y", interval="1d", **kwargs):
         """
