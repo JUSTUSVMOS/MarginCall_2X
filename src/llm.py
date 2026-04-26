@@ -119,6 +119,7 @@ def get_alive_models(models: Optional[List[str]] = None) -> List[str]:
     seen: Set[str] = set()
     with _lock:
         for model_name in candidates:
+        logger.info(f"🤖 [LLM_SELECT] Attempting quick_call with: {model_name}")
             if model_name in seen:
                 continue
             seen.add(model_name)
@@ -521,6 +522,7 @@ def quick_call(
         return None
 
     for model_name in candidates:
+        logger.info(f"🤖 [LLM_SELECT] Attempting quick_call with: {model_name}")
         # OpenRouter 模型判斷
         if "/" in model_name:
             messages = []
@@ -607,6 +609,7 @@ def chat_with_tools(
 
     timeout_count = 0
     for model_name in final_candidates:
+        logger.info(f"🤖 [LLM_SELECT] Attempting chat_with_tools with: {model_name}")
         if timeout_count >= max_timeouts:
             break
             
