@@ -277,6 +277,40 @@ class TradePlanFlowTests(unittest.TestCase):
         mock_audit.assert_called_once_with()
         fake_bot_module.send_pending_trade_plan_prompts.assert_called_once_with()
 
+    def test_start_scheduler_registers_trade_plan_audit_job(self):
+        import src.scheduler as scheduler_runtime
+
+        recorded_jobs = []
+
+        class FakeScheduler:
+            def __init__(self, *args, **kwargs):
+                self.running = False
+
+            def add_job(self, func, *args, **kwargs):
+                recorded_jobs.append((func, args, kwargs))
+
+            def start(self):
+                self.running = True
+
+        original_scheduler = scheduler_runtime._scheduler
+        scheduler_runtime._scheduler = None
+        try:
+            with patch.object(scheduler_runtime, "BackgroundScheduler", FakeScheduler), patch.object(
+                scheduler_runtime, "macro_brain_heartbeat", return_value=None
+            ), patch.object(
+                scheduler_runtime, "daily_portfolio_review", return_value=None
+            ):
+                scheduler_runtime.start_scheduler()
+        finally:
+            scheduler_runtime._scheduler = original_scheduler
+
+        self.assertTrue(
+            any(
+                func is scheduler_runtime.trade_plan_audit_job and kwargs.get("id") == "trade-plan-audit"
+                for func, _, kwargs in recorded_jobs
+            )
+        )
+
     def test_src_bot_can_be_imported_without_telebot_installed(self):
         original_module = sys.modules.pop("src.bot", None)
         original_import = builtins.__import__
@@ -322,6 +356,16 @@ class TradePlanFlowTests(unittest.TestCase):
                 (plan_id,),
             ).fetchone()
         self.assertEqual(row, ("active", 80.0, 95.0, 105.0, 60, "sector_rotation", "semi rotation 回來"))
+
+    def test_resolve_trade_plan_reply_returns_none_for_missing_plan(self):
+        engine_portfolio.init_db()
+
+        resolved = engine_portfolio.resolve_trade_plan_reply(
+            999999,
+            "類型: sector_rotation\n理由: semi rotation 回來\n停損: 80\n目標1: 95\n目標2: 105\n期限: 60",
+        )
+
+        self.assertIsNone(resolved)
 
 if __name__ == '__main__':
     unittest.main()

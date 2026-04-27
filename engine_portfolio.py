@@ -4709,6 +4709,8 @@ def resolve_trade_plan_reply(plan_id: int, reply_text: str) -> Dict[str, Any] | 
     if parsed is None:
         return None
     plan = get_trade_plan(plan_id)
+    if plan is None:
+        return None
     upsert_trade_plan(
         symbol=plan["symbol"],
         source="plan_revision",

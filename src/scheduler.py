@@ -160,6 +160,15 @@ def start_scheduler():
         id="fubon-portfolio-sync-close",
         replace_existing=True,
     )
+    scheduler.add_job(
+        trade_plan_audit_job,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-13",
+        minute="10,40",
+        id="trade-plan-audit",
+        replace_existing=True,
+    )
     scheduler.add_job(daily_nlp_scout, "interval", hours=4, id="daily-nlp-scout", replace_existing=True)
     scheduler.start()
 
