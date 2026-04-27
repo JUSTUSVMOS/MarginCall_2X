@@ -1244,7 +1244,7 @@ def resolve_trade_plan_alert(*, symbol: str, alert_type: str, plan_id: int | Non
                     """
                     UPDATE trade_plan_alerts
                     SET status = 'resolved', resolved_at = ?
-                    WHERE symbol = ? AND alert_type = ? AND status = 'open'
+                    WHERE symbol = ? AND alert_type = ? AND plan_id IS NULL AND status = 'open'
                     """,
                     (now, normalized, alert_type),
                 )
@@ -4744,6 +4744,8 @@ def resolve_trade_plan_reply(plan_id: int, reply_text: str) -> Dict[str, Any] | 
     if parsed is None:
         return None
     plan = get_trade_plan(plan_id)
+    if plan is None:
+        return None
     upsert_trade_plan(
         symbol=plan["symbol"],
         source="plan_revision",
@@ -4765,16 +4767,49 @@ def claim_pending_trade_plan_prompts() -> List[Dict[str, Any]]:
         conn = get_connection()
         try:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
+            cursor = conn.cursor()
+            prompted_row = cursor.execute(
                 """
                 SELECT tp.*
                 FROM trade_plans tp
                 JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
-                WHERE tp.status = 'draft' AND ta.alert_type = 'missing_plan' AND ta.status = 'open'
+                WHERE tp.status = 'draft'
+                  AND ta.alert_type = 'missing_plan'
+                  AND ta.status = 'open'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM trade_plan_events te
+                      WHERE te.plan_id = tp.id AND te.event_type = 'prompt_sent'
+                  )
                 ORDER BY tp.updated_at, tp.id
+                LIMIT 1
                 """
-            ).fetchall()
-            return [dict(row) for row in rows]
+            ).fetchone()
+            if prompted_row is not None:
+                return []
+
+            row = cursor.execute(
+                """
+                SELECT tp.*
+                FROM trade_plans tp
+                JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
+                WHERE tp.status = 'draft'
+                  AND ta.alert_type = 'missing_plan'
+                  AND ta.status = 'open'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM trade_plan_events te
+                      WHERE te.plan_id = tp.id AND te.event_type = 'prompt_sent'
+                )
+                ORDER BY tp.updated_at, tp.id
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return []
+            _record_trade_plan_event(cursor, plan_id=int(row["id"]), event_type="prompt_sent")
+            conn.commit()
+            return [dict(row)]
         finally:
             conn.close()
 
@@ -4784,6 +4819,28 @@ def mark_trade_plan_prompted(plan_id: int) -> None:
         try:
             cursor = conn.cursor()
             _record_trade_plan_event(cursor, plan_id=plan_id, event_type="prompt_sent")
+            conn.commit()
+        finally:
+            conn.close()
+
+def release_trade_plan_prompt(plan_id: int) -> None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM trade_plan_events
+                WHERE id = (
+                    SELECT id
+                    FROM trade_plan_events
+                    WHERE plan_id = ? AND event_type = 'prompt_sent'
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                """,
+                (plan_id,),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -4798,7 +4855,11 @@ def get_latest_prompted_trade_plan() -> Dict[str, Any] | None:
                 SELECT tp.*
                 FROM trade_plans tp
                 JOIN trade_plan_events te ON te.plan_id = tp.id
-                WHERE tp.status = 'draft' AND te.event_type = 'prompt_sent'
+                JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
+                WHERE tp.status = 'draft'
+                  AND te.event_type = 'prompt_sent'
+                  AND ta.alert_type = 'missing_plan'
+                  AND ta.status = 'open'
                 ORDER BY te.id DESC LIMIT 1
                 """
             ).fetchone()

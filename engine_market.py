@@ -223,6 +223,21 @@ def _normalize_lookup_symbol(symbol: str) -> str:
     return s
 
 
+def _normalize_calendar_symbols(symbols: str | List[str] | None) -> List[str]:
+    if symbols is None:
+        return []
+    raw_items = symbols if isinstance(symbols, list) else str(symbols).replace(",", " ").split()
+    normalized: List[str] = []
+    for item in raw_items:
+        symbol = normalize_ticker(str(item))
+        if not symbol:
+            continue
+        resolved = _normalize_lookup_symbol(symbol)
+        if resolved not in normalized:
+            normalized.append(resolved)
+    return normalized
+
+
 def _safe_float(value):
     try:
         if value is None or pd.isna(value):
@@ -2484,9 +2499,9 @@ if __name__ == "__main__":
     print(get_market_calendar())
 
 def get_market_calendar_events(symbols: List[str] | None = None, days: int = 1) -> List[Dict[str, Any]]:
-    watch = _parse_symbol_input(symbols) if symbols else ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "GOOG", "META"]
+    watch = _normalize_calendar_symbols(symbols) if symbols else ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "GOOG", "META"]
     events: List[Dict[str, Any]] = []
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(datetime.timezone.utc)
     end_date = now + datetime.timedelta(days=days)
     for symbol in watch:
         try:
@@ -2496,8 +2511,14 @@ def get_market_calendar_events(symbols: List[str] | None = None, days: int = 1) 
             continue
         if dates is None or dates.empty:
             continue
-        dates.index = dates.index.tz_localize(None)
-        for event_dt, _ in dates[(dates.index >= now) & (dates.index <= end_date)].iterrows():
+        normalized_index = pd.to_datetime(dates.index, errors="coerce", utc=True)
+        valid_rows = ~normalized_index.isna()
+        if not valid_rows.any():
+            continue
+        dates = dates.loc[valid_rows].copy()
+        dates.index = normalized_index[valid_rows]
+        filtered_dates = dates.loc[(dates.index >= now) & (dates.index <= end_date)]
+        for event_dt, _ in filtered_dates.iterrows():
             events.append(
                 {
                     "symbol": symbol,

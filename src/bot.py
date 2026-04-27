@@ -6,19 +6,31 @@ import subprocess
 import sys
 import threading
 import time
-import telebot
+
+try:
+    import telebot
+    _TELEBOT_API_EXCEPTION = telebot.apihelper.ApiTelegramException
+except ModuleNotFoundError as exc:
+    telebot = None
+    _TELEBOT_IMPORT_ERROR = exc
+
+    class _TELEBOT_API_EXCEPTION(Exception):
+        pass
+else:
+    _TELEBOT_IMPORT_ERROR = None
 
 import engine_fundamentals as fundamentals
 import engine_market as market
 import engine_portfolio as portfolio
-import engine_risk as risk
-import engine_router as router
 import engine_technical as technical
 import fubon
 from config import PROJECT_ROOT, WDT_MESSAGES
-from src.agent import ask_agent, generate_final_report as agent_generate_final_report, reset_history, user_chat_history
-from src.llm import compact_history
 from src.tools import format_tool_error, get_tools
+
+try:
+    import engine_risk as risk
+except ModuleNotFoundError:
+    risk = None
 
 
 logger = logging.getLogger(__name__)
@@ -27,9 +39,10 @@ logger = logging.getLogger(__name__)
 AUTHORIZED_USER_ID = None
 
 # 先載入所有工具模組，再從共享 registry 取出可用工具。
-_TOOL_MODULES = (portfolio, risk, fundamentals, technical, market, fubon)
+_TOOL_MODULES = tuple(module for module in (portfolio, risk, fundamentals, technical, market, fubon) if module is not None)
 
 bot = None
+user_chat_history = []
 
 MEMORY_WRITE_TOOL_NAMES = {
     "update_frontal_lobe",
@@ -60,6 +73,12 @@ def _require_bot():
     return bot
 
 
+def _require_telebot():
+    if telebot is None:
+        raise RuntimeError(f"telebot 未安裝，無法初始化 Telegram Bot：{_TELEBOT_IMPORT_ERROR}")
+    return telebot
+
+
 def init_bot():
     global AUTHORIZED_USER_ID, bot
 
@@ -74,7 +93,7 @@ def init_bot():
         raise ValueError("❌ .env 缺少必要 API KEY 或 TELEGRAM_USER_ID")
 
     AUTHORIZED_USER_ID = int(my_user_id)
-    bot = telebot.TeleBot(bot_token)
+    bot = _require_telebot().TeleBot(bot_token)
     initialize_bot_runtime()
     return bot, AUTHORIZED_USER_ID
 
@@ -87,6 +106,7 @@ def initialize_bot_runtime():
     bot_instance = _require_bot()
     fubon.init_fubon()
     market.set_fubon_provider(fubon)
+    import engine_router as router
 
     def _deliver_router_alert(message: str):
         if AUTHORIZED_USER_ID is None:
@@ -121,12 +141,45 @@ def _send_or_edit(chat_id, text, message_id=None):
 
 
 def _append_history_turn(user_text: str, assistant_text: str):
-    updated_history = list(user_chat_history) + [
+    from src.llm import compact_history
+
+    chat_history = _get_user_chat_history()
+    updated_history = list(chat_history) + [
         {"role": "user", "parts": [user_text]},
         {"role": "model", "parts": [assistant_text]},
     ]
-    user_chat_history.clear()
-    user_chat_history.extend(compact_history(updated_history))
+    chat_history.clear()
+    chat_history.extend(compact_history(updated_history))
+
+
+def _get_agent_runtime():
+    from src.agent import ask_agent, generate_final_report as agent_generate_final_report, reset_history, user_chat_history
+    from src.llm import compact_history
+
+    return ask_agent, agent_generate_final_report, reset_history, user_chat_history, compact_history
+
+
+def _get_user_chat_history():
+    try:
+        from src.agent import user_chat_history as runtime_history
+    except ModuleNotFoundError:
+        return user_chat_history
+    return runtime_history
+
+
+def ask_agent(*args, **kwargs):
+    real_ask_agent, _, _, _, _ = _get_agent_runtime()
+    return real_ask_agent(*args, **kwargs)
+
+
+def agent_generate_final_report(*args, **kwargs):
+    _, real_generate_final_report, _, _, _ = _get_agent_runtime()
+    return real_generate_final_report(*args, **kwargs)
+
+
+def reset_history():
+    _, _, real_reset_history, _, _ = _get_agent_runtime()
+    return real_reset_history()
 
 
 def _parse_trade_command(user_input: str):
@@ -213,6 +266,7 @@ def trigger_nlp_and_callback(symbol, chat_id=None, message_id=None):
                         chat_id=chat_id,
                         message_id=message_id,
                     )
+                    import engine_router as router
                     strat_data = router.fetch_strat_data(symbol)
                     nlp_data = strat_data.get("nlp_insights", {})
                     generate_final_report(symbol, strat_data, nlp_data, chat_id, message_id)
@@ -263,6 +317,8 @@ def handle_deep_analysis(message):
     sent_msg = None
 
     try:
+        import engine_router as router
+
         parts = message.text.strip().split()
         if len(parts) < 2:
             bot_instance.reply_to(message, "💡 用法: `/analyze <股票代號>`", parse_mode="Markdown")
@@ -408,7 +464,7 @@ def handle_all_text(message):
     bot_instance.send_chat_action(message.chat.id, "typing")
 
     try:
-        final_text = ask_agent(user_text, tools=READ_ONLY_TOOLS, chat_history=user_chat_history)
+        final_text = ask_agent(user_text, tools=READ_ONLY_TOOLS, chat_history=_get_user_chat_history())
         _send_or_edit(message.chat.id, final_text, sent_msg.message_id)
     except Exception as exc:
         logger.exception(f"Chat handling failed for message: {user_text}")
@@ -436,7 +492,7 @@ def run_polling():
         try:
             logger.info("📡 正在開啟 Infinity Polling...")
             bot_instance.infinity_polling(timeout=20, long_polling_timeout=10)
-        except telebot.apihelper.ApiTelegramException as exc:
+        except _TELEBOT_API_EXCEPTION as exc:
             if exc.error_code == 409:
                 logger.error("🛑 偵測到 409 衝突：已有其他 Bot 實例在運行。將於 15 秒後重試...")
                 time.sleep(15)
@@ -448,12 +504,19 @@ def run_polling():
             time.sleep(5)
 
 def send_morning_briefing():
-    bot_instance = _require_bot()
-    import engine_briefing as briefing
-    if AUTHORIZED_USER_ID is None:
-        logger.error("AUTHORIZED_USER_ID 尚未初始化")
-        return
-    bot_instance.send_message(AUTHORIZED_USER_ID, briefing.build_morning_briefing())
+    try:
+        bot_instance = _require_bot()
+        import engine_briefing as briefing
+
+        if AUTHORIZED_USER_ID is None:
+            logger.error("AUTHORIZED_USER_ID 尚未初始化")
+            return False
+
+        bot_instance.send_message(AUTHORIZED_USER_ID, briefing.build_morning_briefing())
+        return True
+    except Exception as exc:
+        logger.error(f"Morning briefing push failed: {exc}")
+        return False
 
 def send_pending_trade_plan_prompts():
     bot_instance = _require_bot()
@@ -461,10 +524,14 @@ def send_pending_trade_plan_prompts():
     sent = 0
     for item in pending:
         if AUTHORIZED_USER_ID is None:
+            portfolio.release_trade_plan_prompt(int(item["id"]))
             logger.error("AUTHORIZED_USER_ID 尚未初始化")
             return 0
-        bot_instance.send_message(AUTHORIZED_USER_ID, portfolio.format_trade_plan_prompt(item))
-        portfolio.mark_trade_plan_prompted(int(item["id"]))
+        try:
+            bot_instance.send_message(AUTHORIZED_USER_ID, portfolio.format_trade_plan_prompt(item))
+        except Exception:
+            portfolio.release_trade_plan_prompt(int(item["id"]))
+            raise
         sent += 1
     return sent
 
