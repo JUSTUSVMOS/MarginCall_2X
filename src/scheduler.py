@@ -141,6 +141,15 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.add_job(
+        morning_briefing_push,
+        "cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=0,
+        id="morning-briefing-push",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         fubon_portfolio_sync,
         "cron",
         day_of_week="mon-fri",

@@ -1,7 +1,18 @@
 from typing import Dict, Any, List
 import engine_portfolio as portfolio
 import engine_market as market
-import engine_risk as risk
+
+
+class _RiskFallback:
+    @staticmethod
+    def get_global_risk_snapshot() -> Dict[str, Any]:
+        return {"state": "risk_unavailable", "riskScore": "n/a"}
+
+
+try:
+    import engine_risk as risk
+except ModuleNotFoundError:
+    risk = _RiskFallback()
 
 def derive_morning_action_items(*, alerts: List[Dict[str, Any]], events: List[Dict[str, Any]], risk_snapshot: Dict[str, Any]) -> List[str]:
     items: List[tuple[int, str]] = []

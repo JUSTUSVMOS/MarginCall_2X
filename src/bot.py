@@ -504,12 +504,19 @@ def run_polling():
             time.sleep(5)
 
 def send_morning_briefing():
-    bot_instance = _require_bot()
-    import engine_briefing as briefing
-    if AUTHORIZED_USER_ID is None:
-        logger.error("AUTHORIZED_USER_ID 尚未初始化")
-        return
-    bot_instance.send_message(AUTHORIZED_USER_ID, briefing.build_morning_briefing())
+    try:
+        bot_instance = _require_bot()
+        import engine_briefing as briefing
+
+        if AUTHORIZED_USER_ID is None:
+            logger.error("AUTHORIZED_USER_ID 尚未初始化")
+            return False
+
+        bot_instance.send_message(AUTHORIZED_USER_ID, briefing.build_morning_briefing())
+        return True
+    except Exception as exc:
+        logger.error(f"Morning briefing push failed: {exc}")
+        return False
 
 def send_pending_trade_plan_prompts():
     bot_instance = _require_bot()
