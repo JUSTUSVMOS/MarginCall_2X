@@ -312,7 +312,11 @@ class TradePlanFlowTests(unittest.TestCase):
         )
 
     def test_src_bot_can_be_imported_without_telebot_installed(self):
+        import src
+
         original_module = sys.modules.pop("src.bot", None)
+        had_src_bot_attr = hasattr(src, "bot")
+        original_src_bot_attr = getattr(src, "bot", None)
         original_import = builtins.__import__
 
         def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -327,6 +331,10 @@ class TradePlanFlowTests(unittest.TestCase):
             sys.modules.pop("src.bot", None)
             if original_module is not None:
                 sys.modules["src.bot"] = original_module
+            if had_src_bot_attr:
+                src.bot = original_src_bot_attr
+            elif hasattr(src, "bot"):
+                delattr(src, "bot")
 
         self.assertTrue(hasattr(bot_module, "init_bot"))
 
