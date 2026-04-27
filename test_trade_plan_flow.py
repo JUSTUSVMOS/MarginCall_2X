@@ -229,6 +229,56 @@ class TradePlanFlowTests(unittest.TestCase):
         self.assertEqual(len(claimed), 1)
         self.assertEqual(claimed[0]["id"], second_plan_id)
 
+    def test_claim_pending_trade_plan_prompts_records_prompt_event_atomically(self):
+        engine_portfolio.init_db()
+        plan_id = self._create_missing_plan("MRVL")
+
+        claimed = engine_portfolio.claim_pending_trade_plan_prompts()
+
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["id"], plan_id)
+        with database.locked_connection() as conn:
+            prompt_events = conn.execute(
+                "SELECT COUNT(*) FROM trade_plan_events WHERE plan_id = ? AND event_type = 'prompt_sent'",
+                (plan_id,),
+            ).fetchone()[0]
+
+        self.assertEqual(prompt_events, 1)
+
+    def test_send_pending_trade_plan_prompts_releases_claim_when_send_fails(self):
+        engine_portfolio.init_db()
+        plan_id = self._create_missing_plan("MRVL")
+
+        from types import SimpleNamespace
+        import src.bot as bot_module
+
+        def failing_send_message(*args, **kwargs):
+            with database.locked_connection() as conn:
+                prompt_events = conn.execute(
+                    "SELECT COUNT(*) FROM trade_plan_events WHERE plan_id = ? AND event_type = 'prompt_sent'",
+                    (plan_id,),
+                ).fetchone()[0]
+            self.assertEqual(prompt_events, 1)
+            raise RuntimeError("telegram down")
+
+        fake_bot = SimpleNamespace(send_message=Mock(side_effect=failing_send_message))
+        bot_module.bot = fake_bot
+        bot_module.AUTHORIZED_USER_ID = 123
+
+        with self.assertRaises(RuntimeError):
+            bot_module.send_pending_trade_plan_prompts()
+
+        with database.locked_connection() as conn:
+            prompt_events = conn.execute(
+                "SELECT COUNT(*) FROM trade_plan_events WHERE plan_id = ? AND event_type = 'prompt_sent'",
+                (plan_id,),
+            ).fetchone()[0]
+
+        self.assertEqual(prompt_events, 0)
+        claimed = engine_portfolio.claim_pending_trade_plan_prompts()
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["id"], plan_id)
+
     def test_trade_plan_audit_job_runs_backfill_audit_and_prompt_delivery(self):
         original_scheduler = sys.modules.pop("src.scheduler", None)
         fake_bot_module = types.ModuleType("src.bot")

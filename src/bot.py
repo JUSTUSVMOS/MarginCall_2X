@@ -524,10 +524,14 @@ def send_pending_trade_plan_prompts():
     sent = 0
     for item in pending:
         if AUTHORIZED_USER_ID is None:
+            portfolio.release_trade_plan_prompt(int(item["id"]))
             logger.error("AUTHORIZED_USER_ID 尚未初始化")
             return 0
-        bot_instance.send_message(AUTHORIZED_USER_ID, portfolio.format_trade_plan_prompt(item))
-        portfolio.mark_trade_plan_prompted(int(item["id"]))
+        try:
+            bot_instance.send_message(AUTHORIZED_USER_ID, portfolio.format_trade_plan_prompt(item))
+        except Exception:
+            portfolio.release_trade_plan_prompt(int(item["id"]))
+            raise
         sent += 1
     return sent
 

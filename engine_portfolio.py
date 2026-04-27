@@ -1244,7 +1244,7 @@ def resolve_trade_plan_alert(*, symbol: str, alert_type: str, plan_id: int | Non
                     """
                     UPDATE trade_plan_alerts
                     SET status = 'resolved', resolved_at = ?
-                    WHERE symbol = ? AND alert_type = ? AND status = 'open'
+                    WHERE symbol = ? AND alert_type = ? AND plan_id IS NULL AND status = 'open'
                     """,
                     (now, normalized, alert_type),
                 )
@@ -4732,7 +4732,8 @@ def claim_pending_trade_plan_prompts() -> List[Dict[str, Any]]:
         conn = get_connection()
         try:
             conn.row_factory = sqlite3.Row
-            prompted_row = conn.execute(
+            cursor = conn.cursor()
+            prompted_row = cursor.execute(
                 """
                 SELECT tp.*
                 FROM trade_plans tp
@@ -4752,7 +4753,7 @@ def claim_pending_trade_plan_prompts() -> List[Dict[str, Any]]:
             if prompted_row is not None:
                 return []
 
-            rows = conn.execute(
+            row = cursor.execute(
                 """
                 SELECT tp.*
                 FROM trade_plans tp
@@ -4764,12 +4765,16 @@ def claim_pending_trade_plan_prompts() -> List[Dict[str, Any]]:
                       SELECT 1
                       FROM trade_plan_events te
                       WHERE te.plan_id = tp.id AND te.event_type = 'prompt_sent'
-                  )
+                )
                 ORDER BY tp.updated_at, tp.id
                 LIMIT 1
                 """
-            ).fetchall()
-            return [dict(row) for row in rows]
+            ).fetchone()
+            if row is None:
+                return []
+            _record_trade_plan_event(cursor, plan_id=int(row["id"]), event_type="prompt_sent")
+            conn.commit()
+            return [dict(row)]
         finally:
             conn.close()
 
@@ -4779,6 +4784,28 @@ def mark_trade_plan_prompted(plan_id: int) -> None:
         try:
             cursor = conn.cursor()
             _record_trade_plan_event(cursor, plan_id=plan_id, event_type="prompt_sent")
+            conn.commit()
+        finally:
+            conn.close()
+
+def release_trade_plan_prompt(plan_id: int) -> None:
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM trade_plan_events
+                WHERE id = (
+                    SELECT id
+                    FROM trade_plan_events
+                    WHERE plan_id = ? AND event_type = 'prompt_sent'
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                """,
+                (plan_id,),
+            )
             conn.commit()
         finally:
             conn.close()

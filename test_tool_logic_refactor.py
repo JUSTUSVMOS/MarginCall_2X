@@ -672,6 +672,54 @@ class DirectHelperRuntimeTests(unittest.TestCase):
         self.assertEqual(row[1], "2024-01-01T00:00:00Z")
         self.assertEqual(row[2], "2024-01-01T00:05:00Z")
 
+    def test_resolve_trade_plan_alert_without_plan_id_only_resolves_global_alert(self):
+        engine_portfolio.init_db()
+        plan_id = engine_portfolio.upsert_trade_plan(
+            symbol="AMD",
+            source="manual",
+            entry_price=100.0,
+            stop_loss=95.0,
+            take_profit_1=110.0,
+            take_profit_2=None,
+            max_holding_days=30,
+            thesis_type="support_hold",
+            thesis_text="support test",
+            thesis_payload={},
+            status="active",
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="AMD",
+            alert_type="monitor_degraded",
+            severity="warning",
+            payload={"scope": "global"},
+        )
+        engine_portfolio.upsert_trade_plan_alert(
+            symbol="AMD",
+            plan_id=plan_id,
+            alert_type="monitor_degraded",
+            severity="warning",
+            payload={"scope": "plan"},
+        )
+
+        resolved = engine_portfolio.resolve_trade_plan_alert(
+            symbol="AMD",
+            alert_type="monitor_degraded",
+        )
+
+        self.assertEqual(resolved, 1)
+        with database.locked_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT plan_id, status
+                FROM trade_plan_alerts
+                WHERE symbol = ? AND alert_type = ?
+                ORDER BY COALESCE(plan_id, 0)
+                """,
+                ("AMD", "monitor_degraded"),
+            ).fetchall()
+
+        self.assertEqual(rows, [(None, "resolved"), (plan_id, "open")])
+
     def test_evaluate_trade_plan_alerts_resolves_monitor_degraded_after_snapshot_recovery(self):
         engine_portfolio.init_db()
         plan_id = engine_portfolio.upsert_trade_plan(
