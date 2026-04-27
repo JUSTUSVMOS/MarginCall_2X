@@ -4730,13 +4730,41 @@ def claim_pending_trade_plan_prompts() -> List[Dict[str, Any]]:
         conn = get_connection()
         try:
             conn.row_factory = sqlite3.Row
+            prompted_row = conn.execute(
+                """
+                SELECT tp.*
+                FROM trade_plans tp
+                JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
+                WHERE tp.status = 'draft'
+                  AND ta.alert_type = 'missing_plan'
+                  AND ta.status = 'open'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM trade_plan_events te
+                      WHERE te.plan_id = tp.id AND te.event_type = 'prompt_sent'
+                  )
+                ORDER BY tp.updated_at, tp.id
+                LIMIT 1
+                """
+            ).fetchone()
+            if prompted_row is not None:
+                return []
+
             rows = conn.execute(
                 """
                 SELECT tp.*
                 FROM trade_plans tp
                 JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
-                WHERE tp.status = 'draft' AND ta.alert_type = 'missing_plan' AND ta.status = 'open'
+                WHERE tp.status = 'draft'
+                  AND ta.alert_type = 'missing_plan'
+                  AND ta.status = 'open'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM trade_plan_events te
+                      WHERE te.plan_id = tp.id AND te.event_type = 'prompt_sent'
+                  )
                 ORDER BY tp.updated_at, tp.id
+                LIMIT 1
                 """
             ).fetchall()
             return [dict(row) for row in rows]
@@ -4763,7 +4791,11 @@ def get_latest_prompted_trade_plan() -> Dict[str, Any] | None:
                 SELECT tp.*
                 FROM trade_plans tp
                 JOIN trade_plan_events te ON te.plan_id = tp.id
-                WHERE tp.status = 'draft' AND te.event_type = 'prompt_sent'
+                JOIN trade_plan_alerts ta ON ta.plan_id = tp.id
+                WHERE tp.status = 'draft'
+                  AND te.event_type = 'prompt_sent'
+                  AND ta.alert_type = 'missing_plan'
+                  AND ta.status = 'open'
                 ORDER BY te.id DESC LIMIT 1
                 """
             ).fetchone()

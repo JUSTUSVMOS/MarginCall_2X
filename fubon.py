@@ -3,8 +3,18 @@ import os
 import json
 import logging
 import pandas as pd
-from fubon_neo.sdk import FubonSDK
-from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
+try:
+    from fubon_neo.sdk import FubonSDK
+    from fubon_neo.fugle_marketdata.rest.base_rest import FugleAPIError
+except ModuleNotFoundError as exc:
+    FubonSDK = None
+
+    class FugleAPIError(Exception):
+        pass
+
+    _FUBON_IMPORT_ERROR = exc
+else:
+    _FUBON_IMPORT_ERROR = None
 from engine_technical import IndicatorCalculator, analyze_obv_signal, summarize_divergence
 from src.tools import tool
 
@@ -259,7 +269,8 @@ def init_fubon():
     try:
         logger.info(f"🔌 正在連線富邦主機 (ID: {my_id})...")
         # 在這裡才真正建立 SDK 物件
-        from fubon_neo.sdk import FubonSDK
+        if FubonSDK is None:
+            raise RuntimeError(f"fubon_neo 未安裝：{_FUBON_IMPORT_ERROR}")
         fubon_sdk = FubonSDK()
         
         accounts = fubon_sdk.apikey_login(my_id, api_key, cert_path, cert_pwd)

@@ -1,14 +1,16 @@
 import logging
+import importlib
 import time
 from datetime import datetime
 from typing import Callable, Optional
 
 import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
 
-import engine_market as market
-import engine_memory as memory
-import engine_risk as risk
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+except ModuleNotFoundError:
+    BackgroundScheduler = None
+
 from config import WATCH_LIST
 from src.backup import backup_database
 
@@ -69,6 +71,8 @@ def fubon_portfolio_sync(source: str = "scheduler"):
 
 
 def macro_brain_heartbeat(force=False):
+    import engine_memory as memory
+
     result = memory.sync_market_brain(force=force, max_age_minutes=180)
     logger.info(f"🧠 [MacroHeartbeat] {result['message']}")
     return result
@@ -76,6 +80,9 @@ def macro_brain_heartbeat(force=False):
 
 def auto_v_turn_monitor():
     try:
+        import engine_market as market
+        import engine_risk as risk
+
         if _is_v_turn_active_cb and not _is_v_turn_active_cb():
             return
 
@@ -97,6 +104,8 @@ def start_scheduler():
     global _scheduler
     if _scheduler and _scheduler.running:
         return _scheduler
+    if BackgroundScheduler is None:
+        raise RuntimeError("apscheduler 未安裝，無法啟動排程器。")
 
     scheduler = BackgroundScheduler(timezone=pytz.timezone("Asia/Taipei"))
 
@@ -156,6 +165,30 @@ def start_scheduler():
 
     _scheduler = scheduler
     return _scheduler
+
+
+def trade_plan_audit_job():
+    try:
+        import engine_portfolio as portfolio
+
+        backfill = portfolio.sync_trade_plan_backfills()
+        audit = portfolio.audit_trade_plan_alerts()
+        bot_runtime = importlib.import_module("src.bot")
+        prompted_count = bot_runtime.send_pending_trade_plan_prompts()
+        logger.info(
+            "🧾 [TradePlanAudit] backfill=%s audit=%s prompted=%s",
+            backfill,
+            audit,
+            prompted_count,
+        )
+        return {
+            "backfill": backfill,
+            "audit": audit,
+            "prompted_count": prompted_count,
+        }
+    except Exception as exc:
+        logger.error(f"Trade plan audit job failed: {exc}")
+        return None
 
 def morning_briefing_push():
     from src import bot as bot_runtime
