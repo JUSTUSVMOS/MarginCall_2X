@@ -414,5 +414,276 @@ class TestSectorCoverageWhenPriceNone(unittest.TestCase):
                          "sector_coverage must be 0 when sector price fetch returns None")
 
 
+class TradeJournalEntryFlowTests(unittest.TestCase):
+    """Tests for snapshot enrichment and post-commit journal enqueueing (Task 2)."""
+
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init_db(self):
+        import engine_portfolio
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+    # ------------------------------------------------------------------
+    # Unit tests: new helper functions
+    # ------------------------------------------------------------------
+
+    def test_fetch_sync_nlp_payload_maps_alpha_sec(self):
+        """_fetch_sync_nlp_payload must map alpha_official → alpha_sec."""
+        import engine_portfolio
+        import engine_router
+
+        with patch.object(engine_router, "fetch_nlp_alpha", return_value={
+            "nlp_alpha": 0.5,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.2,
+            "alpha_official": 0.3,
+        }):
+            result = engine_portfolio._fetch_sync_nlp_payload("AAPL", "AAPL")
+
+        self.assertAlmostEqual(result["nlp_alpha"], 0.5)
+        self.assertAlmostEqual(result["alpha_macro"], 0.1)
+        self.assertAlmostEqual(result["alpha_retail"], 0.2)
+        self.assertAlmostEqual(result["alpha_sec"], 0.3)
+        self.assertNotIn("alpha_official", result, "alpha_official must be remapped to alpha_sec")
+
+    def test_fetch_sync_nlp_payload_returns_none_values_on_error(self):
+        """_fetch_sync_nlp_payload must return None values when fetch errors."""
+        import engine_portfolio
+        import engine_router
+
+        with patch.object(engine_router, "fetch_nlp_alpha", return_value={"error": "no data"}):
+            result = engine_portfolio._fetch_sync_nlp_payload("AAPL", "AAPL")
+
+        self.assertIsNone(result["nlp_alpha"])
+        self.assertIsNone(result["alpha_sec"])
+
+    def test_estimate_entry_beta_proxy_extracts_symbol_beta(self):
+        """_estimate_entry_beta_proxy must extract the beta for the single-symbol portfolio."""
+        import engine_portfolio
+
+        attribution = {
+            "positions": {"AAPL": {"beta": 1.2, "weight": 1.0}},
+            "portfolio_beta": 1.2,
+        }
+        with patch.object(engine_portfolio, "compute_portfolio_beta_attribution",
+                          return_value=attribution):
+            beta = engine_portfolio._estimate_entry_beta_proxy("AAPL")
+
+        self.assertAlmostEqual(beta, 1.2)
+
+    def test_estimate_entry_beta_proxy_returns_none_on_error(self):
+        """_estimate_entry_beta_proxy must return None when attribution fails."""
+        import engine_portfolio
+
+        with patch.object(engine_portfolio, "compute_portfolio_beta_attribution",
+                          return_value={"error": "no data"}):
+            beta = engine_portfolio._estimate_entry_beta_proxy("AAPL")
+
+        self.assertIsNone(beta)
+
+    def test_build_trade_decision_snapshot_has_required_keys(self):
+        """_build_trade_decision_snapshot must capture all plan-aligned fields."""
+        import engine_portfolio
+        import engine_market as market
+
+        profile = {"sector": "Technology", "industry": "Software"}
+        with patch.object(market, "get_asset_profile", return_value=profile), \
+             patch.object(engine_portfolio, "_resolve_sync_lookup_symbol", return_value="AAPL"), \
+             patch.object(engine_portfolio, "_select_sector_proxy", return_value="XLK"), \
+             patch.object(engine_portfolio, "_fetch_sync_nlp_payload", return_value={
+                 "nlp_alpha": 0.5, "alpha_macro": 0.1,
+                 "alpha_retail": 0.2, "alpha_sec": 0.3,
+             }), \
+             patch.object(engine_portfolio, "_estimate_entry_beta_proxy", return_value=1.1):
+            snapshot = engine_portfolio._build_trade_decision_snapshot(
+                "AAPL", entry_notional_twd=10000.0
+            )
+
+        for key in (
+            "captured_at", "symbol", "lookup_symbol", "sector", "industry",
+            "benchmark_symbol", "sector_proxy_symbol", "beta_proxy_period",
+            "beta_proxy_at_entry", "entry_notional_twd",
+            "nlp_alpha", "alpha_macro", "alpha_retail", "alpha_sec",
+        ):
+            self.assertIn(key, snapshot, f"Key '{key}' missing from snapshot")
+
+        self.assertEqual(snapshot["benchmark_symbol"], "SPY")
+        self.assertEqual(snapshot["beta_proxy_period"], "6mo")
+        self.assertAlmostEqual(snapshot["entry_notional_twd"], 10000.0)
+        self.assertAlmostEqual(snapshot["beta_proxy_at_entry"], 1.1)
+
+    def test_build_sync_decision_snapshot_delegates_to_trade_snapshot(self):
+        """_build_sync_decision_snapshot must delegate to _build_trade_decision_snapshot."""
+        import engine_portfolio
+
+        expected = {"symbol": "AAPL", "captured_at": "now"}
+        with patch.object(engine_portfolio, "_build_trade_decision_snapshot",
+                          return_value=expected) as mock_build:
+            result = engine_portfolio._build_sync_decision_snapshot("AAPL")
+            mock_build.assert_called_once_with("AAPL")
+
+        self.assertEqual(result, expected)
+
+    # ------------------------------------------------------------------
+    # Integration tests: execute_position_update enqueue behavior
+    # ------------------------------------------------------------------
+
+    def test_execute_buy_enqueues_after_commit(self):
+        """execute_position_update buy must enqueue journal checkpoints after DB commit."""
+        import engine_portfolio
+        import engine_journal
+
+        self._init_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("CASH_TWD", 1.0, 1_000_000.0, 1_000_000.0, 0),
+        )
+        self.conn.commit()
+
+        mock_snapshot = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": 10000.0,
+            "nlp_alpha": 0.5,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.2,
+            "alpha_sec": 0.3,
+        }
+        enqueue_mock = MagicMock(return_value={"created": 2})
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_trade_decision_snapshot",
+                          return_value=mock_snapshot), \
+             patch.object(engine_portfolio, "_build_trade_plan_payload", return_value={}), \
+             patch.object(engine_portfolio, "validate_trade_plan_payload",
+                          return_value={"complete": False, "missing_fields": ["x"]}), \
+             patch.object(engine_portfolio, "_apply_pretrade_risk_gate",
+                          return_value={"allowed": True, "approved_shares": 100.0,
+                                        "approved_twd_total": 10000.0}), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.execute_position_update(
+                "2330", price=100.0, shares=100.0, action="buy",
+                enforce_pretrade_gate=False,
+            )
+
+        self.assertIn("✅", result, f"Expected success, got: {result}")
+        enqueue_mock.assert_called_once()
+        called_ids = enqueue_mock.call_args[0][0]
+        self.assertIsInstance(called_ids, list)
+        self.assertEqual(len(called_ids), 1)
+
+        # Verify enriched snapshot was stored in trade_log
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT decision_snapshot FROM trade_log WHERE action='buy' ORDER BY id DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected a buy trade_log row")
+        import json as _json
+        snap = _json.loads(row["decision_snapshot"])
+        self.assertIn("beta_proxy_at_entry", snap, "Enriched snapshot must include beta_proxy_at_entry")
+        self.assertIn("alpha_sec", snap, "Enriched snapshot must include alpha_sec")
+
+    def test_execute_sell_does_not_enqueue(self):
+        """execute_position_update sell must NOT enqueue journal checkpoints."""
+        import engine_portfolio
+        import engine_journal
+
+        self._init_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("2330", 100.0, 200.0, 20000.0, 0),
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("CASH_TWD", 1.0, 0.0, 0.0, 0),
+        )
+        self.conn.commit()
+
+        enqueue_mock = MagicMock(return_value={"created": 0})
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.execute_position_update(
+                "2330", price=100.0, shares=100.0, action="sell",
+            )
+
+        self.assertIn("✅", result, f"Expected success, got: {result}")
+        enqueue_mock.assert_not_called()
+
+    def test_sync_buy_enqueues_after_commit(self):
+        """sync_fubon_portfolio_state sync_buy must enqueue journal checkpoints after commit."""
+        import engine_portfolio
+        import engine_journal
+        import fubon
+
+        self._init_db()
+
+        mock_snapshot = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": 50000.0,
+            "nlp_alpha": 0.4,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.1,
+            "alpha_sec": 0.2,
+        }
+        account_snap = {
+            "success": True,
+            "inventories": {"2330": {"shares": 500.0, "cost": 100.0}},
+            "cash_twd": None,
+        }
+        enqueue_mock = MagicMock(return_value={"created": 2})
+
+        with patch.object(fubon, "fubon_ready", True), \
+             patch.object(fubon, "get_fubon_account_snapshot", return_value=account_snap), \
+             patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_sync_decision_snapshot",
+                          return_value=mock_snapshot), \
+             patch.object(engine_portfolio, "_record_trade_followup", MagicMock()), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.sync_fubon_portfolio_state(source="test")
+
+        self.assertTrue(result.get("synced"), f"sync should succeed: {result}")
+        enqueue_mock.assert_called_once()
+        called_ids = enqueue_mock.call_args[0][0]
+        self.assertIsInstance(called_ids, list)
+        self.assertGreater(len(called_ids), 0, "Expected at least one sync_buy trade_log_id")
+
+
 if __name__ == "__main__":
     unittest.main()
