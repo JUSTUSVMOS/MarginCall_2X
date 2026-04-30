@@ -851,5 +851,321 @@ class TradeJournalEntryFlowTests(unittest.TestCase):
         self.assertGreater(len(called_ids), 0, "Expected at least one sync_buy trade_log_id")
 
 
+class TradeJournalSettlementTests(unittest.TestCase):
+    """Tests for settle_due_trade_outcomes and build_weekly_attribution_report (Task 3)."""
+
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init_db(self):
+        import engine_portfolio
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+    def _insert_checkpoint(
+        self,
+        *,
+        symbol="AAPL",
+        entry_price=100.0,
+        entry_notional_twd=10000.0,
+        due_at="2025-01-10",
+        benchmark_symbol="SPY",
+        benchmark_entry_price=500.0,
+        sector_proxy_symbol="XLK",
+        sector_entry_price=200.0,
+        beta_proxy_at_entry=1.2,
+        beta_coverage=1,
+        sector_coverage=1,
+        status="pending",
+    ):
+        """Insert a checkpoint row directly and return its rowid."""
+        # Insert a dummy trade_log row to satisfy the FK reference.
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
+            (symbol, "buy", entry_price, 10),
+        )
+        trade_log_id = cur.lastrowid
+
+        cur.execute(
+            """
+            INSERT INTO trade_outcome_checkpoints
+                (trade_log_id, horizon_label, symbol, action,
+                 entry_price, entry_notional_twd, entry_timestamp, due_at,
+                 benchmark_symbol, benchmark_entry_price,
+                 sector_proxy_symbol, sector_entry_price,
+                 beta_proxy_at_entry, beta_coverage, sector_coverage, status)
+            VALUES (?, 'T+5', ?, 'buy',
+                    ?, ?, '2025-01-06T12:00:00Z', ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?, ?, ?)
+            """,
+            (
+                trade_log_id, symbol,
+                entry_price, entry_notional_twd, due_at,
+                benchmark_symbol, benchmark_entry_price,
+                sector_proxy_symbol, sector_entry_price,
+                beta_proxy_at_entry, beta_coverage, sector_coverage, status,
+            ),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def _settle(self, as_of, price_map):
+        """Call settle_due_trade_outcomes with patched helpers."""
+        import engine_journal
+        from datetime import date as _date
+
+        def mock_price(symbol, target_date):
+            return price_map.get(symbol)
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", side_effect=mock_price):
+            return engine_journal.settle_due_trade_outcomes(as_of=as_of)
+
+    # ------------------------------------------------------------------
+    # Settlement correctness
+    # ------------------------------------------------------------------
+
+    def test_settle_resolves_pending_checkpoint(self):
+        """settle_due_trade_outcomes must flip status to 'resolved' for due rows."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(due_at="2025-01-10")
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        self.assertEqual(result["settled"], 1)
+        self.assertEqual(result["errors"], 0)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "resolved")
+
+    def test_settle_additive_decomposition_with_sector_coverage(self):
+        """Beta + Sector + Timing must sum to actual_return_pct when sector coverage exists."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=10000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=200.0,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=1,
+        )
+
+        # AAPL: 100→110 = 10% actual
+        # SPY:  500→510 = 2% benchmark  → beta_component = 1.2*2.0 = 2.4%
+        # XLK:  200→204 = 2% sector     → sector_component = 2.0-2.4 = -0.4%
+        #                                  timing_component = 10.0-2.0 = 8.0%
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+
+        actual = row["actual_return_pct"]
+        beta = row["beta_component_pct"]
+        sector = row["sector_component_pct"]
+        timing = row["timing_component_pct"]
+
+        self.assertAlmostEqual(actual, 10.0, places=6, msg="actual_return_pct must be 10%")
+        self.assertAlmostEqual(beta, 2.4, places=6, msg="beta_component_pct = 1.2*2.0 = 2.4%")
+        self.assertAlmostEqual(sector, -0.4, places=6, msg="sector_component_pct = sector_return - beta")
+        self.assertAlmostEqual(timing, 8.0, places=6, msg="timing_component_pct = actual - sector_return")
+        self.assertAlmostEqual(
+            beta + sector + timing, actual, places=6,
+            msg="beta + sector + timing must sum to actual_return_pct",
+        )
+
+    def test_settle_additive_decomposition_without_sector_coverage(self):
+        """When sector_coverage=0, sector=0 and timing=actual-beta; sum still equals actual."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=10000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=None,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=0,
+        )
+
+        # AAPL: 100→110 = 10%
+        # SPY:  500→510 = 2% → beta = 1.2*2.0 = 2.4%
+        # sector_component = 0, timing = 10.0-2.4 = 7.6%
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0},
+        )
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+
+        actual = row["actual_return_pct"]
+        beta = row["beta_component_pct"]
+        sector = row["sector_component_pct"]
+        timing = row["timing_component_pct"]
+
+        self.assertAlmostEqual(actual, 10.0, places=6)
+        self.assertAlmostEqual(beta, 2.4, places=6)
+        self.assertAlmostEqual(sector, 0.0, places=6, msg="sector_component_pct must be 0 with no sector coverage")
+        self.assertAlmostEqual(timing, 7.6, places=6)
+        self.assertAlmostEqual(beta + sector + timing, actual, places=6,
+                               msg="beta + sector + timing must equal actual")
+
+    def test_settle_twd_components_scale_by_notional(self):
+        """TWD components must equal pct/100 * entry_notional_twd."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=50000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=200.0,
+            beta_proxy_at_entry=1.0,
+            beta_coverage=1,
+            sector_coverage=1,
+        )
+
+        # AAPL: 100→105 = 5%
+        # SPY:  500→510 = 2%  → beta = 1.0*2 = 2%
+        # XLK:  200→204 = 2%  → sector = 0%, timing = 3%
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 105.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+
+        notional = 50000.0
+        self.assertAlmostEqual(row["beta_component_twd"], 2.0 / 100 * notional, places=2)
+        self.assertAlmostEqual(row["sector_component_twd"], 0.0 / 100 * notional, places=2)
+        self.assertAlmostEqual(row["timing_component_twd"], 3.0 / 100 * notional, places=2)
+
+    def test_settle_skips_row_not_yet_due(self):
+        """Checkpoints with due_at after as_of must not be settled."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(due_at="2025-02-01")  # future
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        self.assertEqual(result["settled"], 0)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status FROM trade_outcome_checkpoints LIMIT 1")
+        self.assertEqual(cur.fetchone()["status"], "pending")
+
+    def test_settle_missing_resolved_price_counts_as_error(self):
+        """When the resolved price is unavailable, the row must not be updated to resolved."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(due_at="2025-01-10")
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={},  # no prices available
+        )
+
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(result["errors"], 1)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status, retry_count FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+        self.assertNotEqual(row["status"], "resolved")
+        self.assertGreater(row["retry_count"], 0)
+
+    # ------------------------------------------------------------------
+    # Weekly report
+    # ------------------------------------------------------------------
+
+    def test_weekly_report_includes_attribution_keywords(self):
+        """get_trade_journal_weekly_report must mention Beta, Sector, Timing, Coverage."""
+        self._init_db()
+        from datetime import date
+
+        # Seed and settle one checkpoint so the report has data.
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=10000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=200.0,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=1,
+        )
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        import engine_journal
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn):
+            report_str = engine_journal.get_trade_journal_weekly_report()
+
+        for keyword in ("Beta", "Sector", "Timing", "Coverage"):
+            self.assertIn(keyword, report_str, f"Report must mention '{keyword}'")
+
+    def test_weekly_report_resolved_count(self):
+        """build_weekly_attribution_report must return the count of resolved checkpoints."""
+        self._init_db()
+        from datetime import date
+
+        self._insert_checkpoint(due_at="2025-01-10")
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        import engine_journal
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn):
+            report = engine_journal.build_weekly_attribution_report(as_of=date.today())
+
+        self.assertGreaterEqual(report["resolved_checkpoints"], 1,
+                                "Report must count at least the one resolved checkpoint")
+
+
 if __name__ == "__main__":
     unittest.main()
