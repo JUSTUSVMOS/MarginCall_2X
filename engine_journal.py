@@ -113,7 +113,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
         try:
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT id, symbol, action, price, timestamp, decision_snapshot"
+                f"SELECT id, symbol, action, price, shares, timestamp, decision_snapshot"
                 f" FROM trade_log WHERE id IN ({placeholders})",
                 trade_log_ids,
             )
@@ -125,8 +125,11 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
     work_items = []
     for row in rows:
         trade_id, symbol, action, entry_price = row[0], row[1], row[2], row[3]
-        trade_ts = row[4]
-        decision_snapshot_raw = row[5] if len(row) > 5 else None
+        shares = row[4] or 0
+        trade_ts = row[5]
+        decision_snapshot_raw = row[6] if len(row) > 6 else None
+
+        entry_notional_twd = float(entry_price * shares)
 
         if action not in ELIGIBLE_TRADE_ACTIONS:
             continue
@@ -161,7 +164,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
         sector_entry = _load_price_on_or_after(sector_sym, trade_date)
 
         work_items.append(
-            (trade_id, symbol, action, entry_price, trade_ts, trade_date,
+            (trade_id, symbol, action, entry_price, entry_notional_twd, trade_ts, trade_date,
              benchmark_sym, bmark_entry, sector_sym, sector_entry)
         )
 
@@ -170,7 +173,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            for (trade_id, symbol, action, entry_price, trade_ts, trade_date,
+            for (trade_id, symbol, action, entry_price, entry_notional_twd, trade_ts, trade_date,
                  benchmark_sym, bmark_entry, sector_sym, sector_entry) in work_items:
                 for label, bdays in CHECKPOINT_HORIZONS:
                     due_date = _add_business_days(trade_date, bdays)
@@ -178,9 +181,10 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
                         """
                         INSERT OR IGNORE INTO trade_outcome_checkpoints
                             (trade_log_id, horizon_label, symbol, action, entry_price,
-                             entry_timestamp, due_at, benchmark_symbol, benchmark_entry_price,
+                             entry_notional_twd, entry_timestamp, due_at,
+                             benchmark_symbol, benchmark_entry_price,
                              sector_proxy_symbol, sector_entry_price)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             trade_id,
@@ -188,6 +192,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
                             symbol,
                             action,
                             entry_price,
+                            entry_notional_twd,
                             trade_ts or "",
                             due_date.isoformat(),
                             benchmark_sym,

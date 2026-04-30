@@ -104,9 +104,9 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
         cur.execute(
             """
             INSERT INTO trade_outcome_checkpoints
-                (trade_log_id, horizon_label, symbol, action, entry_price, due_at,
-                 benchmark_symbol, sector_proxy_symbol)
-            VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, '2025-01-10', 'SPY', 'XLK')
+                (trade_log_id, horizon_label, symbol, action, entry_price, entry_notional_twd,
+                 due_at, benchmark_symbol, sector_proxy_symbol)
+            VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, 1500.0, '2025-01-10', 'SPY', 'XLK')
             """
         )
         self.conn.commit()
@@ -115,9 +115,9 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
             cur.execute(
                 """
                 INSERT INTO trade_outcome_checkpoints
-                    (trade_log_id, horizon_label, symbol, action, entry_price, due_at,
-                     benchmark_symbol, sector_proxy_symbol)
-                VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, '2025-01-10', 'SPY', 'XLK')
+                    (trade_log_id, horizon_label, symbol, action, entry_price, entry_notional_twd,
+                     due_at, benchmark_symbol, sector_proxy_symbol)
+                VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, 1500.0, '2025-01-10', 'SPY', 'XLK')
                 """
             )
 
