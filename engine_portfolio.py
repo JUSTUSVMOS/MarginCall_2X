@@ -2896,7 +2896,8 @@ def execute_position_update(
                         note=trade_note,
                         decision_snapshot=entry_decision_snapshot,
                     )
-                    pending_trade_journal_ids.append(trade_log_id)
+                    if not is_cash:
+                        pending_trade_journal_ids.append(trade_log_id)
                     if persisted_trade_plan:
                         _upsert_trade_plan_locked(
                             cursor,
