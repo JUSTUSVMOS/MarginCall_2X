@@ -540,6 +540,144 @@ class TradeJournalEntryFlowTests(unittest.TestCase):
 
         self.assertEqual(result, expected)
 
+    def test_build_trade_decision_snapshot_risk_keys_always_present(self):
+        """risk_state and risk_score must be present even when engine_risk import fails."""
+        import sys
+        import engine_portfolio
+        import engine_market as market
+
+        profile = {"sector": "Technology", "industry": "Software"}
+        with patch.object(market, "get_asset_profile", return_value=profile), \
+             patch.object(engine_portfolio, "_resolve_sync_lookup_symbol", return_value="AAPL"), \
+             patch.object(engine_portfolio, "_select_sector_proxy", return_value="XLK"), \
+             patch.object(engine_portfolio, "_fetch_sync_nlp_payload", return_value={
+                 "nlp_alpha": None, "alpha_macro": None, "alpha_retail": None, "alpha_sec": None,
+             }), \
+             patch.object(engine_portfolio, "_estimate_entry_beta_proxy", return_value=None), \
+             patch.dict(sys.modules, {"engine_risk": None}):
+            snapshot = engine_portfolio._build_trade_decision_snapshot("AAPL")
+
+        self.assertIn("risk_state", snapshot, "risk_state must always be present in snapshot")
+        self.assertIn("risk_score", snapshot, "risk_score must always be present in snapshot")
+        self.assertIsNone(snapshot["risk_state"], "risk_state must be None when import fails")
+        self.assertIsNone(snapshot["risk_score"], "risk_score must be None when import fails")
+
+    def test_sync_buy_new_position_stores_nonnull_entry_notional_twd(self):
+        """sync_buy (new broker position) must persist concrete entry_notional_twd in decision_snapshot."""
+        import json
+        import engine_portfolio
+        import engine_journal
+        import fubon
+
+        self._init_db()
+
+        # Simulate _build_sync_decision_snapshot returning null entry_notional_twd (pre-fix state).
+        mock_snapshot_null = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": None,
+            "nlp_alpha": 0.4,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.1,
+            "alpha_sec": 0.2,
+            "risk_state": None,
+            "risk_score": None,
+        }
+        account_snap = {
+            "success": True,
+            "inventories": {"2330": {"shares": 500.0, "cost": 100.0}},
+            "cash_twd": None,
+        }
+
+        with patch.object(fubon, "fubon_ready", True), \
+             patch.object(fubon, "get_fubon_account_snapshot", return_value=account_snap), \
+             patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_sync_decision_snapshot",
+                          return_value=mock_snapshot_null), \
+             patch.object(engine_portfolio, "_record_trade_followup", MagicMock()), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", MagicMock()):
+            engine_portfolio.sync_fubon_portfolio_state(source="test")
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT decision_snapshot FROM trade_log WHERE action = 'sync_buy' LIMIT 1")
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected a sync_buy trade_log row")
+        snap = json.loads(row[0])
+        self.assertIsNotNone(
+            snap.get("entry_notional_twd"),
+            "entry_notional_twd must not be null in persisted decision_snapshot",
+        )
+        # fb_cost=100.0, fb_shares=500.0 → 50000.0
+        self.assertAlmostEqual(snap["entry_notional_twd"], 50000.0)
+
+    def test_sync_buy_share_increase_stores_nonnull_entry_notional_twd(self):
+        """sync_buy (share increase) must persist concrete entry_notional_twd in decision_snapshot."""
+        import json
+        import engine_portfolio
+        import engine_journal
+        import fubon
+
+        self._init_db()
+
+        # Pre-populate a position with 200 shares at avg cost 90.
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("2330", 90.0, 200.0, 18000.0, 0),
+        )
+        self.conn.commit()
+
+        mock_snapshot_null = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": None,
+            "nlp_alpha": 0.4,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.1,
+            "alpha_sec": 0.2,
+            "risk_state": None,
+            "risk_score": None,
+        }
+        # Broker reports 500 shares at avg cost 100 → 300 added shares
+        # old_total=200*90=18000, new_total=500*100=50000, inferred_price=(50000-18000)/300≈106.67
+        account_snap = {
+            "success": True,
+            "inventories": {"2330": {"shares": 500.0, "cost": 100.0}},
+            "cash_twd": None,
+        }
+        expected_notional = round((500 * 100 - 200 * 90) / 300 * 300, 2)  # inferred_price * added
+
+        with patch.object(fubon, "fubon_ready", True), \
+             patch.object(fubon, "get_fubon_account_snapshot", return_value=account_snap), \
+             patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_sync_decision_snapshot",
+                          return_value=mock_snapshot_null), \
+             patch.object(engine_portfolio, "_record_trade_followup", MagicMock()), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", MagicMock()):
+            engine_portfolio.sync_fubon_portfolio_state(source="test")
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT decision_snapshot FROM trade_log WHERE action = 'sync_buy' LIMIT 1")
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected a sync_buy trade_log row for share increase")
+        snap = json.loads(row[0])
+        self.assertIsNotNone(
+            snap.get("entry_notional_twd"),
+            "entry_notional_twd must not be null in persisted decision_snapshot for share increase",
+        )
+        self.assertAlmostEqual(snap["entry_notional_twd"], expected_notional, places=2)
+
     # ------------------------------------------------------------------
     # Integration tests: execute_position_update enqueue behavior
     # ------------------------------------------------------------------

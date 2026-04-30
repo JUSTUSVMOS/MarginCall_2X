@@ -2105,6 +2105,8 @@ def _build_trade_decision_snapshot(
         "alpha_retail": nlp_payload.get("alpha_retail"),
         "alpha_sec": nlp_payload.get("alpha_sec"),
     }
+    snapshot["risk_state"] = None
+    snapshot["risk_score"] = None
     try:
         import engine_risk as risk_engine
 
@@ -2188,6 +2190,8 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
 
                 if old_pos is None:
                     if fb_shares > 0:
+                        _raw_snap = decision_cache.get(normalize_ticker(normalized))
+                        _snap = {**_raw_snap, "entry_notional_twd": round(fb_cost * fb_shares, 2)} if _raw_snap else _raw_snap
                         trade_log_id = _record_trade_log(
                             cursor,
                             symbol=normalized,
@@ -2195,7 +2199,7 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
                             price=fb_cost,
                             shares=fb_shares,
                             note=f"[auto sync:{source}] new broker position detected.",
-                            decision_snapshot=decision_cache.get(normalize_ticker(normalized)),
+                            decision_snapshot=_snap,
                         )
                         pending_trade_journal_ids.append(trade_log_id)
                         if source != "portfolio_query":
@@ -2229,6 +2233,8 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
                     inferred_price = (new_total - old_total) / added if added > 0 else fb_cost
                     if inferred_price <= 0:
                         inferred_price = fb_cost
+                    _raw_snap = decision_cache.get(normalize_ticker(db_symbol))
+                    _snap = {**_raw_snap, "entry_notional_twd": round(inferred_price * added, 2)} if _raw_snap else _raw_snap
                     trade_log_id = _record_trade_log(
                         cursor,
                         symbol=db_symbol,
@@ -2239,7 +2245,7 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
                             f"[auto sync:{source}] broker sync inferred average add "
                             f"(old_avg={old_cost:.4f} -> new_avg={fb_cost:.4f})."
                         ),
-                        decision_snapshot=decision_cache.get(normalize_ticker(db_symbol)),
+                        decision_snapshot=_snap,
                     )
                     pending_trade_journal_ids.append(trade_log_id)
                     if source != "portfolio_query":
