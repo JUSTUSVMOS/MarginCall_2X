@@ -179,6 +179,24 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.add_job(daily_nlp_scout, "interval", hours=4, id="daily-nlp-scout", replace_existing=True)
+    scheduler.add_job(
+        trade_journal_checkpoint_job,
+        "cron",
+        day_of_week="tue-sat",
+        hour=7,
+        minute=15,
+        id="trade-journal-settlement",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        weekly_trade_journal_job,
+        "cron",
+        day_of_week="sun",
+        hour=18,
+        minute=0,
+        id="weekly-trade-journal",
+        replace_existing=True,
+    )
     scheduler.start()
 
     _scheduler = scheduler
@@ -211,3 +229,46 @@ def trade_plan_audit_job():
 def morning_briefing_push():
     from src import bot as bot_runtime
     bot_runtime.send_morning_briefing()
+
+
+def trade_journal_checkpoint_job():
+    """Settle due T+5 / T+20 trade outcome checkpoints."""
+    try:
+        import engine_journal as journal
+
+        result = journal.settle_due_trade_outcomes()
+        logger.info("🧾 [TradeJournal] settled=%s errors=%s", result.get("settled"), result.get("errors"))
+        return result
+    except Exception as exc:
+        logger.error(f"Trade journal checkpoint job failed: {exc}")
+        return None
+
+
+def weekly_trade_journal_job():
+    """Build the weekly attribution report and push it through the bot if available."""
+    try:
+        import engine_journal as journal
+
+        report = journal.build_weekly_attribution_report()
+        logger.info(
+            "📊 [WeeklyTradeJournal] as_of=%s resolved=%s",
+            report.get("as_of"),
+            report.get("resolved_checkpoints"),
+        )
+        if _bot_instance and _user_id:
+            n = report["resolved_checkpoints"]
+            lines = [
+                f"📊 Weekly Attribution Report (as of {report['as_of']})",
+                f"Resolved checkpoints: {n}",
+                f"Avg actual return:   {report['avg_actual_return_pct']:.2f}%",
+                f"Beta component avg:   {report['avg_beta_component_pct']:.2f}%"
+                f"  (Beta coverage: {report['beta_coverage_count']}/{n})",
+                f"Sector component avg: {report['avg_sector_component_pct']:.2f}%"
+                f"  (Sector coverage: {report['sector_coverage_count']}/{n})",
+                f"Timing component avg: {report['avg_timing_component_pct']:.2f}%",
+            ]
+            _bot_instance.send_message(_user_id, "\n".join(lines))
+        return report
+    except Exception as exc:
+        logger.error(f"Weekly trade journal job failed: {exc}")
+        return None

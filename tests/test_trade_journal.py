@@ -1,0 +1,1291 @@
+"""
+Tracked tests for trade_outcome_checkpoints schema and enqueue scaffold.
+
+These tests use an isolated file-based SQLite DB (created per test, deleted in tearDown)
+and patch get_connection / db_lock so they remain independent from the live portfolio.db.
+
+init_db() calls conn.close() internally, so each patched get_connection call returns a
+fresh connection to the same file, keeping init_db's lifecycle separate from the test's
+own reader connection (self.conn).
+"""
+
+import os
+import sqlite3
+import unittest
+from unittest.mock import MagicMock, patch
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        """Return a fresh connection to the test DB file each time (init_db closes it)."""
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init_portfolio_db(self):
+        import engine_portfolio
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+    def test_trade_outcome_checkpoints_table_created(self):
+        """init_db() must create the trade_outcome_checkpoints table."""
+        self._init_portfolio_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='trade_outcome_checkpoints'"
+        )
+        self.assertIsNotNone(
+            cur.fetchone(),
+            "trade_outcome_checkpoints table should exist after init_db()",
+        )
+
+    def test_trade_outcome_checkpoints_has_required_columns(self):
+        """trade_outcome_checkpoints must include all plan-aligned columns."""
+        self._init_portfolio_db()
+
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(trade_outcome_checkpoints)")
+        cols = {row["name"] for row in cur.fetchall()}
+
+        for required in (
+            "id",
+            "trade_log_id",
+            "horizon_label",
+            "symbol",
+            "action",
+            "entry_price",
+            "entry_timestamp",
+            "entry_notional_twd",
+            "due_at",
+            "benchmark_symbol",
+            "benchmark_entry_price",
+            "sector_proxy_symbol",
+            "sector_entry_price",
+            "beta_proxy_at_entry",
+            "beta_coverage",
+            "sector_coverage",
+            "resolved_price",
+            "benchmark_return_pct",
+            "sector_return_pct",
+            "actual_return_pct",
+            "beta_component_pct",
+            "sector_component_pct",
+            "timing_component_pct",
+            "beta_component_twd",
+            "sector_component_twd",
+            "timing_component_twd",
+            "last_error",
+            "retry_count",
+            "status",
+            "resolved_at",
+            "created_at",
+        ):
+            self.assertIn(required, cols, f"Column '{required}' is missing")
+
+    def test_unique_index_on_trade_log_id_horizon(self):
+        """A unique constraint on (trade_log_id, horizon_label) must be enforced."""
+        self._init_portfolio_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO trade_outcome_checkpoints
+                (trade_log_id, horizon_label, symbol, action, entry_price, entry_notional_twd,
+                 due_at, benchmark_symbol, sector_proxy_symbol)
+            VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, 1500.0, '2025-01-10', 'SPY', 'XLK')
+            """
+        )
+        self.conn.commit()
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            cur.execute(
+                """
+                INSERT INTO trade_outcome_checkpoints
+                    (trade_log_id, horizon_label, symbol, action, entry_price, entry_notional_twd,
+                     due_at, benchmark_symbol, sector_proxy_symbol)
+                VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, 1500.0, '2025-01-10', 'SPY', 'XLK')
+                """
+            )
+
+
+class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init_db_and_insert_trade(self, action="buy", symbol="AAPL", price=150.0,
+                                   timestamp=None, decision_snapshot=None):
+        import engine_portfolio
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+        import json as _json
+        snap_str = _json.dumps(decision_snapshot) if decision_snapshot is not None else None
+
+        cur = self.conn.cursor()
+        if timestamp is not None:
+            cur.execute(
+                "INSERT INTO trade_log (symbol, action, price, shares, timestamp, decision_snapshot)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (symbol, action, price, 10, timestamp, snap_str),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO trade_log (symbol, action, price, shares, decision_snapshot)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (symbol, action, price, 10, snap_str),
+            )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def _enqueue(self, trade_log_ids, mock_price=155.0):
+        import engine_journal
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", return_value=mock_price), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            return engine_journal.enqueue_trade_outcome_checkpoints(trade_log_ids)
+
+    def test_buy_creates_t5_and_t20_checkpoints(self):
+        """Enqueueing a buy trade must create exactly T+5 and T+20 rows."""
+        trade_id = self._init_db_and_insert_trade(action="buy")
+        result = self._enqueue([trade_id])
+
+        self.assertEqual(result, {"created": 2}, "Return value must be {'created': 2}")
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM trade_outcome_checkpoints WHERE trade_log_id = ?",
+            (trade_id,),
+        )
+        rows = cur.fetchall()
+
+        self.assertEqual(len(rows), 2, "Expected exactly 2 checkpoint rows for a buy trade")
+        labels = {row["horizon_label"] for row in rows}
+        self.assertEqual(labels, {"T+5", "T+20"})
+
+    def test_checkpoint_rows_have_benchmark_and_sector(self):
+        """Each checkpoint row must carry non-NULL benchmark and sector symbols/prices."""
+        trade_id = self._init_db_and_insert_trade(action="buy")
+        self._enqueue([trade_id], mock_price=200.0)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM trade_outcome_checkpoints WHERE trade_log_id = ?",
+            (trade_id,),
+        )
+        for row in cur.fetchall():
+            self.assertIsNotNone(row["benchmark_symbol"], "benchmark_symbol must not be NULL")
+            self.assertIsNotNone(row["benchmark_entry_price"], "benchmark_entry_price must not be NULL")
+            self.assertIsNotNone(row["sector_proxy_symbol"], "sector_proxy_symbol must not be NULL")
+            self.assertIsNotNone(row["sector_entry_price"], "sector_entry_price must not be NULL")
+
+    def test_sync_buy_creates_checkpoints(self):
+        """sync_buy is also an eligible action and must produce checkpoints."""
+        trade_id = self._init_db_and_insert_trade(action="sync_buy")
+        self._enqueue([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT count(*) as cnt FROM trade_outcome_checkpoints WHERE trade_log_id = ?",
+            (trade_id,),
+        )
+        self.assertEqual(cur.fetchone()["cnt"], 2)
+
+    def test_sell_action_skipped(self):
+        """sell is not eligible; enqueueing it must produce zero checkpoint rows."""
+        trade_id = self._init_db_and_insert_trade(action="sell")
+        self._enqueue([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT count(*) as cnt FROM trade_outcome_checkpoints WHERE trade_log_id = ?",
+            (trade_id,),
+        )
+        self.assertEqual(cur.fetchone()["cnt"], 0)
+
+    def test_enqueue_idempotent_for_duplicate_call(self):
+        """Calling enqueue twice for the same trade must not duplicate rows."""
+        trade_id = self._init_db_and_insert_trade(action="buy")
+        self._enqueue([trade_id])
+        self._enqueue([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT count(*) as cnt FROM trade_outcome_checkpoints WHERE trade_log_id = ?",
+            (trade_id,),
+        )
+        self.assertEqual(cur.fetchone()["cnt"], 2, "Duplicate enqueue must remain idempotent")
+
+    def test_empty_list_is_noop(self):
+        """Passing an empty list must not raise, must return {'created': 0}, and leave the table empty."""
+        self._init_db_and_insert_trade(action="buy")
+        result = self._enqueue([])
+
+        self.assertEqual(result, {"created": 0})
+        cur = self.conn.cursor()
+        cur.execute("SELECT count(*) as cnt FROM trade_outcome_checkpoints")
+        self.assertEqual(cur.fetchone()["cnt"], 0)
+
+    def test_due_at_anchored_to_trade_timestamp_not_enqueue_time(self):
+        """due_at must be computed from the trade's own timestamp, not from enqueue time.
+
+        Trade date: 2025-01-06 (Monday)
+          T+5  business days → 2025-01-13 (Mon: 7,8,9,10,13)
+          T+20 business days → 2025-02-03 (Mon: skips only weekends, not holidays)
+        """
+        trade_id = self._init_db_and_insert_trade(
+            action="buy", timestamp="2025-01-06T12:00:00Z"
+        )
+        self._enqueue([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT horizon_label, due_at FROM trade_outcome_checkpoints"
+            " WHERE trade_log_id = ? ORDER BY horizon_label",
+            (trade_id,),
+        )
+        rows = {row["horizon_label"]: row["due_at"] for row in cur.fetchall()}
+
+        self.assertEqual(rows.get("T+5"), "2025-01-13",
+                         "T+5 due_at must be anchored to trade date, not enqueue date")
+        self.assertEqual(rows.get("T+20"), "2025-02-03",
+                         "T+20 due_at must be anchored to trade date, not enqueue date")
+
+    def test_snapshot_fields_propagated_to_checkpoints(self):
+        """entry_notional_twd, beta_proxy_at_entry, beta_coverage, sector_coverage,
+        and benchmark_symbol must be read from decision_snapshot when present.
+        """
+        import engine_journal
+
+        snap = {
+            "entry_notional_twd": 45000.0,
+            "beta_proxy_at_entry": 1.25,
+            "benchmark_symbol": "QQQ",
+            "sector_proxy_symbol": "XLK",
+        }
+        trade_id = self._init_db_and_insert_trade(
+            action="buy",
+            price=150.0,
+            timestamp="2025-01-06T12:00:00Z",
+            decision_snapshot=snap,
+        )
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", return_value=155.0), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            engine_journal.enqueue_trade_outcome_checkpoints([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM trade_outcome_checkpoints WHERE trade_log_id = ? LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected at least one checkpoint row")
+
+        self.assertAlmostEqual(row["entry_notional_twd"], 45000.0,
+                               msg="entry_notional_twd must come from snapshot, not price×shares")
+        self.assertAlmostEqual(row["beta_proxy_at_entry"], 1.25,
+                               msg="beta_proxy_at_entry must come from snapshot")
+        self.assertEqual(row["beta_coverage"], 1,
+                         msg="beta_coverage must be 1 when beta_proxy_at_entry is present")
+        self.assertEqual(row["sector_coverage"], 1,
+                         msg="sector_coverage must be 1 when sector_entry_price is present")
+        self.assertEqual(row["benchmark_symbol"], "QQQ",
+                         msg="benchmark_symbol must come from snapshot, not default SPY")
+
+    def test_snapshot_absent_falls_back_to_defaults(self):
+        """Without a decision_snapshot, entry_notional_twd = price×shares, beta_coverage = 0,
+        and benchmark_symbol = _DEFAULT_BENCHMARK.
+        """
+        import engine_journal
+
+        trade_id = self._init_db_and_insert_trade(action="buy", price=150.0)
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", return_value=155.0), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            engine_journal.enqueue_trade_outcome_checkpoints([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM trade_outcome_checkpoints WHERE trade_log_id = ? LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected at least one checkpoint row")
+
+        self.assertAlmostEqual(row["entry_notional_twd"], 150.0 * 10,
+                               msg="entry_notional_twd must fall back to price×shares")
+        self.assertIsNone(row["beta_proxy_at_entry"],
+                          msg="beta_proxy_at_entry must be None when absent from snapshot")
+        self.assertEqual(row["beta_coverage"], 0,
+                         msg="beta_coverage must be 0 when beta_proxy_at_entry is absent")
+        self.assertEqual(row["benchmark_symbol"], engine_journal._DEFAULT_BENCHMARK,
+                         msg="benchmark_symbol must fall back to _DEFAULT_BENCHMARK")
+
+
+class TestSectorCoverageWhenPriceNone(unittest.TestCase):
+    """sector_coverage must be 0 when the sector price fetch returns None."""
+
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def test_sector_coverage_zero_when_sector_price_none(self):
+        """When _load_price_on_or_after returns None for the sector proxy, sector_coverage must be 0."""
+        import engine_journal
+        import engine_portfolio
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
+            ("AAPL", "buy", 150.0, 10),
+        )
+        self.conn.commit()
+        trade_id = cur.lastrowid
+
+        def price_side_effect(symbol, *args, **kwargs):
+            if symbol == "XLK":
+                return None  # sector price unavailable
+            return 200.0  # benchmark and entry prices succeed
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", side_effect=price_side_effect), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            engine_journal.enqueue_trade_outcome_checkpoints([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT sector_coverage FROM trade_outcome_checkpoints WHERE trade_log_id = ? LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected at least one checkpoint row")
+        self.assertEqual(row["sector_coverage"], 0,
+                         "sector_coverage must be 0 when sector price fetch returns None")
+
+
+class TradeJournalEntryFlowTests(unittest.TestCase):
+    """Tests for snapshot enrichment and post-commit journal enqueueing (Task 2)."""
+
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init_db(self):
+        import engine_portfolio
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+    # ------------------------------------------------------------------
+    # Unit tests: new helper functions
+    # ------------------------------------------------------------------
+
+    def test_fetch_sync_nlp_payload_maps_alpha_sec(self):
+        """_fetch_sync_nlp_payload must map alpha_official → alpha_sec."""
+        import engine_portfolio
+        import engine_router
+
+        with patch.object(engine_router, "fetch_nlp_alpha", return_value={
+            "nlp_alpha": 0.5,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.2,
+            "alpha_official": 0.3,
+        }):
+            result = engine_portfolio._fetch_sync_nlp_payload("AAPL", "AAPL")
+
+        self.assertAlmostEqual(result["nlp_alpha"], 0.5)
+        self.assertAlmostEqual(result["alpha_macro"], 0.1)
+        self.assertAlmostEqual(result["alpha_retail"], 0.2)
+        self.assertAlmostEqual(result["alpha_sec"], 0.3)
+        self.assertNotIn("alpha_official", result, "alpha_official must be remapped to alpha_sec")
+
+    def test_fetch_sync_nlp_payload_returns_none_values_on_error(self):
+        """_fetch_sync_nlp_payload must return None values when fetch errors."""
+        import engine_portfolio
+        import engine_router
+
+        with patch.object(engine_router, "fetch_nlp_alpha", return_value={"error": "no data"}):
+            result = engine_portfolio._fetch_sync_nlp_payload("AAPL", "AAPL")
+
+        self.assertIsNone(result["nlp_alpha"])
+        self.assertIsNone(result["alpha_sec"])
+
+    def test_estimate_entry_beta_proxy_extracts_symbol_beta(self):
+        """_estimate_entry_beta_proxy must extract the beta for the single-symbol portfolio."""
+        import engine_portfolio
+
+        attribution = {
+            "positions": {"AAPL": {"beta": 1.2, "weight": 1.0}},
+            "portfolio_beta": 1.2,
+        }
+        with patch.object(engine_portfolio, "compute_portfolio_beta_attribution",
+                          return_value=attribution):
+            beta = engine_portfolio._estimate_entry_beta_proxy("AAPL")
+
+        self.assertAlmostEqual(beta, 1.2)
+
+    def test_estimate_entry_beta_proxy_returns_none_on_error(self):
+        """_estimate_entry_beta_proxy must return None when attribution fails."""
+        import engine_portfolio
+
+        with patch.object(engine_portfolio, "compute_portfolio_beta_attribution",
+                          return_value={"error": "no data"}):
+            beta = engine_portfolio._estimate_entry_beta_proxy("AAPL")
+
+        self.assertIsNone(beta)
+
+    def test_build_trade_decision_snapshot_has_required_keys(self):
+        """_build_trade_decision_snapshot must capture all plan-aligned fields."""
+        import engine_portfolio
+        import engine_market as market
+
+        profile = {"sector": "Technology", "industry": "Software"}
+        with patch.object(market, "get_asset_profile", return_value=profile), \
+             patch.object(engine_portfolio, "_resolve_sync_lookup_symbol", return_value="AAPL"), \
+             patch.object(engine_portfolio, "_select_sector_proxy", return_value="XLK"), \
+             patch.object(engine_portfolio, "_fetch_sync_nlp_payload", return_value={
+                 "nlp_alpha": 0.5, "alpha_macro": 0.1,
+                 "alpha_retail": 0.2, "alpha_sec": 0.3,
+             }), \
+             patch.object(engine_portfolio, "_estimate_entry_beta_proxy", return_value=1.1):
+            snapshot = engine_portfolio._build_trade_decision_snapshot(
+                "AAPL", entry_notional_twd=10000.0
+            )
+
+        for key in (
+            "captured_at", "symbol", "lookup_symbol", "sector", "industry",
+            "benchmark_symbol", "sector_proxy_symbol", "beta_proxy_period",
+            "beta_proxy_at_entry", "entry_notional_twd",
+            "nlp_alpha", "alpha_macro", "alpha_retail", "alpha_sec",
+        ):
+            self.assertIn(key, snapshot, f"Key '{key}' missing from snapshot")
+
+        self.assertEqual(snapshot["benchmark_symbol"], "SPY")
+        self.assertEqual(snapshot["beta_proxy_period"], "6mo")
+        self.assertAlmostEqual(snapshot["entry_notional_twd"], 10000.0)
+        self.assertAlmostEqual(snapshot["beta_proxy_at_entry"], 1.1)
+
+    def test_build_sync_decision_snapshot_delegates_to_trade_snapshot(self):
+        """_build_sync_decision_snapshot must delegate to _build_trade_decision_snapshot."""
+        import engine_portfolio
+
+        expected = {"symbol": "AAPL", "captured_at": "now"}
+        with patch.object(engine_portfolio, "_build_trade_decision_snapshot",
+                          return_value=expected) as mock_build:
+            result = engine_portfolio._build_sync_decision_snapshot("AAPL")
+            mock_build.assert_called_once_with("AAPL")
+
+        self.assertEqual(result, expected)
+
+    def test_build_trade_decision_snapshot_risk_keys_always_present(self):
+        """risk_state and risk_score must be present even when engine_risk import fails."""
+        import sys
+        import engine_portfolio
+        import engine_market as market
+
+        profile = {"sector": "Technology", "industry": "Software"}
+        with patch.object(market, "get_asset_profile", return_value=profile), \
+             patch.object(engine_portfolio, "_resolve_sync_lookup_symbol", return_value="AAPL"), \
+             patch.object(engine_portfolio, "_select_sector_proxy", return_value="XLK"), \
+             patch.object(engine_portfolio, "_fetch_sync_nlp_payload", return_value={
+                 "nlp_alpha": None, "alpha_macro": None, "alpha_retail": None, "alpha_sec": None,
+             }), \
+             patch.object(engine_portfolio, "_estimate_entry_beta_proxy", return_value=None), \
+             patch.dict(sys.modules, {"engine_risk": None}):
+            snapshot = engine_portfolio._build_trade_decision_snapshot("AAPL")
+
+        self.assertIn("risk_state", snapshot, "risk_state must always be present in snapshot")
+        self.assertIn("risk_score", snapshot, "risk_score must always be present in snapshot")
+        self.assertIsNone(snapshot["risk_state"], "risk_state must be None when import fails")
+        self.assertIsNone(snapshot["risk_score"], "risk_score must be None when import fails")
+
+    def test_sync_buy_new_position_stores_nonnull_entry_notional_twd(self):
+        """sync_buy (new broker position) must persist concrete entry_notional_twd in decision_snapshot."""
+        import json
+        import engine_portfolio
+        import engine_journal
+        import fubon
+
+        self._init_db()
+
+        # Simulate _build_sync_decision_snapshot returning null entry_notional_twd (pre-fix state).
+        mock_snapshot_null = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": None,
+            "nlp_alpha": 0.4,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.1,
+            "alpha_sec": 0.2,
+            "risk_state": None,
+            "risk_score": None,
+        }
+        account_snap = {
+            "success": True,
+            "inventories": {"2330": {"shares": 500.0, "cost": 100.0}},
+            "cash_twd": None,
+        }
+
+        with patch.object(fubon, "fubon_ready", True), \
+             patch.object(fubon, "get_fubon_account_snapshot", return_value=account_snap), \
+             patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_sync_decision_snapshot",
+                          return_value=mock_snapshot_null), \
+             patch.object(engine_portfolio, "_record_trade_followup", MagicMock()), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", MagicMock()):
+            engine_portfolio.sync_fubon_portfolio_state(source="test")
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT decision_snapshot FROM trade_log WHERE action = 'sync_buy' LIMIT 1")
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected a sync_buy trade_log row")
+        snap = json.loads(row[0])
+        self.assertIsNotNone(
+            snap.get("entry_notional_twd"),
+            "entry_notional_twd must not be null in persisted decision_snapshot",
+        )
+        # fb_cost=100.0, fb_shares=500.0 → 50000.0
+        self.assertAlmostEqual(snap["entry_notional_twd"], 50000.0)
+
+    def test_sync_buy_share_increase_stores_nonnull_entry_notional_twd(self):
+        """sync_buy (share increase) must persist concrete entry_notional_twd in decision_snapshot."""
+        import json
+        import engine_portfolio
+        import engine_journal
+        import fubon
+
+        self._init_db()
+
+        # Pre-populate a position with 200 shares at avg cost 90.
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("2330", 90.0, 200.0, 18000.0, 0),
+        )
+        self.conn.commit()
+
+        mock_snapshot_null = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": None,
+            "nlp_alpha": 0.4,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.1,
+            "alpha_sec": 0.2,
+            "risk_state": None,
+            "risk_score": None,
+        }
+        # Broker reports 500 shares at avg cost 100 → 300 added shares
+        # old_total=200*90=18000, new_total=500*100=50000, inferred_price=(50000-18000)/300≈106.67
+        account_snap = {
+            "success": True,
+            "inventories": {"2330": {"shares": 500.0, "cost": 100.0}},
+            "cash_twd": None,
+        }
+        expected_notional = round((500 * 100 - 200 * 90) / 300 * 300, 2)  # inferred_price * added
+
+        with patch.object(fubon, "fubon_ready", True), \
+             patch.object(fubon, "get_fubon_account_snapshot", return_value=account_snap), \
+             patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_sync_decision_snapshot",
+                          return_value=mock_snapshot_null), \
+             patch.object(engine_portfolio, "_record_trade_followup", MagicMock()), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", MagicMock()):
+            engine_portfolio.sync_fubon_portfolio_state(source="test")
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT decision_snapshot FROM trade_log WHERE action = 'sync_buy' LIMIT 1")
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected a sync_buy trade_log row for share increase")
+        snap = json.loads(row[0])
+        self.assertIsNotNone(
+            snap.get("entry_notional_twd"),
+            "entry_notional_twd must not be null in persisted decision_snapshot for share increase",
+        )
+        self.assertAlmostEqual(snap["entry_notional_twd"], expected_notional, places=2)
+
+    # ------------------------------------------------------------------
+    # Integration tests: execute_position_update enqueue behavior
+    # ------------------------------------------------------------------
+
+    def test_execute_buy_enqueues_after_commit(self):
+        """execute_position_update buy must enqueue journal checkpoints after DB commit."""
+        import engine_portfolio
+        import engine_journal
+
+        self._init_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("CASH_TWD", 1.0, 1_000_000.0, 1_000_000.0, 0),
+        )
+        self.conn.commit()
+
+        mock_snapshot = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": 10000.0,
+            "nlp_alpha": 0.5,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.2,
+            "alpha_sec": 0.3,
+        }
+        enqueue_mock = MagicMock(return_value={"created": 2})
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_trade_decision_snapshot",
+                          return_value=mock_snapshot), \
+             patch.object(engine_portfolio, "_build_trade_plan_payload", return_value={}), \
+             patch.object(engine_portfolio, "validate_trade_plan_payload",
+                          return_value={"complete": False, "missing_fields": ["x"]}), \
+             patch.object(engine_portfolio, "_apply_pretrade_risk_gate",
+                          return_value={"allowed": True, "approved_shares": 100.0,
+                                        "approved_twd_total": 10000.0}), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.execute_position_update(
+                "2330", price=100.0, shares=100.0, action="buy",
+                enforce_pretrade_gate=False,
+            )
+
+        self.assertIn("✅", result, f"Expected success, got: {result}")
+        enqueue_mock.assert_called_once()
+        called_ids = enqueue_mock.call_args[0][0]
+        self.assertIsInstance(called_ids, list)
+        self.assertEqual(len(called_ids), 1)
+
+        # Verify enriched snapshot was stored in trade_log
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT decision_snapshot FROM trade_log WHERE action='buy' ORDER BY id DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected a buy trade_log row")
+        import json as _json
+        snap = _json.loads(row["decision_snapshot"])
+        self.assertIn("beta_proxy_at_entry", snap, "Enriched snapshot must include beta_proxy_at_entry")
+        self.assertIn("alpha_sec", snap, "Enriched snapshot must include alpha_sec")
+
+    def test_execute_sell_does_not_enqueue(self):
+        """execute_position_update sell must NOT enqueue journal checkpoints."""
+        import engine_portfolio
+        import engine_journal
+
+        self._init_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("2330", 100.0, 200.0, 20000.0, 0),
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("CASH_TWD", 1.0, 0.0, 0.0, 0),
+        )
+        self.conn.commit()
+
+        enqueue_mock = MagicMock(return_value={"created": 0})
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.execute_position_update(
+                "2330", price=100.0, shares=100.0, action="sell",
+            )
+
+        self.assertIn("✅", result, f"Expected success, got: {result}")
+        enqueue_mock.assert_not_called()
+
+    def test_cash_buy_does_not_enqueue(self):
+        """execute_position_update buy of CASH_USD must NOT enqueue journal checkpoints."""
+        import engine_portfolio
+        import engine_journal
+
+        self._init_db()
+
+        cur = self.conn.cursor()
+        # Seed enough CASH_USD balance so the buy succeeds (settle_currency == CASH_USD).
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("CASH_USD", 1.0, 100_000.0, 3_200_000.0, 0),
+        )
+        self.conn.commit()
+
+        enqueue_mock = MagicMock()
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.execute_position_update(
+                "CASH_USD", price=1.0, shares=1_000.0, action="buy",
+            )
+
+        # The buy may succeed or fail due to circular settle logic, but enqueue must never fire.
+        enqueue_mock.assert_not_called()
+
+    def test_sync_buy_enqueues_after_commit(self):
+        """sync_fubon_portfolio_state sync_buy must enqueue journal checkpoints after commit."""
+        import engine_portfolio
+        import engine_journal
+        import fubon
+
+        self._init_db()
+
+        mock_snapshot = {
+            "captured_at": "2025-01-01T00:00:00Z",
+            "symbol": "2330",
+            "benchmark_symbol": "SPY",
+            "sector_proxy_symbol": "XLK",
+            "beta_proxy_at_entry": 1.1,
+            "beta_proxy_period": "6mo",
+            "entry_notional_twd": 50000.0,
+            "nlp_alpha": 0.4,
+            "alpha_macro": 0.1,
+            "alpha_retail": 0.1,
+            "alpha_sec": 0.2,
+        }
+        account_snap = {
+            "success": True,
+            "inventories": {"2330": {"shares": 500.0, "cost": 100.0}},
+            "cash_twd": None,
+        }
+        enqueue_mock = MagicMock(return_value={"created": 2})
+
+        with patch.object(fubon, "fubon_ready", True), \
+             patch.object(fubon, "get_fubon_account_snapshot", return_value=account_snap), \
+             patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_portfolio, "_build_sync_decision_snapshot",
+                          return_value=mock_snapshot), \
+             patch.object(engine_portfolio, "_record_trade_followup", MagicMock()), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.sync_fubon_portfolio_state(source="test")
+
+        self.assertTrue(result.get("synced"), f"sync should succeed: {result}")
+        enqueue_mock.assert_called_once()
+        called_ids = enqueue_mock.call_args[0][0]
+        self.assertIsInstance(called_ids, list)
+        self.assertGreater(len(called_ids), 0, "Expected at least one sync_buy trade_log_id")
+
+
+class TradeJournalSettlementTests(unittest.TestCase):
+    """Tests for settle_due_trade_outcomes and build_weekly_attribution_report (Task 3)."""
+
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init_db(self):
+        import engine_portfolio
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+    def _insert_checkpoint(
+        self,
+        *,
+        symbol="AAPL",
+        entry_price=100.0,
+        entry_notional_twd=10000.0,
+        due_at="2025-01-10",
+        benchmark_symbol="SPY",
+        benchmark_entry_price=500.0,
+        sector_proxy_symbol="XLK",
+        sector_entry_price=200.0,
+        beta_proxy_at_entry=1.2,
+        beta_coverage=1,
+        sector_coverage=1,
+        status="pending",
+    ):
+        """Insert a checkpoint row directly and return its rowid."""
+        # Insert a dummy trade_log row to satisfy the FK reference.
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
+            (symbol, "buy", entry_price, 10),
+        )
+        trade_log_id = cur.lastrowid
+
+        cur.execute(
+            """
+            INSERT INTO trade_outcome_checkpoints
+                (trade_log_id, horizon_label, symbol, action,
+                 entry_price, entry_notional_twd, entry_timestamp, due_at,
+                 benchmark_symbol, benchmark_entry_price,
+                 sector_proxy_symbol, sector_entry_price,
+                 beta_proxy_at_entry, beta_coverage, sector_coverage, status)
+            VALUES (?, 'T+5', ?, 'buy',
+                    ?, ?, '2025-01-06T12:00:00Z', ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?, ?, ?)
+            """,
+            (
+                trade_log_id, symbol,
+                entry_price, entry_notional_twd, due_at,
+                benchmark_symbol, benchmark_entry_price,
+                sector_proxy_symbol, sector_entry_price,
+                beta_proxy_at_entry, beta_coverage, sector_coverage, status,
+            ),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def _settle(self, as_of, price_map):
+        """Call settle_due_trade_outcomes with patched helpers."""
+        import engine_journal
+        from datetime import date as _date
+
+        def mock_price(symbol, target_date):
+            return price_map.get(symbol)
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", side_effect=mock_price):
+            return engine_journal.settle_due_trade_outcomes(as_of=as_of)
+
+    # ------------------------------------------------------------------
+    # Settlement correctness
+    # ------------------------------------------------------------------
+
+    def test_settle_resolves_pending_checkpoint(self):
+        """settle_due_trade_outcomes must flip status to 'resolved' for due rows."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(due_at="2025-01-10")
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        self.assertEqual(result["settled"], 1)
+        self.assertEqual(result["errors"], 0)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "resolved")
+
+    def test_settle_additive_decomposition_with_sector_coverage(self):
+        """Beta + Sector + Timing must sum to actual_return_pct when sector coverage exists."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=10000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=200.0,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=1,
+        )
+
+        # AAPL: 100→110 = 10% actual
+        # SPY:  500→510 = 2% benchmark  → beta_component = 1.2*2.0 = 2.4%
+        # XLK:  200→204 = 2% sector     → sector_component = 2.0-2.4 = -0.4%
+        #                                  timing_component = 10.0-2.0 = 8.0%
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+
+        actual = row["actual_return_pct"]
+        beta = row["beta_component_pct"]
+        sector = row["sector_component_pct"]
+        timing = row["timing_component_pct"]
+
+        self.assertAlmostEqual(actual, 10.0, places=6, msg="actual_return_pct must be 10%")
+        self.assertAlmostEqual(beta, 2.4, places=6, msg="beta_component_pct = 1.2*2.0 = 2.4%")
+        self.assertAlmostEqual(sector, -0.4, places=6, msg="sector_component_pct = sector_return - beta")
+        self.assertAlmostEqual(timing, 8.0, places=6, msg="timing_component_pct = actual - sector_return")
+        self.assertAlmostEqual(
+            beta + sector + timing, actual, places=6,
+            msg="beta + sector + timing must sum to actual_return_pct",
+        )
+
+    def test_settle_additive_decomposition_without_sector_coverage(self):
+        """When sector_coverage=0, sector=0 and timing=actual-beta; sum still equals actual."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=10000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=None,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=0,
+        )
+
+        # AAPL: 100→110 = 10%
+        # SPY:  500→510 = 2% → beta = 1.2*2.0 = 2.4%
+        # sector_component = 0, timing = 10.0-2.4 = 7.6%
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0},
+        )
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+
+        actual = row["actual_return_pct"]
+        beta = row["beta_component_pct"]
+        sector = row["sector_component_pct"]
+        timing = row["timing_component_pct"]
+
+        self.assertAlmostEqual(actual, 10.0, places=6)
+        self.assertAlmostEqual(beta, 2.4, places=6)
+        self.assertAlmostEqual(sector, 0.0, places=6, msg="sector_component_pct must be 0 with no sector coverage")
+        self.assertAlmostEqual(timing, 7.6, places=6)
+        self.assertAlmostEqual(beta + sector + timing, actual, places=6,
+                               msg="beta + sector + timing must equal actual")
+
+    def test_settle_twd_components_scale_by_notional(self):
+        """TWD components must equal pct/100 * entry_notional_twd."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=50000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=200.0,
+            beta_proxy_at_entry=1.0,
+            beta_coverage=1,
+            sector_coverage=1,
+        )
+
+        # AAPL: 100→105 = 5%
+        # SPY:  500→510 = 2%  → beta = 1.0*2 = 2%
+        # XLK:  200→204 = 2%  → sector = 0%, timing = 3%
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 105.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+
+        notional = 50000.0
+        self.assertAlmostEqual(row["beta_component_twd"], 2.0 / 100 * notional, places=2)
+        self.assertAlmostEqual(row["sector_component_twd"], 0.0 / 100 * notional, places=2)
+        self.assertAlmostEqual(row["timing_component_twd"], 3.0 / 100 * notional, places=2)
+
+    def test_settle_skips_row_not_yet_due(self):
+        """Checkpoints with due_at after as_of must not be settled."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(due_at="2025-02-01")  # future
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        self.assertEqual(result["settled"], 0)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status FROM trade_outcome_checkpoints LIMIT 1")
+        self.assertEqual(cur.fetchone()["status"], "pending")
+
+    def test_settle_missing_resolved_price_counts_as_error(self):
+        """When the resolved price is unavailable, the row must not be updated to resolved."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(due_at="2025-01-10")
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={},  # no prices available
+        )
+
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(result["errors"], 1)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status, retry_count FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+        self.assertNotEqual(row["status"], "resolved")
+        self.assertGreater(row["retry_count"], 0)
+
+    def test_settle_missing_benchmark_price_counts_as_error(self):
+        """When the benchmark resolved price is unavailable, the row must stay pending for retry."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            due_at="2025-01-10",
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=0,
+            sector_entry_price=None,
+        )
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0},  # benchmark missing
+        )
+
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(result["errors"], 1)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT status, retry_count, last_error, benchmark_return_pct "
+            "FROM trade_outcome_checkpoints LIMIT 1"
+        )
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["retry_count"], 0)
+        self.assertIn("benchmark", row["last_error"].lower())
+        self.assertIsNone(row["benchmark_return_pct"])
+
+    def test_settle_missing_benchmark_metadata_reports_data_integrity_error(self):
+        """Rows with beta proxy but missing benchmark metadata must report the real data gap."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            due_at="2025-01-10",
+            benchmark_symbol=None,
+            benchmark_entry_price=None,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=0,
+            sector_entry_price=None,
+        )
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0},
+        )
+
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(result["errors"], 1)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status, last_error, retry_count FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["retry_count"], 0)
+        self.assertIn("not recorded", row["last_error"].lower())
+
+    def test_settle_missing_beta_proxy_preserves_null_components_and_coverage(self):
+        """Rows without beta_proxy_at_entry must resolve without inventing attribution components."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            due_at="2025-01-10",
+            beta_proxy_at_entry=None,
+            beta_coverage=0,
+            sector_coverage=1,
+        )
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        self.assertEqual(result["settled"], 1)
+        self.assertEqual(result["errors"], 0)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT status, beta_coverage, beta_component_pct, sector_component_pct, timing_component_pct "
+            "FROM trade_outcome_checkpoints LIMIT 1"
+        )
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "resolved")
+        self.assertEqual(row["beta_coverage"], 0)
+        self.assertIsNone(row["beta_component_pct"])
+        self.assertIsNone(row["sector_component_pct"])
+        self.assertIsNone(row["timing_component_pct"])
+
+    # ------------------------------------------------------------------
+    # Weekly report
+    # ------------------------------------------------------------------
+
+    def test_weekly_report_includes_attribution_keywords(self):
+        """get_trade_journal_weekly_report must mention Beta, Sector, Timing, Coverage."""
+        self._init_db()
+        from datetime import date
+
+        # Seed and settle one checkpoint so the report has data.
+        self._insert_checkpoint(
+            entry_price=100.0,
+            entry_notional_twd=10000.0,
+            due_at="2025-01-10",
+            benchmark_entry_price=500.0,
+            sector_entry_price=200.0,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=1,
+        )
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        import engine_journal
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn):
+            report_str = engine_journal.get_trade_journal_weekly_report()
+
+        for keyword in ("Beta", "Sector", "Timing", "Coverage"):
+            self.assertIn(keyword, report_str, f"Report must mention '{keyword}'")
+
+    def test_weekly_report_resolved_count(self):
+        """build_weekly_attribution_report must return the count of resolved checkpoints."""
+        self._init_db()
+        from datetime import date
+
+        self._insert_checkpoint(due_at="2025-01-10")
+        self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        import engine_journal
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn):
+            report = engine_journal.build_weekly_attribution_report(as_of=date.today())
+
+        self.assertGreaterEqual(report["resolved_checkpoints"], 1,
+                                "Report must count at least the one resolved checkpoint")
+
+    def test_weekly_report_counts_exactly_seven_inclusive_days(self):
+        """The weekly report window must include as_of and the prior 6 days, not 8 calendar days."""
+        self._init_db()
+        checkpoint_old = self._insert_checkpoint(status="resolved")
+        checkpoint_in_window = self._insert_checkpoint(status="resolved")
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE trade_outcome_checkpoints SET resolved_at = ?, actual_return_pct = ? WHERE id = ?",
+            ("2025-01-08T12:00:00Z", 1.0, checkpoint_old),
+        )
+        cur.execute(
+            "UPDATE trade_outcome_checkpoints SET resolved_at = ?, actual_return_pct = ? WHERE id = ?",
+            ("2025-01-09T12:00:00Z", 2.0, checkpoint_in_window),
+        )
+        self.conn.commit()
+
+        import engine_journal
+        from datetime import date
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn):
+            report = engine_journal.build_weekly_attribution_report(as_of=date(2025, 1, 15))
+
+        self.assertEqual(
+            report["resolved_checkpoints"], 1,
+            "2025-01-08 must be outside the 7-day inclusive window ending 2025-01-15",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
