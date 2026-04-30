@@ -306,6 +306,9 @@ def settle_due_trade_outcomes(as_of: date | None = None) -> dict:
                     )
 
             # Additive attribution: beta + sector + timing = actual
+            # Only use the no-sector path when sector coverage was never recorded (sector_coverage=0).
+            # When sector_coverage=1 but the resolved price is missing, leave sector/timing as None
+            # rather than silently inventing zero sector contribution.
             beta_component_pct = None
             sector_component_pct = None
             timing_component_pct = None
@@ -313,11 +316,14 @@ def settle_due_trade_outcomes(as_of: date | None = None) -> dict:
             if beta_proxy is not None and benchmark_return_pct is not None:
                 beta_component_pct = float(beta_proxy) * benchmark_return_pct
                 if sector_return_pct is not None:
+                    # Full three-way split.
                     sector_component_pct = sector_return_pct - beta_component_pct
                     timing_component_pct = actual_return_pct - sector_return_pct
-                else:
+                elif not sector_coverage:
+                    # No sector proxy was ever tracked — collapse to beta + timing.
                     sector_component_pct = 0.0
                     timing_component_pct = actual_return_pct - beta_component_pct
+                # else: sector_coverage=1 but resolved price missing — leave None to avoid fake numbers.
 
             # TWD P&L components
             def _to_twd(pct):
