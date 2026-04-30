@@ -182,16 +182,17 @@ def start_scheduler():
     scheduler.add_job(
         trade_journal_checkpoint_job,
         "cron",
-        hour=8,
-        minute=30,
+        day_of_week="tue-sat",
+        hour=7,
+        minute=15,
         id="trade-journal-settlement",
         replace_existing=True,
     )
     scheduler.add_job(
         weekly_trade_journal_job,
         "cron",
-        day_of_week="mon",
-        hour=9,
+        day_of_week="sun",
+        hour=18,
         minute=0,
         id="weekly-trade-journal",
         replace_existing=True,
