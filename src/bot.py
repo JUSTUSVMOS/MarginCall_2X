@@ -20,6 +20,7 @@ else:
     _TELEBOT_IMPORT_ERROR = None
 
 import engine_fundamentals as fundamentals
+import engine_journal
 import engine_market as market
 import engine_portfolio as portfolio
 import engine_technical as technical
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 AUTHORIZED_USER_ID = None
 
 # 先載入所有工具模組，再從共享 registry 取出可用工具。
-_TOOL_MODULES = tuple(module for module in (portfolio, risk, fundamentals, technical, market, fubon) if module is not None)
+_TOOL_MODULES = tuple(module for module in (portfolio, risk, fundamentals, technical, market, fubon, engine_journal) if module is not None)
 
 bot = None
 user_chat_history = []

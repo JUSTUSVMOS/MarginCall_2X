@@ -707,6 +707,50 @@ def init_db():
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_portfolio_nav_history_timestamp ON portfolio_nav_history(timestamp)"
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_outcome_checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_log_id INTEGER NOT NULL,
+                horizon_label TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                entry_timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                entry_notional_twd REAL NOT NULL,
+                due_at TEXT NOT NULL,
+                benchmark_symbol TEXT,
+                benchmark_entry_price REAL,
+                sector_proxy_symbol TEXT,
+                sector_entry_price REAL,
+                beta_proxy_at_entry REAL,
+                beta_coverage INTEGER NOT NULL DEFAULT 0,
+                sector_coverage INTEGER NOT NULL DEFAULT 0,
+                resolved_price REAL,
+                benchmark_return_pct REAL,
+                sector_return_pct REAL,
+                actual_return_pct REAL,
+                beta_component_pct REAL,
+                sector_component_pct REAL,
+                timing_component_pct REAL,
+                beta_component_twd REAL,
+                sector_component_twd REAL,
+                timing_component_twd REAL,
+                last_error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                resolved_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                FOREIGN KEY(trade_log_id) REFERENCES trade_log(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_outcome_checkpoints_trade_horizon
+            ON trade_outcome_checkpoints(trade_log_id, horizon_label)
+            """
+        )
         # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
         try:
             cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
@@ -716,6 +760,12 @@ def init_db():
             cursor.execute("ALTER TABLE trade_log ADD COLUMN decision_snapshot TEXT")
         except Exception as e:
             logger.debug(f"Trade log migration skipped: {e}")
+        try:
+            cursor.execute(
+                "ALTER TABLE trade_outcome_checkpoints ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"
+            )
+        except Exception as e:
+            logger.debug(f"Trade outcome checkpoints status migration skipped: {e}")
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_followups_status ON trade_followups(status)")
         except Exception as e:
@@ -1964,44 +2014,99 @@ def _fetch_symbol_rsi_14(symbol: str) -> float | None:
         return None
 
 
-def _fetch_sync_nlp_alpha(symbol: str, lookup_symbol: str) -> float | None:
+def _fetch_sync_nlp_payload(symbol: str, lookup_symbol: str) -> Dict[str, Any]:
+    """Fetch full NLP alpha payload and remap alpha_official → alpha_sec."""
+    empty: Dict[str, Any] = {
+        "nlp_alpha": None,
+        "alpha_macro": None,
+        "alpha_retail": None,
+        "alpha_sec": None,
+    }
     try:
         import engine_router as router
     except Exception as exc:
-        logger.debug(f"NLP router import failed during sync snapshot: {exc}")
-        return None
+        logger.debug(f"NLP router import failed during trade snapshot: {exc}")
+        return empty
 
     candidates = [normalize_ticker(symbol)]
-    if lookup_symbol not in candidates:
+    if lookup_symbol and lookup_symbol not in candidates:
         candidates.append(lookup_symbol)
-    base_lookup = lookup_symbol.replace(".TW", "").replace(".TWO", "")
-    if base_lookup not in candidates:
+    base_lookup = (lookup_symbol or "").replace(".TW", "").replace(".TWO", "")
+    if base_lookup and base_lookup not in candidates:
         candidates.append(base_lookup)
 
     for candidate in candidates:
         payload = router.fetch_nlp_alpha(candidate)
-        if not payload.get("error") and isinstance(payload.get("nlp_alpha"), (int, float)):
-            return round(float(payload["nlp_alpha"]), 4)
-    return None
+        if payload.get("error") or not isinstance(payload.get("nlp_alpha"), (int, float)):
+            continue
+        return {
+            "nlp_alpha": round(float(payload["nlp_alpha"]), 4),
+            "alpha_macro": round(float(payload["alpha_macro"]), 4) if isinstance(payload.get("alpha_macro"), (int, float)) else None,
+            "alpha_retail": round(float(payload["alpha_retail"]), 4) if isinstance(payload.get("alpha_retail"), (int, float)) else None,
+            "alpha_sec": round(float(payload["alpha_official"]), 4) if isinstance(payload.get("alpha_official"), (int, float)) else None,
+        }
+    return empty
 
 
-def _build_sync_decision_snapshot(symbol: str) -> Dict[str, Any]:
+def _estimate_entry_beta_proxy(
+    symbol: str,
+    benchmark: str = "SPY",
+    period: str = "6mo",
+) -> float | None:
+    """Return the OLS beta for a single-symbol portfolio vs. the benchmark."""
+    try:
+        result = compute_portfolio_beta_attribution(
+            {symbol: 1.0}, benchmark=benchmark, period=period
+        )
+        if result.get("error"):
+            return None
+        positions = result.get("positions") or {}
+        for pos_data in positions.values():
+            beta = pos_data.get("beta")
+            if isinstance(beta, (int, float)):
+                return round(float(beta), 4)
+        return None
+    except Exception as exc:
+        logger.debug(f"Beta proxy estimation failed for {symbol}: {exc}")
+        return None
+
+
+def _build_trade_decision_snapshot(
+    symbol: str,
+    *,
+    entry_notional_twd: float | None = None,
+) -> Dict[str, Any]:
+    """Build a rich attribution snapshot for an entry trade (buy or sync_buy).
+
+    Prioritises attribution inputs used downstream by engine_journal:
+    benchmark_symbol, sector_proxy_symbol, and the beta/NLP alpha dimensions.
+    The older ad hoc market-context fields are intentionally excluded here.
+    """
     lookup_symbol = _resolve_sync_lookup_symbol(symbol)
-    profile = market.get_asset_profile(lookup_symbol or symbol)
+    effective_lookup = lookup_symbol or normalize_ticker(symbol)
+    profile = market.get_asset_profile(effective_lookup)
     sector_proxy = _select_sector_proxy(profile)
+    nlp_payload = _fetch_sync_nlp_payload(symbol, effective_lookup)
+    beta_proxy = _estimate_entry_beta_proxy(normalize_ticker(symbol))
+
     snapshot: Dict[str, Any] = {
         "captured_at": _utc_now_iso(),
         "symbol": normalize_ticker(symbol),
         "lookup_symbol": lookup_symbol,
         "sector": profile.get("sector", "Unknown"),
         "industry": profile.get("industry", "Unknown"),
-        "spy_change_1d": _fetch_recent_change_1d("SPY"),
-        "sector_proxy": sector_proxy,
-        "sector_proxy_change_1d": _fetch_recent_change_1d(sector_proxy),
-        "vix": _fetch_latest_price_value("^VIX"),
-        "rsi_14": _fetch_symbol_rsi_14(lookup_symbol or symbol),
-        "nlp_alpha": _fetch_sync_nlp_alpha(symbol, lookup_symbol),
+        "benchmark_symbol": "SPY",
+        "sector_proxy_symbol": sector_proxy,
+        "beta_proxy_period": "6mo",
+        "beta_proxy_at_entry": beta_proxy,
+        "entry_notional_twd": round(entry_notional_twd, 2) if entry_notional_twd is not None else None,
+        "nlp_alpha": nlp_payload.get("nlp_alpha"),
+        "alpha_macro": nlp_payload.get("alpha_macro"),
+        "alpha_retail": nlp_payload.get("alpha_retail"),
+        "alpha_sec": nlp_payload.get("alpha_sec"),
     }
+    snapshot["risk_state"] = None
+    snapshot["risk_score"] = None
     try:
         import engine_risk as risk_engine
 
@@ -2011,6 +2116,10 @@ def _build_sync_decision_snapshot(symbol: str) -> Dict[str, Any]:
     except Exception as exc:
         snapshot["risk_snapshot_error"] = str(exc)
     return snapshot
+
+
+def _build_sync_decision_snapshot(symbol: str) -> Dict[str, Any]:
+    return _build_trade_decision_snapshot(symbol)
 
 
 def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = False) -> Dict[str, Any]:
@@ -2055,6 +2164,7 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
         for symbol in sorted(snapshot_symbols)
     }
 
+    pending_trade_journal_ids: list[int] = []
     with db_lock:
         conn = get_connection()
         try:
@@ -2080,6 +2190,8 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
 
                 if old_pos is None:
                     if fb_shares > 0:
+                        _raw_snap = decision_cache.get(normalize_ticker(normalized))
+                        _snap = {**_raw_snap, "entry_notional_twd": round(fb_cost * fb_shares, 2)} if _raw_snap else _raw_snap
                         trade_log_id = _record_trade_log(
                             cursor,
                             symbol=normalized,
@@ -2087,8 +2199,9 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
                             price=fb_cost,
                             shares=fb_shares,
                             note=f"[auto sync:{source}] new broker position detected.",
-                            decision_snapshot=decision_cache.get(normalize_ticker(normalized)),
+                            decision_snapshot=_snap,
                         )
+                        pending_trade_journal_ids.append(trade_log_id)
                         if source != "portfolio_query":
                             _record_trade_followup(
                                 cursor,
@@ -2120,6 +2233,8 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
                     inferred_price = (new_total - old_total) / added if added > 0 else fb_cost
                     if inferred_price <= 0:
                         inferred_price = fb_cost
+                    _raw_snap = decision_cache.get(normalize_ticker(db_symbol))
+                    _snap = {**_raw_snap, "entry_notional_twd": round(inferred_price * added, 2)} if _raw_snap else _raw_snap
                     trade_log_id = _record_trade_log(
                         cursor,
                         symbol=db_symbol,
@@ -2130,8 +2245,9 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
                             f"[auto sync:{source}] broker sync inferred average add "
                             f"(old_avg={old_cost:.4f} -> new_avg={fb_cost:.4f})."
                         ),
-                        decision_snapshot=decision_cache.get(normalize_ticker(db_symbol)),
+                        decision_snapshot=_snap,
                     )
+                    pending_trade_journal_ids.append(trade_log_id)
                     if source != "portfolio_query":
                         _record_trade_followup(
                             cursor,
@@ -2221,6 +2337,14 @@ def sync_fubon_portfolio_state(source: str = "scheduler", sync_memory: bool = Fa
             conn.commit()
         finally:
             conn.close()
+
+    # Enqueue journal checkpoints after the lock is fully released (entry trades only).
+    if pending_trade_journal_ids:
+        try:
+            import engine_journal
+            engine_journal.enqueue_trade_outcome_checkpoints(pending_trade_journal_ids)
+        except Exception as exc:
+            logger.warning(f"Journal enqueue failed after Fubon sync: {exc}")
 
     if sync_memory and events:
         try:
@@ -2709,6 +2833,18 @@ def execute_position_update(
 
     result_message = ""
     should_refresh_memory = False
+
+    # Build enriched snapshot before acquiring the lock (avoids network I/O inside lock).
+    entry_decision_snapshot: Dict[str, Any] | None = None
+    if action == "buy" and not is_cash:
+        try:
+            entry_decision_snapshot = _build_trade_decision_snapshot(
+                symbol, entry_notional_twd=actual_twd_total
+            )
+        except Exception as exc:
+            logger.warning(f"Trade decision snapshot build failed for {symbol}: {exc}")
+
+    pending_trade_journal_ids: list[int] = []
     with db_lock:
         conn = get_connection()
         conn.row_factory = sqlite3.Row
@@ -2748,7 +2884,10 @@ def execute_position_update(
                         cash_before=cash_before,
                         cash_after=cash_after,
                         note=trade_note,
+                        decision_snapshot=entry_decision_snapshot,
                     )
+                    if not is_cash:
+                        pending_trade_journal_ids.append(trade_log_id)
                     if persisted_trade_plan:
                         _upsert_trade_plan_locked(
                             cursor,
@@ -2820,6 +2959,14 @@ def execute_position_update(
             return format_tool_error(f"❌ 記帳異常: {e}", transient=True)
         finally:
             conn.close()
+
+    # Enqueue journal checkpoints after the lock is fully released.
+    if pending_trade_journal_ids:
+        try:
+            import engine_journal
+            engine_journal.enqueue_trade_outcome_checkpoints(pending_trade_journal_ids)
+        except Exception as exc:
+            logger.warning(f"Journal enqueue failed after buy for {symbol}: {exc}")
 
     if sync_memory and should_refresh_memory:
         try:
