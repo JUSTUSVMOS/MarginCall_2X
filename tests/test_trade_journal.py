@@ -1166,9 +1166,10 @@ class TradeJournalSettlementTests(unittest.TestCase):
         self.assertEqual(result["errors"], 1)
 
         cur = self.conn.cursor()
-        cur.execute("SELECT status, last_error FROM trade_outcome_checkpoints LIMIT 1")
+        cur.execute("SELECT status, last_error, retry_count FROM trade_outcome_checkpoints LIMIT 1")
         row = cur.fetchone()
         self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["retry_count"], 0)
         self.assertIn("not recorded", row["last_error"].lower())
 
     def test_settle_missing_beta_proxy_preserves_null_components_and_coverage(self):
