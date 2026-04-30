@@ -91,6 +91,7 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
             "timing_component_twd",
             "last_error",
             "retry_count",
+            "status",
             "resolved_at",
             "created_at",
         ):
@@ -163,7 +164,8 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
         import engine_journal
         with patch.object(engine_journal, "db_lock", self.mock_lock), \
              patch.object(engine_journal, "get_connection", self._get_conn), \
-             patch.object(engine_journal, "_load_price_on_or_after", return_value=mock_price):
+             patch.object(engine_journal, "_load_price_on_or_after", return_value=mock_price), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
             return engine_journal.enqueue_trade_outcome_checkpoints(trade_log_ids)
 
     def test_buy_creates_t5_and_t20_checkpoints(self):

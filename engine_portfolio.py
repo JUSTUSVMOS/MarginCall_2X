@@ -738,6 +738,7 @@ def init_db():
                 timing_component_twd REAL,
                 last_error TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
                 resolved_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
                 FOREIGN KEY(trade_log_id) REFERENCES trade_log(id) ON DELETE CASCADE
@@ -759,6 +760,12 @@ def init_db():
             cursor.execute("ALTER TABLE trade_log ADD COLUMN decision_snapshot TEXT")
         except Exception as e:
             logger.debug(f"Trade log migration skipped: {e}")
+        try:
+            cursor.execute(
+                "ALTER TABLE trade_outcome_checkpoints ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"
+            )
+        except Exception as e:
+            logger.debug(f"Trade outcome checkpoints status migration skipped: {e}")
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_followups_status ON trade_followups(status)")
         except Exception as e:
