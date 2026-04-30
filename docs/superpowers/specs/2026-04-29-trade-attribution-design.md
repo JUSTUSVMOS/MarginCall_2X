@@ -138,7 +138,9 @@ Suggested columns:
 - `entry_price`
 - `entry_notional_twd`
 - `benchmark_symbol`
+- `benchmark_entry_price`
 - `sector_proxy_symbol`
+- `sector_entry_price`
 - `beta_proxy_at_entry`
 - `beta_coverage`
 - `sector_coverage`
