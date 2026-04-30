@@ -2014,27 +2014,6 @@ def _fetch_symbol_rsi_14(symbol: str) -> float | None:
         return None
 
 
-def _fetch_sync_nlp_alpha(symbol: str, lookup_symbol: str) -> float | None:
-    try:
-        import engine_router as router
-    except Exception as exc:
-        logger.debug(f"NLP router import failed during sync snapshot: {exc}")
-        return None
-
-    candidates = [normalize_ticker(symbol)]
-    if lookup_symbol not in candidates:
-        candidates.append(lookup_symbol)
-    base_lookup = lookup_symbol.replace(".TW", "").replace(".TWO", "")
-    if base_lookup not in candidates:
-        candidates.append(base_lookup)
-
-    for candidate in candidates:
-        payload = router.fetch_nlp_alpha(candidate)
-        if not payload.get("error") and isinstance(payload.get("nlp_alpha"), (int, float)):
-            return round(float(payload["nlp_alpha"]), 4)
-    return None
-
-
 def _fetch_sync_nlp_payload(symbol: str, lookup_symbol: str) -> Dict[str, Any]:
     """Fetch full NLP alpha payload and remap alpha_official → alpha_sec."""
     empty: Dict[str, Any] = {
@@ -2097,7 +2076,12 @@ def _build_trade_decision_snapshot(
     *,
     entry_notional_twd: float | None = None,
 ) -> Dict[str, Any]:
-    """Build a rich attribution snapshot for an entry trade (buy or sync_buy)."""
+    """Build a rich attribution snapshot for an entry trade (buy or sync_buy).
+
+    Prioritises attribution inputs used downstream by engine_journal:
+    benchmark_symbol, sector_proxy_symbol, and the beta/NLP alpha dimensions.
+    The older ad hoc market-context fields are intentionally excluded here.
+    """
     lookup_symbol = _resolve_sync_lookup_symbol(symbol)
     effective_lookup = lookup_symbol or normalize_ticker(symbol)
     profile = market.get_asset_profile(effective_lookup)
@@ -2115,7 +2099,7 @@ def _build_trade_decision_snapshot(
         "sector_proxy_symbol": sector_proxy,
         "beta_proxy_period": "6mo",
         "beta_proxy_at_entry": beta_proxy,
-        "entry_notional_twd": entry_notional_twd,
+        "entry_notional_twd": round(entry_notional_twd, 2) if entry_notional_twd is not None else None,
         "nlp_alpha": nlp_payload.get("nlp_alpha"),
         "alpha_macro": nlp_payload.get("alpha_macro"),
         "alpha_retail": nlp_payload.get("alpha_retail"),

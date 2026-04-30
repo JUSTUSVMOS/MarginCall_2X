@@ -640,6 +640,34 @@ class TradeJournalEntryFlowTests(unittest.TestCase):
         self.assertIn("✅", result, f"Expected success, got: {result}")
         enqueue_mock.assert_not_called()
 
+    def test_cash_buy_does_not_enqueue(self):
+        """execute_position_update buy of CASH_USD must NOT enqueue journal checkpoints."""
+        import engine_portfolio
+        import engine_journal
+
+        self._init_db()
+
+        cur = self.conn.cursor()
+        # Seed enough CASH_USD balance so the buy succeeds (settle_currency == CASH_USD).
+        cur.execute(
+            "INSERT OR REPLACE INTO portfolio (symbol, cost, shares, twd_cost, locked)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("CASH_USD", 1.0, 100_000.0, 3_200_000.0, 0),
+        )
+        self.conn.commit()
+
+        enqueue_mock = MagicMock()
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "enqueue_trade_outcome_checkpoints", enqueue_mock):
+            result = engine_portfolio.execute_position_update(
+                "CASH_USD", price=1.0, shares=1_000.0, action="buy",
+            )
+
+        # The buy may succeed or fail due to circular settle logic, but enqueue must never fire.
+        enqueue_mock.assert_not_called()
+
     def test_sync_buy_enqueues_after_commit(self):
         """sync_fubon_portfolio_state sync_buy must enqueue journal checkpoints after commit."""
         import engine_portfolio
