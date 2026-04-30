@@ -707,6 +707,33 @@ def init_db():
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_portfolio_nav_history_timestamp ON portfolio_nav_history(timestamp)"
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_outcome_checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_log_id INTEGER NOT NULL,
+                horizon_label TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                due_date TEXT NOT NULL,
+                benchmark_symbol TEXT NOT NULL,
+                benchmark_entry_price REAL,
+                sector_symbol TEXT NOT NULL,
+                sector_entry_price REAL,
+                outcome_price REAL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                FOREIGN KEY(trade_log_id) REFERENCES trade_log(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_outcome_checkpoints_trade_horizon
+            ON trade_outcome_checkpoints(trade_log_id, horizon_label)
+            """
+        )
         # 執行遷移：如果舊資料庫沒有 locked 欄位，手動補上
         try:
             cursor.execute("ALTER TABLE portfolio ADD COLUMN locked INTEGER DEFAULT 0")
