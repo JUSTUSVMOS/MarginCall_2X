@@ -186,7 +186,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
                  benchmark_sym, bmark_entry, sector_sym, sector_entry,
                  beta_proxy_at_entry) in work_items:
                 beta_coverage = 1 if beta_proxy_at_entry is not None else 0
-                sector_coverage = 1 if (sector_sym and sector_entry is not None) else 0
+                sector_coverage = 1 if sector_entry is not None else 0
                 for label, bdays in CHECKPOINT_HORIZONS:
                     due_date = _add_business_days(trade_date, bdays)
                     cursor.execute(

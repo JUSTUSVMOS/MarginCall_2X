@@ -356,5 +356,63 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
                          msg="benchmark_symbol must fall back to _DEFAULT_BENCHMARK")
 
 
+class TestSectorCoverageWhenPriceNone(unittest.TestCase):
+    """sector_coverage must be 0 when the sector price fetch returns None."""
+
+    def setUp(self):
+        self.db_path = os.path.join(_TESTS_DIR, f"_test_journal_{id(self)}.db")
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.mock_lock = MagicMock()
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _get_conn(self, **kwargs):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def test_sector_coverage_zero_when_sector_price_none(self):
+        """When _load_price_on_or_after returns None for the sector proxy, sector_coverage must be 0."""
+        import engine_journal
+        import engine_portfolio
+
+        with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
+             patch.object(engine_portfolio, "get_connection", self._get_conn):
+            engine_portfolio.init_db()
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
+            ("AAPL", "buy", 150.0, 10),
+        )
+        self.conn.commit()
+        trade_id = cur.lastrowid
+
+        def price_side_effect(symbol, *args, **kwargs):
+            if symbol == "XLK":
+                return None  # sector price unavailable
+            return 200.0  # benchmark and entry prices succeed
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", side_effect=price_side_effect), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            engine_journal.enqueue_trade_outcome_checkpoints([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT sector_coverage FROM trade_outcome_checkpoints WHERE trade_log_id = ? LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected at least one checkpoint row")
+        self.assertEqual(row["sector_coverage"], 0,
+                         "sector_coverage must be 0 when sector price fetch returns None")
+
+
 if __name__ == "__main__":
     unittest.main()
