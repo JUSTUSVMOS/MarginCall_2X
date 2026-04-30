@@ -295,6 +295,9 @@ def settle_due_trade_outcomes(as_of: date | None = None) -> dict:
                     benchmark_return_pct = (
                         (bmark_resolved - float(benchmark_entry)) / float(benchmark_entry) * 100
                     )
+            if beta_proxy is not None and benchmark_return_pct is None:
+                errors.append((row_id, "benchmark price unavailable"))
+                continue
 
             # Sector return (only when sector coverage was recorded)
             sector_return_pct = None
@@ -412,7 +415,7 @@ def build_weekly_attribution_report(as_of: date | None = None) -> dict:
     if as_of is None:
         as_of = datetime.now(timezone.utc).date()
 
-    week_start = as_of - timedelta(days=7)
+    week_start = as_of - timedelta(days=6)
 
     with db_lock:
         conn = get_connection()

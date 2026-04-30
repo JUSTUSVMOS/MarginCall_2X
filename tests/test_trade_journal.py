@@ -1112,6 +1112,68 @@ class TradeJournalSettlementTests(unittest.TestCase):
         self.assertNotEqual(row["status"], "resolved")
         self.assertGreater(row["retry_count"], 0)
 
+    def test_settle_missing_benchmark_price_counts_as_error(self):
+        """When the benchmark resolved price is unavailable, the row must stay pending for retry."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            due_at="2025-01-10",
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=0,
+            sector_entry_price=None,
+        )
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0},  # benchmark missing
+        )
+
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(result["errors"], 1)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT status, retry_count, last_error, benchmark_return_pct "
+            "FROM trade_outcome_checkpoints LIMIT 1"
+        )
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertGreater(row["retry_count"], 0)
+        self.assertIn("benchmark", row["last_error"].lower())
+        self.assertIsNone(row["benchmark_return_pct"])
+
+    def test_settle_missing_beta_proxy_preserves_null_components_and_coverage(self):
+        """Rows without beta_proxy_at_entry must resolve without inventing attribution components."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            due_at="2025-01-10",
+            beta_proxy_at_entry=None,
+            beta_coverage=0,
+            sector_coverage=1,
+        )
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0, "SPY": 510.0, "XLK": 204.0},
+        )
+
+        self.assertEqual(result["settled"], 1)
+        self.assertEqual(result["errors"], 0)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT status, beta_coverage, beta_component_pct, sector_component_pct, timing_component_pct "
+            "FROM trade_outcome_checkpoints LIMIT 1"
+        )
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "resolved")
+        self.assertEqual(row["beta_coverage"], 0)
+        self.assertIsNone(row["beta_component_pct"])
+        self.assertIsNone(row["sector_component_pct"])
+        self.assertIsNone(row["timing_component_pct"])
+
     # ------------------------------------------------------------------
     # Weekly report
     # ------------------------------------------------------------------
@@ -1165,6 +1227,35 @@ class TradeJournalSettlementTests(unittest.TestCase):
 
         self.assertGreaterEqual(report["resolved_checkpoints"], 1,
                                 "Report must count at least the one resolved checkpoint")
+
+    def test_weekly_report_counts_exactly_seven_inclusive_days(self):
+        """The weekly report window must include as_of and the prior 6 days, not 8 calendar days."""
+        self._init_db()
+        checkpoint_old = self._insert_checkpoint(status="resolved")
+        checkpoint_in_window = self._insert_checkpoint(status="resolved")
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE trade_outcome_checkpoints SET resolved_at = ?, actual_return_pct = ? WHERE id = ?",
+            ("2025-01-08T12:00:00Z", 1.0, checkpoint_old),
+        )
+        cur.execute(
+            "UPDATE trade_outcome_checkpoints SET resolved_at = ?, actual_return_pct = ? WHERE id = ?",
+            ("2025-01-09T12:00:00Z", 2.0, checkpoint_in_window),
+        )
+        self.conn.commit()
+
+        import engine_journal
+        from datetime import date
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn):
+            report = engine_journal.build_weekly_attribution_report(as_of=date(2025, 1, 15))
+
+        self.assertEqual(
+            report["resolved_checkpoints"], 1,
+            "2025-01-08 must be outside the 7-day inclusive window ending 2025-01-15",
+        )
 
 
 if __name__ == "__main__":
