@@ -716,7 +716,7 @@ def init_db():
                 symbol TEXT NOT NULL,
                 action TEXT NOT NULL,
                 entry_price REAL NOT NULL,
-                entry_timestamp TEXT NOT NULL DEFAULT '',
+                entry_timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
                 entry_notional_twd REAL NOT NULL,
                 due_at TEXT NOT NULL,
                 benchmark_symbol TEXT,

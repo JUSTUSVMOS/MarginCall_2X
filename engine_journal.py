@@ -39,7 +39,12 @@ def _add_business_days(from_date: date, n: int) -> date:
 
 def _load_price_on_or_after(symbol: str, target_date: date) -> float | None:
     """Return the closing price of *symbol* on *target_date* (or the earliest available date
-    on or after it).  Returns None when no data is available (e.g. future date)."""
+    on or after it).  Returns None when no data is available (e.g. future date).
+
+    *target_date* must be a ``datetime.date`` object, not a string — callers are responsible
+    for converting ISO-format strings before passing them here (Task 2/3 code should do the
+    same; do not pass raw timestamp strings directly).
+    """
     try:
         # Deferred import: yf_session is optional at module load time.
         from yf_session import get_ticker
@@ -206,7 +211,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
                             action,
                             entry_price,
                             entry_notional_twd,
-                            trade_ts or "",
+                            trade_ts or _utc_now_iso(),
                             due_date.isoformat(),
                             benchmark_sym,
                             bmark_entry,
