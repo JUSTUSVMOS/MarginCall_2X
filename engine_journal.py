@@ -129,10 +129,31 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
         trade_ts = row[5]
         decision_snapshot_raw = row[6] if len(row) > 6 else None
 
-        entry_notional_twd = float(entry_price * shares)
-
         if action not in ELIGIBLE_TRADE_ACTIONS:
             continue
+
+        # Parse the decision snapshot once for all derived fields.
+        snap: dict = {}
+        if decision_snapshot_raw:
+            try:
+                snap = json.loads(decision_snapshot_raw) or {}
+            except Exception:
+                pass
+
+        # entry_notional_twd: prefer snapshot value (already in TWD), fall back to price × shares.
+        if snap.get("entry_notional_twd") is not None:
+            entry_notional_twd = float(snap["entry_notional_twd"])
+        else:
+            entry_notional_twd = float(entry_price * shares)
+
+        # benchmark_symbol: prefer snapshot, fall back to module-level default.
+        benchmark_sym = snap.get("benchmark_symbol") or _DEFAULT_BENCHMARK
+
+        # Sector proxy: prefer snapshot, fall back to live lookup.
+        sector_sym = snap.get("sector_proxy_symbol") or _resolve_sector_symbol(symbol)
+
+        # Beta coverage metadata from snapshot.
+        beta_proxy_at_entry = snap.get("beta_proxy_at_entry")
 
         try:
             trade_date = (
@@ -148,24 +169,12 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
             )
             trade_date = datetime.now(timezone.utc).date()
 
-        # Prefer sector proxy from the decision snapshot to avoid a live lookup.
-        sector_sym = _DEFAULT_BENCHMARK
-        if decision_snapshot_raw:
-            try:
-                snap = json.loads(decision_snapshot_raw)
-                sector_sym = snap.get("sector_proxy_symbol") or _resolve_sector_symbol(symbol)
-            except Exception:
-                sector_sym = _resolve_sector_symbol(symbol)
-        else:
-            sector_sym = _resolve_sector_symbol(symbol)
-
-        benchmark_sym = _DEFAULT_BENCHMARK
         bmark_entry = _load_price_on_or_after(benchmark_sym, trade_date)
         sector_entry = _load_price_on_or_after(sector_sym, trade_date)
 
         work_items.append(
             (trade_id, symbol, action, entry_price, entry_notional_twd, trade_ts, trade_date,
-             benchmark_sym, bmark_entry, sector_sym, sector_entry)
+             benchmark_sym, bmark_entry, sector_sym, sector_entry, beta_proxy_at_entry)
         )
 
     # Phase 3: write checkpoint rows under lock.
@@ -174,7 +183,10 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
         try:
             cursor = conn.cursor()
             for (trade_id, symbol, action, entry_price, entry_notional_twd, trade_ts, trade_date,
-                 benchmark_sym, bmark_entry, sector_sym, sector_entry) in work_items:
+                 benchmark_sym, bmark_entry, sector_sym, sector_entry,
+                 beta_proxy_at_entry) in work_items:
+                beta_coverage = 1 if beta_proxy_at_entry is not None else 0
+                sector_coverage = 1 if (sector_sym and sector_entry is not None) else 0
                 for label, bdays in CHECKPOINT_HORIZONS:
                     due_date = _add_business_days(trade_date, bdays)
                     cursor.execute(
@@ -183,8 +195,9 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
                             (trade_log_id, horizon_label, symbol, action, entry_price,
                              entry_notional_twd, entry_timestamp, due_at,
                              benchmark_symbol, benchmark_entry_price,
-                             sector_proxy_symbol, sector_entry_price)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             sector_proxy_symbol, sector_entry_price,
+                             beta_proxy_at_entry, beta_coverage, sector_coverage)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             trade_id,
@@ -199,6 +212,9 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
                             bmark_entry,
                             sector_sym,
                             sector_entry,
+                            beta_proxy_at_entry,
+                            beta_coverage,
+                            sector_coverage,
                         ),
                     )
                     inserted += cursor.rowcount

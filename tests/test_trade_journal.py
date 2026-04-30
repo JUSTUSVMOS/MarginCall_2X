@@ -140,22 +140,28 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
         c.row_factory = sqlite3.Row
         return c
 
-    def _init_db_and_insert_trade(self, action="buy", symbol="AAPL", price=150.0, timestamp=None):
+    def _init_db_and_insert_trade(self, action="buy", symbol="AAPL", price=150.0,
+                                   timestamp=None, decision_snapshot=None):
         import engine_portfolio
         with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
              patch.object(engine_portfolio, "get_connection", self._get_conn):
             engine_portfolio.init_db()
 
+        import json as _json
+        snap_str = _json.dumps(decision_snapshot) if decision_snapshot is not None else None
+
         cur = self.conn.cursor()
         if timestamp is not None:
             cur.execute(
-                "INSERT INTO trade_log (symbol, action, price, shares, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (symbol, action, price, 10, timestamp),
+                "INSERT INTO trade_log (symbol, action, price, shares, timestamp, decision_snapshot)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (symbol, action, price, 10, timestamp, snap_str),
             )
         else:
             cur.execute(
-                "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
-                (symbol, action, price, 10),
+                "INSERT INTO trade_log (symbol, action, price, shares, decision_snapshot)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (symbol, action, price, 10, snap_str),
             )
         self.conn.commit()
         return cur.lastrowid
@@ -273,6 +279,81 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
                          "T+5 due_at must be anchored to trade date, not enqueue date")
         self.assertEqual(rows.get("T+20"), "2025-02-03",
                          "T+20 due_at must be anchored to trade date, not enqueue date")
+
+    def test_snapshot_fields_propagated_to_checkpoints(self):
+        """entry_notional_twd, beta_proxy_at_entry, beta_coverage, sector_coverage,
+        and benchmark_symbol must be read from decision_snapshot when present.
+        """
+        import engine_journal
+
+        snap = {
+            "entry_notional_twd": 45000.0,
+            "beta_proxy_at_entry": 1.25,
+            "benchmark_symbol": "QQQ",
+            "sector_proxy_symbol": "XLK",
+        }
+        trade_id = self._init_db_and_insert_trade(
+            action="buy",
+            price=150.0,
+            timestamp="2025-01-06T12:00:00Z",
+            decision_snapshot=snap,
+        )
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", return_value=155.0), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            engine_journal.enqueue_trade_outcome_checkpoints([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM trade_outcome_checkpoints WHERE trade_log_id = ? LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected at least one checkpoint row")
+
+        self.assertAlmostEqual(row["entry_notional_twd"], 45000.0,
+                               msg="entry_notional_twd must come from snapshot, not price×shares")
+        self.assertAlmostEqual(row["beta_proxy_at_entry"], 1.25,
+                               msg="beta_proxy_at_entry must come from snapshot")
+        self.assertEqual(row["beta_coverage"], 1,
+                         msg="beta_coverage must be 1 when beta_proxy_at_entry is present")
+        self.assertEqual(row["sector_coverage"], 1,
+                         msg="sector_coverage must be 1 when sector_entry_price is present")
+        self.assertEqual(row["benchmark_symbol"], "QQQ",
+                         msg="benchmark_symbol must come from snapshot, not default SPY")
+
+    def test_snapshot_absent_falls_back_to_defaults(self):
+        """Without a decision_snapshot, entry_notional_twd = price×shares, beta_coverage = 0,
+        and benchmark_symbol = _DEFAULT_BENCHMARK.
+        """
+        import engine_journal
+
+        trade_id = self._init_db_and_insert_trade(action="buy", price=150.0)
+
+        with patch.object(engine_journal, "db_lock", self.mock_lock), \
+             patch.object(engine_journal, "get_connection", self._get_conn), \
+             patch.object(engine_journal, "_load_price_on_or_after", return_value=155.0), \
+             patch.object(engine_journal, "_resolve_sector_symbol", return_value="XLK"):
+            engine_journal.enqueue_trade_outcome_checkpoints([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM trade_outcome_checkpoints WHERE trade_log_id = ? LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row, "Expected at least one checkpoint row")
+
+        self.assertAlmostEqual(row["entry_notional_twd"], 150.0 * 10,
+                               msg="entry_notional_twd must fall back to price×shares")
+        self.assertIsNone(row["beta_proxy_at_entry"],
+                          msg="beta_proxy_at_entry must be None when absent from snapshot")
+        self.assertEqual(row["beta_coverage"], 0,
+                         msg="beta_coverage must be 0 when beta_proxy_at_entry is absent")
+        self.assertEqual(row["benchmark_symbol"], engine_journal._DEFAULT_BENCHMARK,
+                         msg="benchmark_symbol must fall back to _DEFAULT_BENCHMARK")
 
 
 if __name__ == "__main__":
