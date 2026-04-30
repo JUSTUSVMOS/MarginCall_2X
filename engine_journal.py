@@ -41,9 +41,11 @@ def _load_price_on_or_after(symbol: str, target_date: date) -> float | None:
     """Return the closing price of *symbol* on *target_date* (or the earliest available date
     on or after it).  Returns None when no data is available (e.g. future date)."""
     try:
+        # Deferred import: yf_session is optional at module load time.
         from yf_session import get_ticker
 
         ticker = get_ticker(symbol)
+        # 7-day window absorbs weekends and market holidays near the target date.
         end_date = target_date + timedelta(days=7)
         hist = ticker.history(
             start=target_date.isoformat(),
@@ -56,6 +58,37 @@ def _load_price_on_or_after(symbol: str, target_date: date) -> float | None:
     except Exception as exc:
         logger.debug("_load_price_on_or_after(%s, %s) failed: %s", symbol, target_date, exc)
         return None
+
+
+def _resolve_sector_symbol(symbol: str) -> str:
+    """Return the sector ETF proxy for *symbol*, falling back to SPY."""
+    try:
+        # Deferred import: yf_session is optional at module load time.
+        from yf_session import get_ticker
+
+        info = get_ticker(symbol).info or {}
+        sector = str(info.get("sector") or "")
+        industry = str(info.get("industry") or "").lower()
+
+        if "semiconductor" in industry:
+            return "SOXX"
+
+        _sector_map = {
+            "Technology": "XLK",
+            "Communication Services": "XLC",
+            "Energy": "XLE",
+            "Financial Services": "XLF",
+            "Healthcare": "XLV",
+            "Industrials": "XLI",
+            "Utilities": "XLU",
+            "Consumer Discretionary": "XLY",
+            "Consumer Staples": "XLP",
+            "Real Estate": "XLRE",
+            "Materials": "XLB",
+        }
+        return _sector_map.get(sector, _DEFAULT_BENCHMARK)
+    except Exception:
+        return _DEFAULT_BENCHMARK
 
 
 def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
@@ -169,33 +202,3 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
             conn.close()
 
     return {"created": inserted}
-
-
-def _resolve_sector_symbol(symbol: str) -> str:
-    """Return the sector ETF proxy for *symbol*, falling back to SPY."""
-    try:
-        from yf_session import get_ticker
-
-        info = get_ticker(symbol).info or {}
-        sector = str(info.get("sector") or "")
-        industry = str(info.get("industry") or "").lower()
-
-        if "semiconductor" in industry:
-            return "SOXX"
-
-        _sector_map = {
-            "Technology": "XLK",
-            "Communication Services": "XLC",
-            "Energy": "XLE",
-            "Financial Services": "XLF",
-            "Healthcare": "XLV",
-            "Industrials": "XLI",
-            "Utilities": "XLU",
-            "Consumer Discretionary": "XLY",
-            "Consumer Staples": "XLP",
-            "Real Estate": "XLRE",
-            "Materials": "XLB",
-        }
-        return _sector_map.get(sector, _DEFAULT_BENCHMARK)
-    except Exception:
-        return _DEFAULT_BENCHMARK

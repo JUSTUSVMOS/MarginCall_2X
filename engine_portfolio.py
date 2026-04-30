@@ -718,7 +718,7 @@ def init_db():
                 entry_price REAL NOT NULL,
                 -- entry_timestamp populated at enqueue; entry_notional_twd deferred to Task 2/3
                 entry_timestamp TEXT NOT NULL DEFAULT '',
-                entry_notional_twd REAL NOT NULL DEFAULT 0,
+                entry_notional_twd REAL,
                 due_at TEXT NOT NULL,
                 benchmark_symbol TEXT,
                 benchmark_entry_price REAL,

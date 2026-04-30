@@ -198,6 +198,7 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
             self.assertIsNotNone(row["benchmark_symbol"], "benchmark_symbol must not be NULL")
             self.assertIsNotNone(row["benchmark_entry_price"], "benchmark_entry_price must not be NULL")
             self.assertIsNotNone(row["sector_proxy_symbol"], "sector_proxy_symbol must not be NULL")
+            self.assertIsNotNone(row["sector_entry_price"], "sector_entry_price must not be NULL")
 
     def test_sync_buy_creates_checkpoints(self):
         """sync_buy is also an eligible action and must produce checkpoints."""
