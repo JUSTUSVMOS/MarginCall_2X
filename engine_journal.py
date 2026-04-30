@@ -70,7 +70,6 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> int:
         return 0
 
     placeholders = ",".join("?" * len(trade_log_ids))
-    today = datetime.now(timezone.utc).date()
     inserted = 0
 
     with db_lock:
@@ -78,23 +77,38 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> int:
         try:
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT id, symbol, action, price FROM trade_log WHERE id IN ({placeholders})",
+                f"SELECT id, symbol, action, price, timestamp FROM trade_log WHERE id IN ({placeholders})",
                 trade_log_ids,
             )
             rows = cursor.fetchall()
 
             for row in rows:
                 trade_id, symbol, action, entry_price = row[0], row[1], row[2], row[3]
+                trade_ts = row[4]
                 if action not in ELIGIBLE_TRADE_ACTIONS:
                     continue
+
+                # Anchor horizons to the trade's own timestamp, not enqueue time,
+                # so replayed or delayed enqueues produce correct T+N dates.
+                try:
+                    trade_date = (
+                        datetime.fromisoformat(trade_ts.replace("Z", "+00:00"))
+                        .astimezone(timezone.utc)
+                        .date()
+                    )
+                except Exception:
+                    trade_date = datetime.now(timezone.utc).date()
 
                 benchmark_sym = _DEFAULT_BENCHMARK
                 sector_sym = _resolve_sector_symbol(symbol)
 
+                # Benchmark and sector "entry" prices are prices at trade date,
+                # not at the horizon date, so comparisons have a consistent baseline.
+                bmark_entry = _load_price_on_or_after(benchmark_sym, trade_date)
+                sector_entry = _load_price_on_or_after(sector_sym, trade_date)
+
                 for label, bdays in CHECKPOINT_HORIZONS:
-                    due_date = _add_business_days(today, bdays)
-                    bmark_price = _load_price_on_or_after(benchmark_sym, due_date)
-                    sector_price = _load_price_on_or_after(sector_sym, due_date)
+                    due_date = _add_business_days(trade_date, bdays)
 
                     cursor.execute(
                         """
@@ -112,9 +126,9 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> int:
                             entry_price,
                             due_date.isoformat(),
                             benchmark_sym,
-                            bmark_price,
+                            bmark_entry,
                             sector_sym,
-                            sector_price,
+                            sector_entry,
                         ),
                     )
                     inserted += cursor.rowcount
