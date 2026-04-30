@@ -12,7 +12,7 @@ from src.database import db_lock, get_connection
 
 logger = logging.getLogger(__name__)
 
-# Horizons to track: (label, calendar days that approximate N business days)
+# Horizons to track: (label, business days to horizon)
 CHECKPOINT_HORIZONS = (("T+5", 5), ("T+20", 20))
 
 # Only these trade actions trigger outcome checkpoints
@@ -58,65 +58,96 @@ def _load_price_on_or_after(symbol: str, target_date: date) -> float | None:
         return None
 
 
-def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> int:
+def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> dict:
     """Insert pending checkpoint rows for each eligible trade ID.
 
     Skips IDs whose action is not in ELIGIBLE_TRADE_ACTIONS and silently ignores
     duplicate (trade_log_id, horizon_label) pairs via INSERT OR IGNORE.
 
-    Returns the number of rows actually inserted.
+    Returns {"created": <number of rows actually inserted>}.
     """
     if not trade_log_ids:
-        return 0
+        return {"created": 0}
+
+    import json
 
     placeholders = ",".join("?" * len(trade_log_ids))
     inserted = 0
 
+    # Phase 1: fetch trade rows — release lock before any network I/O.
     with db_lock:
         conn = get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT id, symbol, action, price, timestamp FROM trade_log WHERE id IN ({placeholders})",
+                f"SELECT id, symbol, action, price, timestamp, decision_snapshot"
+                f" FROM trade_log WHERE id IN ({placeholders})",
                 trade_log_ids,
             )
             rows = cursor.fetchall()
+        finally:
+            conn.close()
 
-            for row in rows:
-                trade_id, symbol, action, entry_price = row[0], row[1], row[2], row[3]
-                trade_ts = row[4]
-                if action not in ELIGIBLE_TRADE_ACTIONS:
-                    continue
+    # Phase 2: resolve sector and prices outside the lock (network I/O).
+    work_items = []
+    for row in rows:
+        trade_id, symbol, action, entry_price = row[0], row[1], row[2], row[3]
+        trade_ts = row[4]
+        decision_snapshot_raw = row[5] if len(row) > 5 else None
 
-                # Anchor horizons to the trade's own timestamp, not enqueue time,
-                # so replayed or delayed enqueues produce correct T+N dates.
-                try:
-                    trade_date = (
-                        datetime.fromisoformat(trade_ts.replace("Z", "+00:00"))
-                        .astimezone(timezone.utc)
-                        .date()
-                    )
-                except Exception:
-                    trade_date = datetime.now(timezone.utc).date()
+        if action not in ELIGIBLE_TRADE_ACTIONS:
+            continue
 
-                benchmark_sym = _DEFAULT_BENCHMARK
+        try:
+            trade_date = (
+                datetime.fromisoformat(trade_ts.replace("Z", "+00:00"))
+                .astimezone(timezone.utc)
+                .date()
+            )
+        except Exception:
+            logger.warning(
+                "enqueue: could not parse trade timestamp %r for trade_id=%s; using today",
+                trade_ts,
+                trade_id,
+            )
+            trade_date = datetime.now(timezone.utc).date()
+
+        # Prefer sector proxy from the decision snapshot to avoid a live lookup.
+        sector_sym = _DEFAULT_BENCHMARK
+        if decision_snapshot_raw:
+            try:
+                snap = json.loads(decision_snapshot_raw)
+                sector_sym = snap.get("sector_proxy_symbol") or _resolve_sector_symbol(symbol)
+            except Exception:
                 sector_sym = _resolve_sector_symbol(symbol)
+        else:
+            sector_sym = _resolve_sector_symbol(symbol)
 
-                # Benchmark and sector "entry" prices are prices at trade date,
-                # not at the horizon date, so comparisons have a consistent baseline.
-                bmark_entry = _load_price_on_or_after(benchmark_sym, trade_date)
-                sector_entry = _load_price_on_or_after(sector_sym, trade_date)
+        benchmark_sym = _DEFAULT_BENCHMARK
+        bmark_entry = _load_price_on_or_after(benchmark_sym, trade_date)
+        sector_entry = _load_price_on_or_after(sector_sym, trade_date)
 
+        work_items.append(
+            (trade_id, symbol, action, entry_price, trade_ts, trade_date,
+             benchmark_sym, bmark_entry, sector_sym, sector_entry)
+        )
+
+    # Phase 3: write checkpoint rows under lock.
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            for (trade_id, symbol, action, entry_price, trade_ts, trade_date,
+                 benchmark_sym, bmark_entry, sector_sym, sector_entry) in work_items:
                 for label, bdays in CHECKPOINT_HORIZONS:
                     due_date = _add_business_days(trade_date, bdays)
-
                     cursor.execute(
                         """
                         INSERT OR IGNORE INTO trade_outcome_checkpoints
                             (trade_log_id, horizon_label, symbol, action, entry_price,
-                             due_date, benchmark_symbol, benchmark_entry_price,
-                             sector_symbol, sector_entry_price)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             entry_timestamp, due_at, benchmark_symbol, benchmark_entry_price,
+                             sector_proxy_symbol, sector_entry_price)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             trade_id,
@@ -124,6 +155,7 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> int:
                             symbol,
                             action,
                             entry_price,
+                            trade_ts or "",
                             due_date.isoformat(),
                             benchmark_sym,
                             bmark_entry,
@@ -132,12 +164,11 @@ def enqueue_trade_outcome_checkpoints(trade_log_ids: list[int]) -> int:
                         ),
                     )
                     inserted += cursor.rowcount
-
             conn.commit()
         finally:
             conn.close()
 
-    return inserted
+    return {"created": inserted}
 
 
 def _resolve_sector_symbol(symbol: str) -> str:

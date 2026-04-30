@@ -55,7 +55,7 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
         )
 
     def test_trade_outcome_checkpoints_has_required_columns(self):
-        """trade_outcome_checkpoints must include benchmark and sector price columns."""
+        """trade_outcome_checkpoints must include all plan-aligned columns."""
         self._init_portfolio_db()
 
         cur = self.conn.cursor()
@@ -69,13 +69,29 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
             "symbol",
             "action",
             "entry_price",
-            "due_date",
+            "entry_timestamp",
+            "entry_notional_twd",
+            "due_at",
             "benchmark_symbol",
             "benchmark_entry_price",
-            "sector_symbol",
+            "sector_proxy_symbol",
             "sector_entry_price",
-            "outcome_price",
-            "status",
+            "beta_proxy_at_entry",
+            "beta_coverage",
+            "sector_coverage",
+            "resolved_price",
+            "benchmark_return_pct",
+            "sector_return_pct",
+            "actual_return_pct",
+            "beta_component_pct",
+            "sector_component_pct",
+            "timing_component_pct",
+            "beta_component_twd",
+            "sector_component_twd",
+            "timing_component_twd",
+            "last_error",
+            "retry_count",
+            "resolved_at",
             "created_at",
         ):
             self.assertIn(required, cols, f"Column '{required}' is missing")
@@ -88,8 +104,8 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
         cur.execute(
             """
             INSERT INTO trade_outcome_checkpoints
-                (trade_log_id, horizon_label, symbol, action, entry_price, due_date,
-                 benchmark_symbol, sector_symbol)
+                (trade_log_id, horizon_label, symbol, action, entry_price, due_at,
+                 benchmark_symbol, sector_proxy_symbol)
             VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, '2025-01-10', 'SPY', 'XLK')
             """
         )
@@ -99,8 +115,8 @@ class TestTradeOutcomeCheckpointsSchema(unittest.TestCase):
             cur.execute(
                 """
                 INSERT INTO trade_outcome_checkpoints
-                    (trade_log_id, horizon_label, symbol, action, entry_price, due_date,
-                     benchmark_symbol, sector_symbol)
+                    (trade_log_id, horizon_label, symbol, action, entry_price, due_at,
+                     benchmark_symbol, sector_proxy_symbol)
                 VALUES (1, 'T+5', 'AAPL', 'buy', 150.0, '2025-01-10', 'SPY', 'XLK')
                 """
             )
@@ -123,17 +139,23 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
         c.row_factory = sqlite3.Row
         return c
 
-    def _init_db_and_insert_trade(self, action="buy", symbol="AAPL", price=150.0):
+    def _init_db_and_insert_trade(self, action="buy", symbol="AAPL", price=150.0, timestamp=None):
         import engine_portfolio
         with patch.object(engine_portfolio, "db_lock", self.mock_lock), \
              patch.object(engine_portfolio, "get_connection", self._get_conn):
             engine_portfolio.init_db()
 
         cur = self.conn.cursor()
-        cur.execute(
-            "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
-            (symbol, action, price, 10),
-        )
+        if timestamp is not None:
+            cur.execute(
+                "INSERT INTO trade_log (symbol, action, price, shares, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (symbol, action, price, 10, timestamp),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO trade_log (symbol, action, price, shares) VALUES (?, ?, ?, ?)",
+                (symbol, action, price, 10),
+            )
         self.conn.commit()
         return cur.lastrowid
 
@@ -142,12 +164,14 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
         with patch.object(engine_journal, "db_lock", self.mock_lock), \
              patch.object(engine_journal, "get_connection", self._get_conn), \
              patch.object(engine_journal, "_load_price_on_or_after", return_value=mock_price):
-            engine_journal.enqueue_trade_outcome_checkpoints(trade_log_ids)
+            return engine_journal.enqueue_trade_outcome_checkpoints(trade_log_ids)
 
     def test_buy_creates_t5_and_t20_checkpoints(self):
         """Enqueueing a buy trade must create exactly T+5 and T+20 rows."""
         trade_id = self._init_db_and_insert_trade(action="buy")
-        self._enqueue([trade_id])
+        result = self._enqueue([trade_id])
+
+        self.assertEqual(result, {"created": 2}, "Return value must be {'created': 2}")
 
         cur = self.conn.cursor()
         cur.execute(
@@ -173,7 +197,7 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
         for row in cur.fetchall():
             self.assertIsNotNone(row["benchmark_symbol"], "benchmark_symbol must not be NULL")
             self.assertIsNotNone(row["benchmark_entry_price"], "benchmark_entry_price must not be NULL")
-            self.assertIsNotNone(row["sector_symbol"], "sector_symbol must not be NULL")
+            self.assertIsNotNone(row["sector_proxy_symbol"], "sector_proxy_symbol must not be NULL")
 
     def test_sync_buy_creates_checkpoints(self):
         """sync_buy is also an eligible action and must produce checkpoints."""
@@ -213,13 +237,39 @@ class TestEnqueueTradeOutcomeCheckpoints(unittest.TestCase):
         self.assertEqual(cur.fetchone()["cnt"], 2, "Duplicate enqueue must remain idempotent")
 
     def test_empty_list_is_noop(self):
-        """Passing an empty list must not raise and must leave the table empty."""
+        """Passing an empty list must not raise, must return {'created': 0}, and leave the table empty."""
         self._init_db_and_insert_trade(action="buy")
-        self._enqueue([])
+        result = self._enqueue([])
 
+        self.assertEqual(result, {"created": 0})
         cur = self.conn.cursor()
         cur.execute("SELECT count(*) as cnt FROM trade_outcome_checkpoints")
         self.assertEqual(cur.fetchone()["cnt"], 0)
+
+    def test_due_at_anchored_to_trade_timestamp_not_enqueue_time(self):
+        """due_at must be computed from the trade's own timestamp, not from enqueue time.
+
+        Trade date: 2025-01-06 (Monday)
+          T+5  business days → 2025-01-13 (Mon: 7,8,9,10,13)
+          T+20 business days → 2025-02-03 (Mon: skips only weekends, not holidays)
+        """
+        trade_id = self._init_db_and_insert_trade(
+            action="buy", timestamp="2025-01-06T12:00:00Z"
+        )
+        self._enqueue([trade_id])
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT horizon_label, due_at FROM trade_outcome_checkpoints"
+            " WHERE trade_log_id = ? ORDER BY horizon_label",
+            (trade_id,),
+        )
+        rows = {row["horizon_label"]: row["due_at"] for row in cur.fetchall()}
+
+        self.assertEqual(rows.get("T+5"), "2025-01-13",
+                         "T+5 due_at must be anchored to trade date, not enqueue date")
+        self.assertEqual(rows.get("T+20"), "2025-02-03",
+                         "T+20 due_at must be anchored to trade date, not enqueue date")
 
 
 if __name__ == "__main__":
