@@ -296,7 +296,11 @@ def settle_due_trade_outcomes(as_of: date | None = None) -> dict:
                         (bmark_resolved - float(benchmark_entry)) / float(benchmark_entry) * 100
                     )
             if beta_proxy is not None and benchmark_return_pct is None:
-                errors.append((row_id, "benchmark price unavailable"))
+                if benchmark_sym and benchmark_entry:
+                    err_msg = "benchmark price unavailable"
+                else:
+                    err_msg = "benchmark symbol or entry price not recorded"
+                errors.append((row_id, err_msg))
                 continue
 
             # Sector return (only when sector coverage was recorded)
@@ -392,6 +396,7 @@ def settle_due_trade_outcomes(as_of: date | None = None) -> dict:
                 cursor.execute(
                     """
                     UPDATE trade_outcome_checkpoints SET
+                        status='pending',
                         last_error=?,
                         retry_count=COALESCE(retry_count, 0) + 1
                     WHERE id=?

@@ -1143,6 +1143,34 @@ class TradeJournalSettlementTests(unittest.TestCase):
         self.assertIn("benchmark", row["last_error"].lower())
         self.assertIsNone(row["benchmark_return_pct"])
 
+    def test_settle_missing_benchmark_metadata_reports_data_integrity_error(self):
+        """Rows with beta proxy but missing benchmark metadata must report the real data gap."""
+        self._init_db()
+        from datetime import date
+        self._insert_checkpoint(
+            due_at="2025-01-10",
+            benchmark_symbol=None,
+            benchmark_entry_price=None,
+            beta_proxy_at_entry=1.2,
+            beta_coverage=1,
+            sector_coverage=0,
+            sector_entry_price=None,
+        )
+
+        result = self._settle(
+            as_of=date(2025, 1, 15),
+            price_map={"AAPL": 110.0},
+        )
+
+        self.assertEqual(result["settled"], 0)
+        self.assertEqual(result["errors"], 1)
+
+        cur = self.conn.cursor()
+        cur.execute("SELECT status, last_error FROM trade_outcome_checkpoints LIMIT 1")
+        row = cur.fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertIn("not recorded", row["last_error"].lower())
+
     def test_settle_missing_beta_proxy_preserves_null_components_and_coverage(self):
         """Rows without beta_proxy_at_entry must resolve without inventing attribution components."""
         self._init_db()
