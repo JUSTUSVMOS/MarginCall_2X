@@ -18,6 +18,7 @@ MARKET_SUFFIXES = (
 
 def normalize_ticker(symbol: str) -> str:
     symbol = symbol.upper().strip()
+    if symbol == "1ONQ": symbol = "IONQ"
     is_taiwan = any(char.isdigit() for char in symbol) and (
         len(symbol.replace(".TW", "").replace(".TWO", "")) <= 6
     )

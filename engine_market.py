@@ -1091,10 +1091,20 @@ def fetch_live_price(symbol: str) -> str:
 @tool()
 def get_live_price(symbol: str) -> str:
     """
-    Fetches the real-time or most recent price for a given ticker symbol.
-    Supports US and Taiwan markets.
+    Fetches the real-time or most recent price for one or multiple ticker symbols (comma-separated).
+    Supports US and Taiwan markets. Example: "AAPL,TSLA,2330.TW"
     """
-    return fetch_live_price(symbol)
+    symbols = [s.strip() for s in symbol.replace("，", ",").split(",") if s.strip()]
+    if not symbols:
+        return "❌ 尚未提供 symbol"
+    
+    results = []
+    for sym in symbols:
+        res = fetch_live_price(sym)
+        if res:
+            results.append(res)
+            
+    return "\n".join(results) if results else "❌ 無法取得報價" 
 
 def build_realtime_insight(symbol: str) -> str:
     """Pure intraday insight logic for direct callers and tests."""
