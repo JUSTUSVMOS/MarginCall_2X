@@ -57,6 +57,31 @@ Portfolio Health: Current longs are slightly underwater but still above 20MA; ri
 Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.
 """
 
+# Maximum commits to keep in memory (soft cap for downstream pruning logic)
+MAX_COMMITS = 200
+
+# A lightweight structured default template for the frontal lobe so clean checkouts
+# and fresh brains start with an explicit labeled note instead of an empty string.
+DEFAULT_FRONTAL_LOBE_TEMPLATE = "\n".join([
+    "Market View: ",
+    "Core Levels: ",
+    "Portfolio Health: ",
+    "Next Round: ",
+])
+
+
+def _default_frontal_lobe() -> str:
+    return DEFAULT_FRONTAL_LOBE_TEMPLATE
+
+
+def _render_frontal_lobe_note(sections: dict) -> str:
+    """Render a frontal lobe note from a sections dict preserving field order."""
+    lines = [f"{field}: {sections.get(field, '')}" for field in FRONTAL_LOBE_FIELDS]
+    if sections.get("Context Note"):
+        lines.append(f"Context Note: {sections.get('Context Note')}")
+    return "\n".join(lines)
+
+
 def generate_commit_hash(content: dict) -> str:
     """產生類似 Git 的 Commit Hash (SHA256 取前 8 碼)"""
     content_str = json.dumps(content, sort_keys=True)
@@ -170,7 +195,7 @@ def _default_heartbeat() -> Dict[str, Any]:
 
 def _default_state() -> Dict[str, Any]:
     return {
-        "frontalLobe": "",
+        "frontalLobe": _default_frontal_lobe(),
         "emotion": "neutral",
         "marketRegime": _default_market_regime(),
         "heartbeat": _default_heartbeat()
@@ -783,20 +808,21 @@ class Brain:
             return {"success": False, "message": f"Invalid section: {section_name}"}
         
         current_note = self.state.get("frontalLobe") or ""
-        sections = _coerce_frontal_lobe_sections(current_note)
-        
+        current_sections = _coerce_frontal_lobe_sections(current_note)
+        sections = dict(current_sections)
         # 更新指定區塊
         sections[section_name] = new_content.strip()
         
         # 重新組裝 Markdown 格式的內容
-        lines = [f"{field}: {sections[field]}" for field in FRONTAL_LOBE_FIELDS]
-        if sections.get("Context Note"):
-            lines.append(f"Context Note: {sections['Context Note']}")
+        normalized_note = _render_frontal_lobe_note(sections)
+        current_normalized = _render_frontal_lobe_note(current_sections)
+
+        # No-op detection: skip commit when normalized content is identical
+        if normalized_note == current_normalized:
+            return {"success": True, "message": f"Frontal lobe section '{section_name}' unchanged.", "unchanged": True}
         
-        normalized_note = "\n".join(lines)
+        # Persist the new note and create commit
         self.state["frontalLobe"] = normalized_note
-        
-        # 建立 commit
         summary = f"🧠 {section_name.upper()} AUTO-UPDATE: {_shorten(new_content, 80)}"
         delta_key = section_name.lower().replace(" ", "_")
         self._create_commit(
@@ -807,13 +833,19 @@ class Brain:
             frontal_lobe_ref=self._build_frontal_lobe_ref(normalized_note),
             source=source
         )
-        return {"success": True, "message": f"Frontal lobe section '{section_name}' updated."}
+        return {"success": True, "message": f"Frontal lobe section '{section_name}' updated.", "unchanged": False}
 
     def update_frontal_lobe(self, content: str) -> Dict[str, Any]:
         normalized_note = normalize_frontal_lobe_note(content)
         if self._is_placeholder_content(normalized_note):
             logger.warning("[Brain] Rejected placeholder-quality frontal lobe write.")
             return {"success": False, "message": "Rejected: content is too vague to persist."}
+
+        # No-op detection: compare normalized new note to current persisted normalized note
+        current_note = self.state.get("frontalLobe") or ""
+        current_normalized = _render_frontal_lobe_note(_coerce_frontal_lobe_sections(current_note))
+        if normalized_note == current_normalized:
+            return {"success": True, "message": "Frontal lobe unchanged", "unchanged": True}
 
         snapshot_head = self.head
         self.state["frontalLobe"] = normalized_note
@@ -836,7 +868,7 @@ class Brain:
         if not committed:
             self._load()
             return {"success": False, "message": "Rejected: concurrent frontal lobe update detected."}
-        return {"success": True, "message": "Frontal lobe updated successfully"}
+        return {"success": True, "message": "Frontal lobe updated successfully", "unchanged": False}
 
     def update_emotion(self, emotion: str, reason: str) -> Dict[str, Any]:
         old_emotion = self.state["emotion"]
