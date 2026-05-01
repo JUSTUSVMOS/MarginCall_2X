@@ -1005,8 +1005,17 @@ class Brain:
 def get_frontal_lobe_write_guide() -> str:
     return FRONTAL_LOBE_WRITE_GUIDE
 
-# 全域唯一的 Brain 實例
-_global_brain = Brain()
+# 全域唯一的 Brain 實例 (lazy-initialized to avoid import-time persistence)
+_global_brain = None
+
+def _get_global_brain():
+    """Lazily create the module-level Brain instance. This prevents import-time
+    persistence side effects when the module is imported during test setup.
+    """
+    global _global_brain
+    if _global_brain is None:
+        _global_brain = Brain()
+    return _global_brain
 
 @tool()
 def get_frontal_lobe() -> str:
@@ -1022,7 +1031,7 @@ def get_frontal_lobe() -> str:
     CALL THIS TOOL FIRST at the start of every analysis to maintain cognitive continuity.
     Returns: Your previous self-assessment string.
     """
-    return _global_brain.get_frontal_lobe()
+    return _get_global_brain().get_frontal_lobe()
 
 @tool(mode="write")
 def update_frontal_lobe(content: str) -> str:
@@ -1043,7 +1052,7 @@ def update_frontal_lobe(content: str) -> str:
     Portfolio Health: Long exposure is slightly underwater but still controlled above 20MA.
     Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation.
     """
-    res = _global_brain.update_frontal_lobe(content)
+    res = _get_global_brain().update_frontal_lobe(content)
     return res["message"]
 
 @tool()
@@ -1052,7 +1061,7 @@ def get_emotion() -> str:
     Retrieves your current emotional state and recent sentiment trajectory.
     Use this to understand your own cognitive bias.
     """
-    return json.dumps(_global_brain.get_emotion(), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().get_emotion(), ensure_ascii=False, indent=2)
 
 @tool(mode="write")
 def update_emotion(emotion: str, reason: str) -> str:
@@ -1063,7 +1072,7 @@ def update_emotion(emotion: str, reason: str) -> str:
     Common states: fearful, cautious, neutral, confident, euphoric.
     Example: emotion="cautious", reason="BTC rejected at $100k resistance with declining volume."
     """
-    res = _global_brain.update_emotion(emotion, reason)
+    res = _get_global_brain().update_emotion(emotion, reason)
     return res["message"]
 
 @tool()
@@ -1077,7 +1086,7 @@ def get_market_regime() -> str:
     - heartbeat timestamp
     - watchpoints and key macro signals
     """
-    return json.dumps(_global_brain.get_market_regime(), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().get_market_regime(), ensure_ascii=False, indent=2)
 
 @tool(mode="write")
 def update_market_regime(summary: str, regime: str = "", risk_score: int = -1) -> str:
@@ -1086,7 +1095,7 @@ def update_market_regime(summary: str, regime: str = "", risk_score: int = -1) -
     Keep it concise but durable: this should survive the next restart.
     """
     normalized_score = None if risk_score < 0 else risk_score
-    res = _global_brain.update_market_regime(
+    res = _get_global_brain().update_market_regime(
         summary=summary,
         regime=regime or None,
         risk_score=normalized_score,
@@ -1109,7 +1118,7 @@ def get_brain_snapshot() -> str:
     Returns the full persistent cognitive snapshot, including frontal lobe, emotion,
     market regime, heartbeat metadata, and recent commits.
     """
-    return json.dumps(_global_brain.get_brain_snapshot(), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().get_brain_snapshot(), ensure_ascii=False, indent=2)
 
 @tool()
 def get_brain_log(limit: int = 10) -> str:
@@ -1122,32 +1131,32 @@ def get_brain_log(limit: int = 10) -> str:
 
     Hash-chain metadata is intentionally hidden from normal output to save tokens.
     """
-    return json.dumps(_global_brain.log(limit), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().log(limit), ensure_ascii=False, indent=2)
 
 def sync_market_brain(force: bool = False, max_age_minutes: int = 180) -> Dict[str, Any]:
-    if not force and not _global_brain.needs_market_regime_refresh(max_age_minutes=max_age_minutes):
+    if not force and not _get_global_brain().needs_market_regime_refresh(max_age_minutes=max_age_minutes):
         return {
             "success": True,
             "changed": False,
             "message": "Persistent macro regime is still fresh; heartbeat skipped.",
-            "marketRegime": _global_brain.get_market_regime(max_age_minutes=max_age_minutes)
+            "marketRegime": _get_global_brain().get_market_regime(max_age_minutes=max_age_minutes)
         }
     try:
         import engine_risk as risk
 
         snapshot = risk.get_global_risk_snapshot(force_refresh=force)
-        result = _global_brain.sync_market_snapshot(snapshot)
-        result["marketRegime"] = _global_brain.get_market_regime(max_age_minutes=max_age_minutes)
+        result = _get_global_brain().sync_market_snapshot(snapshot)
+        result["marketRegime"] = _get_global_brain().get_market_regime(max_age_minutes=max_age_minutes)
         return result
     except Exception as e:
-        _global_brain.record_heartbeat_error(str(e))
+        _get_global_brain().record_heartbeat_error(str(e))
         raise
 
 def build_cognitive_context(max_age_minutes: int = 180) -> str:
-    return _global_brain.get_cognitive_context(max_age_minutes=max_age_minutes)
+    return _get_global_brain().get_cognitive_context(max_age_minutes=max_age_minutes)
 
 def patch_frontal_lobe_section(section_name: str, content: str, source: str = "system") -> Dict[str, Any]:
-    return _global_brain.update_lobe_section(section_name, content, source=source)
+    return _get_global_brain().update_lobe_section(section_name, content, source=source)
 
 if __name__ == "__main__":
     # 自檢測試

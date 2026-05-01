@@ -18,8 +18,25 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
     def setUp(self):
         # create isolated directory inside tests to avoid /tmp and keep repo-local
         self.workdir = tempfile.mkdtemp(prefix="brain_test_", dir=_TESTS_DIR)
-        # import here to patch module vars after import
-        import engine_memory as mem
+
+        # Before importing engine_memory, record repo-root .brain contents (if any)
+        repo_root = Path(__file__).resolve().parents[1]
+        repo_brain_dir = repo_root / ".brain"
+        if repo_brain_dir.exists():
+            pre_import_listing = set(p.name for p in repo_brain_dir.iterdir())
+        else:
+            pre_import_listing = None
+
+        # import here (should NOT create persistence files at import time)
+        import importlib
+        mem = importlib.import_module("engine_memory")
+
+        # Verify import did not create or modify the repo .brain directory
+        if pre_import_listing is None:
+            self.assertFalse(repo_brain_dir.exists(), "Import unexpectedly created repo .brain directory")
+        else:
+            post = set(p.name for p in repo_brain_dir.iterdir())
+            self.assertEqual(pre_import_listing, post, "Import modified repo .brain contents")
 
         # Patch persistence paths to our isolated dir
         mem.BRAIN_DIR = Path(self.workdir)
