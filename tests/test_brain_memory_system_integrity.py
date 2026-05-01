@@ -109,5 +109,59 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertEqual(current, initial)
 
 
+
+
+    def test_update_market_regime_signal_only_refresh_updates_state_without_commit(self):
+        brain = self.mem.Brain()
+        first = brain.update_market_regime(
+            summary="Macro backdrop unchanged; wait for confirmation.",
+            regime="🟡 整理",
+            risk_score=33,
+            watchpoints=["SPX 20MA"],
+            reasons=["Macro steady"],
+            signals={"spx": 5200.4},
+            source="unit_test",
+            updated_at="2026-01-02T03:04:05Z",
+        )
+        first_change_at = brain.state["heartbeat"]["lastMacroChangeAt"]
+        commit_count = len(brain.commits)
+
+        second = brain.update_market_regime(
+            summary="Macro backdrop unchanged; wait for confirmation.",
+            regime="🟡 整理",
+            risk_score=33,
+            watchpoints=["SPX 20MA"],
+            reasons=["Macro steady"],
+            signals={"spx": 5198.8, "yieldCurve10Y2Y": -0.21},
+            source="unit_test",
+            updated_at="2026-01-02T03:09:05Z",
+        )
+
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(len(brain.commits), commit_count)
+        self.assertEqual(brain.state["marketRegime"]["signals"]["spx"], 5198.8)
+        self.assertEqual(brain.state["marketRegime"]["signals"]["yieldCurve10Y2Y"], -0.21)
+        self.assertEqual(brain.state["heartbeat"]["lastSyncStatus"], "no_change")
+        self.assertEqual(brain.state["heartbeat"]["lastMacroChangeAt"], first_change_at)
+
+    def test_commit_history_is_capped_at_200_entries(self):
+        brain = self.mem.Brain()
+
+        for idx in range(205):
+            result = brain.update_emotion(
+                "cautious" if idx % 2 else "neutral",
+                f"reason {idx}"
+            )
+            self.assertTrue(result["success"])
+
+        self.assertEqual(len(brain.commits), 200)
+        self.assertEqual(brain.head, brain.commits[-1]["hash"])
+        self.assertEqual(brain.commits[0]["delta"]["reason"], "reason 5")
+
+        reloaded = self.mem.Brain()
+        self.assertEqual(len(reloaded.commits), 200)
+        self.assertEqual(reloaded.head, reloaded.commits[-1]["hash"])
+
 if __name__ == "__main__":
     unittest.main()

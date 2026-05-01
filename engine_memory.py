@@ -58,6 +58,7 @@ Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmat
 
 # Maximum commits to keep in memory (soft cap for downstream pruning logic)
 MAX_COMMITS = 200
+MARKET_REGIME_COMMIT_KEYS = ("summary", "state", "riskScore", "watchpoints", "reasons")
 
 # A lightweight structured default template for the frontal lobe so clean checkouts
 # and fresh brains start with an explicit labeled note instead of an empty string.
@@ -478,10 +479,17 @@ class Brain:
         )
         return placeholder_sections >= 2
 
+    def _trim_commit_history(self):
+        if len(self.commits) <= MAX_COMMITS:
+            return
+        self.commits = self.commits[-MAX_COMMITS:]
+        self.head = self.commits[-1]["hash"] if self.commits else None
+
     def _save(self):
         """將狀態持久化至本地端"""
         try:
             BRAIN_DIR.mkdir(exist_ok=True)
+            self._trim_commit_history()
             with open(BRAIN_FILE, 'w', encoding='utf-8') as f:
                 json.dump({
                     "state": self.state,
@@ -726,8 +734,10 @@ class Brain:
 
     def _market_regime_changed(self, new_market: Dict[str, Any]) -> bool:
         current = self.state.get("marketRegime", _default_market_regime())
-        keys = ["summary", "state", "riskScore", "watchpoints", "reasons", "signals"]
-        return any(_to_comparable(current.get(key)) != _to_comparable(new_market.get(key)) for key in keys)
+        return any(
+            _to_comparable(current.get(key)) != _to_comparable(new_market.get(key))
+            for key in MARKET_REGIME_COMMIT_KEYS
+        )
 
     # ==================== Queries (讀取記憶) ====================
 
