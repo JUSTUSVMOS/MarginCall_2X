@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 # 定義 Brain 資料夾路徑
 BRAIN_DIR = Path(__file__).resolve().parent / ".brain"
-BRAIN_DIR.mkdir(exist_ok=True)
 BRAIN_FILE = BRAIN_DIR / "commit.json"
 FRONTAL_LOBE_FILE = BRAIN_DIR / "frontal-lobe.md"
 EMOTION_FILE = BRAIN_DIR / "emotion-log.json"
