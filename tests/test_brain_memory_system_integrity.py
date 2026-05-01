@@ -9,11 +9,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-
-
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
 class TestBrainMemorySystemIntegrity(unittest.TestCase):
     def setUp(self):
         # create isolated directory inside tests to avoid /tmp and keep repo-local
@@ -67,31 +63,60 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
 
     def test_update_lobe_section_skips_identical_normalized_content(self):
         brain = self.mem._global_brain
-        initial = brain.get_frontal_lobe()
-        sections = self.mem._coerce_frontal_lobe_sections(initial)
-        before_commits = len(brain.commits)
+        VALID_NOTE = (
+            "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
 
-        # update with identical content for a section
-        res = brain.update_lobe_section("Core Levels", sections.get("Core Levels", ""), source="test")
-        after_commits = len(brain.commits)
+            "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
 
-        # unchanged writes should indicate unchanged and not create a commit
-        self.assertIn("success", res)
-        # allow both unchanged True or absent (older behavior) but prefer unchanged True
-        self.assertTrue(res.get("unchanged", True))
-        self.assertEqual(before_commits, after_commits)
+            "Portfolio Health: Keep leverage light until event risk clears.\n"
+
+            "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure."
+        )
+        self.assertTrue(brain.update_frontal_lobe(VALID_NOTE)["success"])
+        commit_count = len(brain.commits)
+
+        result = brain.update_lobe_section(
+            "Market View",
+            "  Neutral - CPI is the next catalyst while breadth remains mixed.  ",
+            source="unit_test",
+        )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["unchanged"])
+        self.assertEqual(result["message"], "Frontal lobe section 'Market View' unchanged.")
+        self.assertEqual(len(brain.commits), commit_count)
+        self.assertEqual(brain.get_frontal_lobe(), VALID_NOTE)
 
     def test_update_frontal_lobe_skips_identical_normalized_content(self):
         brain = self.mem._global_brain
-        initial = brain.get_frontal_lobe()
-        before_commits = len(brain.commits)
+        VALID_NOTE = (
+            "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
 
-        res = brain.update_frontal_lobe(initial)
-        after_commits = len(brain.commits)
+            "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
 
-        self.assertIn("success", res)
-        self.assertTrue(res.get("unchanged", True))
-        self.assertEqual(before_commits, after_commits)
+            "Portfolio Health: Keep leverage light until event risk clears.\n"
+
+            "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure."
+        )
+        self.assertTrue(brain.update_frontal_lobe(VALID_NOTE)["success"])
+        commit_count = len(brain.commits)
+
+        result = brain.update_frontal_lobe(
+            "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
+
+            "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
+
+            "Portfolio Health: Keep leverage light until event risk clears.\n"
+
+            "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure.\n"
+
+        )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("unchanged", True))
+        self.assertEqual(result["message"], "Frontal lobe unchanged; skipped commit.")
+        self.assertEqual(len(brain.commits), commit_count)
+        self.assertEqual(brain.get_frontal_lobe(), VALID_NOTE)
 
     def test_rejecting_placeholder_note_preserves_default_template(self):
         brain = self.mem._global_brain
@@ -107,8 +132,6 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         # ensure frontal lobe remains the structured default template
         current = brain.get_frontal_lobe()
         self.assertEqual(current, initial)
-
-
 
 
     def test_update_market_regime_signal_only_refresh_updates_state_without_commit(self):

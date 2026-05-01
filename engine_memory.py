@@ -62,12 +62,12 @@ MARKET_REGIME_COMMIT_KEYS = ("summary", "state", "riskScore", "watchpoints", "re
 
 # A lightweight structured default template for the frontal lobe so clean checkouts
 # and fresh brains start with an explicit labeled note instead of an empty string.
-DEFAULT_FRONTAL_LOBE_TEMPLATE = "\n".join([
-    "Market View: ",
-    "Core Levels: ",
-    "Portfolio Health: ",
-    "Next Round: ",
-])
+DEFAULT_FRONTAL_LOBE_TEMPLATE = (
+    "Market View: Neutral - No durable market thesis has been logged yet.\n"
+    "Core Levels: No key support or resistance levels have been logged yet.\n"
+    "Portfolio Health: Exposure review pending; keep sizing disciplined until a thesis is logged.\n"
+    "Next Round: Do not add risk until the market view and levels are updated."
+)
 
 
 def _default_frontal_lobe() -> str:
@@ -364,6 +364,13 @@ class Brain:
         "re-check exposure before adding risk",
         "wait for confirmation before re-entering",
     )
+
+    def _normalized_current_frontal_lobe(self) -> str:
+        current_note = self.state.get("frontalLobe") or _default_frontal_lobe()
+        return _render_frontal_lobe_note(_coerce_frontal_lobe_sections(current_note))
+
+    def _frontal_lobe_write_is_unchanged(self, normalized_note: str) -> bool:
+        return self._normalized_current_frontal_lobe() == normalized_note
 
     def __init__(self):
         self.state: Dict[str, Any] = _default_state()
@@ -816,19 +823,17 @@ class Brain:
         if section_name not in FRONTAL_LOBE_FIELDS:
             return {"success": False, "message": f"Invalid section: {section_name}"}
         
-        current_note = self.state.get("frontalLobe") or ""
-        current_sections = _coerce_frontal_lobe_sections(current_note)
-        sections = dict(current_sections)
-        # 更新指定區塊
+        current_note = self.state.get("frontalLobe") or _default_frontal_lobe()
+        sections = _coerce_frontal_lobe_sections(current_note)
         sections[section_name] = new_content.strip()
-        
-        # 重新組裝 Markdown 格式的內容
         normalized_note = _render_frontal_lobe_note(sections)
-        current_normalized = _render_frontal_lobe_note(current_sections)
 
-        # No-op detection: skip commit when normalized content is identical
-        if normalized_note == current_normalized:
-            return {"success": True, "message": f"Frontal lobe section '{section_name}' unchanged.", "unchanged": True}
+        if self._frontal_lobe_write_is_unchanged(normalized_note):
+            return {
+                "success": True,
+                "unchanged": True,
+                "message": f"Frontal lobe section '{section_name}' unchanged."
+            }
         
         # Persist the new note and create commit
         self.state["frontalLobe"] = normalized_note
@@ -850,11 +855,8 @@ class Brain:
             logger.warning("[Brain] Rejected placeholder-quality frontal lobe write.")
             return {"success": False, "message": "Rejected: content is too vague to persist."}
 
-        # No-op detection: compare normalized new note to current persisted normalized note
-        current_note = self.state.get("frontalLobe") or ""
-        current_normalized = _render_frontal_lobe_note(_coerce_frontal_lobe_sections(current_note))
-        if normalized_note == current_normalized:
-            return {"success": True, "message": "Frontal lobe unchanged", "unchanged": True}
+        if self._frontal_lobe_write_is_unchanged(normalized_note):
+            return {"success": True, "unchanged": True, "message": "Frontal lobe unchanged; skipped commit."}
 
         snapshot_head = self.head
         self.state["frontalLobe"] = normalized_note
