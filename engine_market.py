@@ -1390,9 +1390,16 @@ def build_fundamental_report(symbol: str) -> str:
         report = f"【📊 {symbol} 深度基本面】\n"
         report += f"● EPS: {eps} | P/E: {pe} | P/B: {pb}\n"
         report += f"● 空頭回補天數 (Days to Cover): {short_ratio}\n"
-        report += f"● 機構持倉比: {inst_own_str}"
+        report += f"● 機構持倉比: {inst_own_str}\n"
         
-        return report
+        # 如果是 ETF，嘗試拉取成分股
+        holdings = ticker.get_holdings()
+        if holdings:
+            report += "\n【🔝 前十大持倉 (ETF 成分)】\n"
+            for h in holdings[:10]:
+                report += f"- {h['Symbol']} ({h['Name']}): {h['Percent']*100:.2f}%\n"
+        
+        return report.strip()
     except Exception as e:
         logger.error(f"Fundamental data fetch failed for {symbol}: {e}")
         return format_tool_error(f"基本面數據獲取失敗: {e}", data_unavailable=True)
@@ -1401,7 +1408,7 @@ def build_fundamental_report(symbol: str) -> str:
 @tool()
 def get_fundamental_data(symbol: str) -> str:
     """
-    Retrieves key fundamental metrics (EPS, P/E, P/B, Institutional Ownership) for a stock.
+    Retrieves key fundamental metrics (EPS, P/E, P/B) for a stock, AND Top 10 holdings/components for an ETF.
     """
     return build_fundamental_report(symbol)
 
