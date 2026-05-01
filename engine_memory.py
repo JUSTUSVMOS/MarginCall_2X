@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 # 定義 Brain 資料夾路徑
 BRAIN_DIR = Path(__file__).resolve().parent / ".brain"
-BRAIN_DIR.mkdir(exist_ok=True)
 BRAIN_FILE = BRAIN_DIR / "commit.json"
 FRONTAL_LOBE_FILE = BRAIN_DIR / "frontal-lobe.md"
 EMOTION_FILE = BRAIN_DIR / "emotion-log.json"
@@ -56,6 +55,32 @@ Core Levels: Watch SPX 5200 support and 5250 resistance.
 Portfolio Health: Current longs are slightly underwater but still above 20MA; risk is manageable.
 Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.
 """
+
+# Maximum commits to keep in memory (soft cap for downstream pruning logic)
+MAX_COMMITS = 200
+MARKET_REGIME_COMMIT_KEYS = ("summary", "state", "riskScore", "watchpoints", "reasons")
+
+# A lightweight structured default template for the frontal lobe so clean checkouts
+# and fresh brains start with an explicit labeled note instead of an empty string.
+DEFAULT_FRONTAL_LOBE_TEMPLATE = "\n".join([
+    "Market View: ",
+    "Core Levels: ",
+    "Portfolio Health: ",
+    "Next Round: ",
+])
+
+
+def _default_frontal_lobe() -> str:
+    return DEFAULT_FRONTAL_LOBE_TEMPLATE
+
+
+def _render_frontal_lobe_note(sections: dict) -> str:
+    """Render a frontal lobe note from a sections dict preserving field order."""
+    lines = [f"{field}: {sections.get(field, '')}" for field in FRONTAL_LOBE_FIELDS]
+    if sections.get("Context Note"):
+        lines.append(f"Context Note: {sections.get('Context Note')}")
+    return "\n".join(lines)
+
 
 def generate_commit_hash(content: dict) -> str:
     """產生類似 Git 的 Commit Hash (SHA256 取前 8 碼)"""
@@ -170,7 +195,7 @@ def _default_heartbeat() -> Dict[str, Any]:
 
 def _default_state() -> Dict[str, Any]:
     return {
-        "frontalLobe": "",
+        "frontalLobe": _default_frontal_lobe(),
         "emotion": "neutral",
         "marketRegime": _default_market_regime(),
         "heartbeat": _default_heartbeat()
@@ -454,10 +479,17 @@ class Brain:
         )
         return placeholder_sections >= 2
 
+    def _trim_commit_history(self):
+        if len(self.commits) <= MAX_COMMITS:
+            return
+        self.commits = self.commits[-MAX_COMMITS:]
+        self.head = self.commits[-1]["hash"] if self.commits else None
+
     def _save(self):
         """將狀態持久化至本地端"""
         try:
             BRAIN_DIR.mkdir(exist_ok=True)
+            self._trim_commit_history()
             with open(BRAIN_FILE, 'w', encoding='utf-8') as f:
                 json.dump({
                     "state": self.state,
@@ -702,8 +734,10 @@ class Brain:
 
     def _market_regime_changed(self, new_market: Dict[str, Any]) -> bool:
         current = self.state.get("marketRegime", _default_market_regime())
-        keys = ["summary", "state", "riskScore", "watchpoints", "reasons", "signals"]
-        return any(_to_comparable(current.get(key)) != _to_comparable(new_market.get(key)) for key in keys)
+        return any(
+            _to_comparable(current.get(key)) != _to_comparable(new_market.get(key))
+            for key in MARKET_REGIME_COMMIT_KEYS
+        )
 
     # ==================== Queries (讀取記憶) ====================
 
@@ -783,20 +817,21 @@ class Brain:
             return {"success": False, "message": f"Invalid section: {section_name}"}
         
         current_note = self.state.get("frontalLobe") or ""
-        sections = _coerce_frontal_lobe_sections(current_note)
-        
+        current_sections = _coerce_frontal_lobe_sections(current_note)
+        sections = dict(current_sections)
         # 更新指定區塊
         sections[section_name] = new_content.strip()
         
         # 重新組裝 Markdown 格式的內容
-        lines = [f"{field}: {sections[field]}" for field in FRONTAL_LOBE_FIELDS]
-        if sections.get("Context Note"):
-            lines.append(f"Context Note: {sections['Context Note']}")
+        normalized_note = _render_frontal_lobe_note(sections)
+        current_normalized = _render_frontal_lobe_note(current_sections)
+
+        # No-op detection: skip commit when normalized content is identical
+        if normalized_note == current_normalized:
+            return {"success": True, "message": f"Frontal lobe section '{section_name}' unchanged.", "unchanged": True}
         
-        normalized_note = "\n".join(lines)
+        # Persist the new note and create commit
         self.state["frontalLobe"] = normalized_note
-        
-        # 建立 commit
         summary = f"🧠 {section_name.upper()} AUTO-UPDATE: {_shorten(new_content, 80)}"
         delta_key = section_name.lower().replace(" ", "_")
         self._create_commit(
@@ -807,13 +842,19 @@ class Brain:
             frontal_lobe_ref=self._build_frontal_lobe_ref(normalized_note),
             source=source
         )
-        return {"success": True, "message": f"Frontal lobe section '{section_name}' updated."}
+        return {"success": True, "message": f"Frontal lobe section '{section_name}' updated.", "unchanged": False}
 
     def update_frontal_lobe(self, content: str) -> Dict[str, Any]:
         normalized_note = normalize_frontal_lobe_note(content)
         if self._is_placeholder_content(normalized_note):
             logger.warning("[Brain] Rejected placeholder-quality frontal lobe write.")
             return {"success": False, "message": "Rejected: content is too vague to persist."}
+
+        # No-op detection: compare normalized new note to current persisted normalized note
+        current_note = self.state.get("frontalLobe") or ""
+        current_normalized = _render_frontal_lobe_note(_coerce_frontal_lobe_sections(current_note))
+        if normalized_note == current_normalized:
+            return {"success": True, "message": "Frontal lobe unchanged", "unchanged": True}
 
         snapshot_head = self.head
         self.state["frontalLobe"] = normalized_note
@@ -836,7 +877,7 @@ class Brain:
         if not committed:
             self._load()
             return {"success": False, "message": "Rejected: concurrent frontal lobe update detected."}
-        return {"success": True, "message": "Frontal lobe updated successfully"}
+        return {"success": True, "message": "Frontal lobe updated successfully", "unchanged": False}
 
     def update_emotion(self, emotion: str, reason: str) -> Dict[str, Any]:
         old_emotion = self.state["emotion"]
@@ -973,8 +1014,17 @@ class Brain:
 def get_frontal_lobe_write_guide() -> str:
     return FRONTAL_LOBE_WRITE_GUIDE
 
-# 全域唯一的 Brain 實例
-_global_brain = Brain()
+# 全域唯一的 Brain 實例 (lazy-initialized to avoid import-time persistence)
+_global_brain = None
+
+def _get_global_brain():
+    """Lazily create the module-level Brain instance. This prevents import-time
+    persistence side effects when the module is imported during test setup.
+    """
+    global _global_brain
+    if _global_brain is None:
+        _global_brain = Brain()
+    return _global_brain
 
 @tool()
 def get_frontal_lobe() -> str:
@@ -990,7 +1040,7 @@ def get_frontal_lobe() -> str:
     CALL THIS TOOL FIRST at the start of every analysis to maintain cognitive continuity.
     Returns: Your previous self-assessment string.
     """
-    return _global_brain.get_frontal_lobe()
+    return _get_global_brain().get_frontal_lobe()
 
 @tool(mode="write")
 def update_frontal_lobe(content: str) -> str:
@@ -1011,7 +1061,7 @@ def update_frontal_lobe(content: str) -> str:
     Portfolio Health: Long exposure is slightly underwater but still controlled above 20MA.
     Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation.
     """
-    res = _global_brain.update_frontal_lobe(content)
+    res = _get_global_brain().update_frontal_lobe(content)
     return res["message"]
 
 @tool()
@@ -1020,7 +1070,7 @@ def get_emotion() -> str:
     Retrieves your current emotional state and recent sentiment trajectory.
     Use this to understand your own cognitive bias.
     """
-    return json.dumps(_global_brain.get_emotion(), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().get_emotion(), ensure_ascii=False, indent=2)
 
 @tool(mode="write")
 def update_emotion(emotion: str, reason: str) -> str:
@@ -1031,7 +1081,7 @@ def update_emotion(emotion: str, reason: str) -> str:
     Common states: fearful, cautious, neutral, confident, euphoric.
     Example: emotion="cautious", reason="BTC rejected at $100k resistance with declining volume."
     """
-    res = _global_brain.update_emotion(emotion, reason)
+    res = _get_global_brain().update_emotion(emotion, reason)
     return res["message"]
 
 @tool()
@@ -1045,7 +1095,7 @@ def get_market_regime() -> str:
     - heartbeat timestamp
     - watchpoints and key macro signals
     """
-    return json.dumps(_global_brain.get_market_regime(), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().get_market_regime(), ensure_ascii=False, indent=2)
 
 @tool(mode="write")
 def update_market_regime(summary: str, regime: str = "", risk_score: int = -1) -> str:
@@ -1054,7 +1104,7 @@ def update_market_regime(summary: str, regime: str = "", risk_score: int = -1) -
     Keep it concise but durable: this should survive the next restart.
     """
     normalized_score = None if risk_score < 0 else risk_score
-    res = _global_brain.update_market_regime(
+    res = _get_global_brain().update_market_regime(
         summary=summary,
         regime=regime or None,
         risk_score=normalized_score,
@@ -1077,7 +1127,7 @@ def get_brain_snapshot() -> str:
     Returns the full persistent cognitive snapshot, including frontal lobe, emotion,
     market regime, heartbeat metadata, and recent commits.
     """
-    return json.dumps(_global_brain.get_brain_snapshot(), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().get_brain_snapshot(), ensure_ascii=False, indent=2)
 
 @tool()
 def get_brain_log(limit: int = 10) -> str:
@@ -1090,32 +1140,32 @@ def get_brain_log(limit: int = 10) -> str:
 
     Hash-chain metadata is intentionally hidden from normal output to save tokens.
     """
-    return json.dumps(_global_brain.log(limit), ensure_ascii=False, indent=2)
+    return json.dumps(_get_global_brain().log(limit), ensure_ascii=False, indent=2)
 
 def sync_market_brain(force: bool = False, max_age_minutes: int = 180) -> Dict[str, Any]:
-    if not force and not _global_brain.needs_market_regime_refresh(max_age_minutes=max_age_minutes):
+    if not force and not _get_global_brain().needs_market_regime_refresh(max_age_minutes=max_age_minutes):
         return {
             "success": True,
             "changed": False,
             "message": "Persistent macro regime is still fresh; heartbeat skipped.",
-            "marketRegime": _global_brain.get_market_regime(max_age_minutes=max_age_minutes)
+            "marketRegime": _get_global_brain().get_market_regime(max_age_minutes=max_age_minutes)
         }
     try:
         import engine_risk as risk
 
         snapshot = risk.get_global_risk_snapshot(force_refresh=force)
-        result = _global_brain.sync_market_snapshot(snapshot)
-        result["marketRegime"] = _global_brain.get_market_regime(max_age_minutes=max_age_minutes)
+        result = _get_global_brain().sync_market_snapshot(snapshot)
+        result["marketRegime"] = _get_global_brain().get_market_regime(max_age_minutes=max_age_minutes)
         return result
     except Exception as e:
-        _global_brain.record_heartbeat_error(str(e))
+        _get_global_brain().record_heartbeat_error(str(e))
         raise
 
 def build_cognitive_context(max_age_minutes: int = 180) -> str:
-    return _global_brain.get_cognitive_context(max_age_minutes=max_age_minutes)
+    return _get_global_brain().get_cognitive_context(max_age_minutes=max_age_minutes)
 
 def patch_frontal_lobe_section(section_name: str, content: str, source: str = "system") -> Dict[str, Any]:
-    return _global_brain.update_lobe_section(section_name, content, source=source)
+    return _get_global_brain().update_lobe_section(section_name, content, source=source)
 
 if __name__ == "__main__":
     # 自檢測試
