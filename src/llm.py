@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import inspect
 import logging
@@ -10,6 +11,10 @@ import httpx
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+
+from src.result_budget import cap_history_text, cap_single_result, enforce_turn_budget
+from src.tool_loop_guard import ToolLoopGuard
+from src.tools import _REGISTRY
 
 load_dotenv()
 
@@ -310,68 +315,81 @@ def _call_openrouter(
         return None
 
 
-def _execute_openai_tool_calls(tool_calls: List[Dict], tools: List[Callable]) -> List[Dict]:
+def _get_tool_mode(tool_name: str) -> str:
+    entry = _REGISTRY.get(tool_name)
+    if not entry:
+        return "write"
+    return str(entry.get("mode", "write"))
+
+
+def _execute_single_tool_call(tc: Dict, tool_map: Dict[str, Callable]) -> Dict:
+    call_id = tc.get("id")
+    func_name = tc.get("function", {}).get("name")
+    func_args_str = tc.get("function", {}).get("arguments", "{}")
+    logger.info(f"🛠️ [OpenRouter_Tool] Executing {func_name}...")
+    try:
+        args = json.loads(func_args_str)
+        if not isinstance(args, dict):
+            raise ValueError(f"Tool arguments for {func_name} must be a JSON object.")
+        func = tool_map.get(func_name)
+        if func is None:
+            logger.warning(f"⚠️ [OpenRouter_Tool] Tool {func_name} not found in tool_map")
+            return {"role": "tool", "tool_call_id": call_id, "name": func_name, "content": f"Error: Tool {func_name} not found."}
+
+        signature = inspect.signature(func)
+        accepts_var_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
+        filtered_args = args
+        if not accepts_var_kwargs:
+            allowed_names = set(signature.parameters.keys())
+            filtered_args = {key: value for key, value in args.items() if key in allowed_names}
+            dropped_args = sorted(set(args.keys()) - allowed_names)
+            if dropped_args:
+                logger.warning(
+                    f"⚠️ [OpenRouter_Tool] Dropping unsupported args for {func_name}: {', '.join(dropped_args)}"
+                )
+        result = func(**filtered_args)
+        logger.info(f"✅ [OpenRouter_Tool] {func_name} completed")
+        return {"role": "tool", "tool_call_id": call_id, "name": func_name, "content": str(result)}
+    except Exception as exc:
+        logger.error(f"❌ [OpenRouter_Tool] {func_name} failed: {exc}")
+        return {"role": "tool", "tool_call_id": call_id, "name": func_name, "content": f"Error: {exc}"}
+
+
+def _execute_openai_tool_calls(tool_calls: List[Dict], tools: List[Callable], max_concurrent: int = 4) -> List[Dict]:
     """
     執行 OpenRouter 回傳的工具調用指令，並格式化為 OpenAI 的 tool 回傳格式。
     """
-    results = []
-    tool_map = {t.__name__: t for t in tools}
-    
+    tool_map = {tool.__name__: tool for tool in tools}
+    ordered_results: List[Dict] = []
+    pending_reads: List[Dict] = []
+
+    def flush_reads() -> None:
+        nonlocal ordered_results, pending_reads
+        if not pending_reads:
+            return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+            futures = [pool.submit(_execute_single_tool_call, tc, tool_map) for tc in pending_reads]
+            results = [future.result() for future in concurrent.futures.as_completed(futures)]
+        order = {tc.get("id"): index for index, tc in enumerate(pending_reads)}
+        results.sort(key=lambda item: order.get(item.get("tool_call_id"), 999))
+        ordered_results.extend(results)
+        pending_reads = []
+
     for tc in tool_calls:
-        call_id = tc.get("id")
-        func_name = tc.get("function", {}).get("name")
-        func_args_str = tc.get("function", {}).get("arguments", "{}")
-        
-        logger.info(f"🛠️ [OpenRouter_Tool] Executing {func_name}...")
-        
-        try:
-            import json
-            args = json.loads(func_args_str)
-            func = tool_map.get(func_name)
-            if func:
-                if not isinstance(args, dict):
-                    raise ValueError(f"Tool arguments for {func_name} must be a JSON object.")
+        tool_name = tc.get("function", {}).get("name", "")
+        if _get_tool_mode(tool_name) == "read":
+            pending_reads.append(tc)
+            continue
+        flush_reads()
+        ordered_results.append(_execute_single_tool_call(tc, tool_map))
 
-                signature = inspect.signature(func)
-                accepts_var_kwargs = any(
-                    param.kind == inspect.Parameter.VAR_KEYWORD
-                    for param in signature.parameters.values()
-                )
-
-                filtered_args = args
-                if not accepts_var_kwargs:
-                    allowed_names = set(signature.parameters.keys())
-                    filtered_args = {key: value for key, value in args.items() if key in allowed_names}
-                    dropped_args = sorted(set(args.keys()) - allowed_names)
-                    if dropped_args:
-                        logger.warning(
-                            f"⚠️ [OpenRouter_Tool] Dropping unsupported args for {func_name}: {', '.join(dropped_args)}"
-                        )
-
-                res = func(**filtered_args)
-                results.append({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "name": func_name,
-                    "content": str(res)
-                })
-            else:
-                results.append({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "name": func_name,
-                    "content": f"Error: Tool {func_name} not found."
-                })
-        except Exception as e:
-            logger.error(f"❌ [OpenRouter_Tool] {func_name} failed: {e}")
-            results.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": func_name,
-                "content": f"Error: {str(e)}"
-            })
-            
-    return results
+    flush_reads()
+    final_order = {tc.get("id"): index for index, tc in enumerate(tool_calls)}
+    ordered_results.sort(key=lambda item: final_order.get(item.get("tool_call_id"), 999))
+    return ordered_results
 
 
 def _build_config(
@@ -643,15 +661,50 @@ def chat_with_tools(
                 content = _normalize_openrouter_content(res_message.get("content"))
                 
                 # 建立一個迴圈，讓模型可以連續呼叫工具 (最多 15 次)
+                loop_guard = ToolLoopGuard(max_calls_per_tool=3, similarity_threshold=0.7)
                 loop_count = 0
                 while tool_calls and use_tools and loop_count < 15:
                     loop_count += 1
                     messages.append(res_message)
-                    
+
+                    for tc in tool_calls:
+                        func_name = tc.get("function", {}).get("name", "")
+                        raw_args = tc.get("function", {}).get("arguments", "{}")
+                        try:
+                            parsed_args = json.loads(raw_args)
+                        except Exception:
+                            parsed_args = {}
+                        warning = loop_guard.check_should_warn(func_name, parsed_args if isinstance(parsed_args, dict) else {})
+                        if warning:
+                            messages.append({"role": "user", "content": warning})
+
                     tool_results = _execute_openai_tool_calls(tool_calls, use_tools)
-                    logger.info(f"DEBUG tool_results: {tool_results}")
+                    if len(tool_results) != len(tool_calls):
+                        logger.error(
+                            f"[LLM] Tool execution mismatch: {len(tool_calls)} calls vs {len(tool_results)} results"
+                        )
+                    for tc, result in zip(tool_calls, tool_results):
+                        raw_args = tc.get("function", {}).get("arguments", "{}")
+                        try:
+                            parsed_args = json.loads(raw_args)
+                        except Exception:
+                            parsed_args = {}
+                        loop_guard.record_call(
+                            tc.get("function", {}).get("name", ""),
+                            parsed_args if isinstance(parsed_args, dict) else {},
+                            str(result.get("content", ""))[:200],
+                        )
+                    tool_results = [
+                        {**item, "content": cap_single_result(str(item.get("content", "")), str(item.get("name", "unknown")))}
+                        for item in tool_results
+                    ]
+                    tool_results = enforce_turn_budget(tool_results)
                     messages.extend(tool_results)
-                     
+
+                    usage_warning = loop_guard.format_warning_for_prompt()
+                    if usage_warning:
+                        messages.append({"role": "user", "content": usage_warning})
+
                     res_message = _call_openrouter(
                         model_name,
                         messages,
@@ -757,4 +810,3 @@ def chat_with_tools(
         return timeout_message
 
     return unavailable_message
-

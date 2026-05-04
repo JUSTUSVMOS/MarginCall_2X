@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from src import llm
 from src.tool_loop_guard import ToolLoopGuard
 from src.result_budget import (
     SINGLE_RESULT_CAP,
@@ -9,6 +11,7 @@ from src.result_budget import (
     cap_to_length,
     enforce_turn_budget,
 )
+from src.tools import _REGISTRY, tool
 
 
 class ToolLoopGuardTests(unittest.TestCase):
@@ -195,6 +198,169 @@ class ResultBudgetTests(unittest.TestCase):
 
         self.assertLess(len(capped), len(oversized))
         self.assertIn("payload-", capped)
+
+
+class OpenRouterLoopTests(unittest.TestCase):
+    def test_execute_single_tool_call_logs_dropped_args(self):
+        def only_symbol(symbol: str) -> str:
+            return f"ok:{symbol}"
+
+        tool_call = {
+            "id": "call_1",
+            "function": {"name": "only_symbol", "arguments": '{"symbol": "TSLA", "extra": "ignore"}'},
+        }
+
+        with patch.object(llm.logger, "warning") as warning_mock:
+            result = llm._execute_single_tool_call(tool_call, {"only_symbol": only_symbol})
+
+        self.assertEqual(result["content"], "ok:TSLA")
+        warning_mock.assert_called_once()
+        self.assertIn("Dropping unsupported args", warning_mock.call_args[0][0])
+
+    def test_execute_openai_tool_calls_uses_registry_modes_for_parallel_reads(self):
+        execution_log = []
+        submitted = []
+
+        @tool()
+        def runtime_read_a(symbol: str) -> str:
+            execution_log.append(("read", symbol))
+            return f"read-a:{symbol}"
+
+        @tool()
+        def runtime_read_b(symbol: str) -> str:
+            execution_log.append(("read", symbol))
+            return f"read-b:{symbol}"
+
+        @tool(mode="write")
+        def runtime_write(note: str) -> str:
+            execution_log.append(("write", note))
+            return f"write:{note}"
+
+        self.addCleanup(_REGISTRY.pop, "runtime_read_a", None)
+        self.addCleanup(_REGISTRY.pop, "runtime_read_b", None)
+        self.addCleanup(_REGISTRY.pop, "runtime_write", None)
+
+        class FakeFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class RecordingExecutor:
+            def __init__(self, max_workers=None):
+                self.max_workers = max_workers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def submit(self, fn, *args, **kwargs):
+                submitted.append(args[0]["function"]["name"])
+                return FakeFuture(fn(*args, **kwargs))
+
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "runtime_read_a", "arguments": '{"symbol": "TSLA"}'}},
+            {"id": "call_2", "function": {"name": "runtime_read_b", "arguments": '{"symbol": "NVDA"}'}},
+            {"id": "call_3", "function": {"name": "runtime_write", "arguments": '{"note": "persist"}'}},
+        ]
+
+        with patch.object(llm.concurrent.futures, "ThreadPoolExecutor", RecordingExecutor), patch.object(
+            llm.concurrent.futures, "as_completed", side_effect=lambda futures: list(futures)
+        ):
+            results = llm._execute_openai_tool_calls(tool_calls, [runtime_read_a, runtime_read_b, runtime_write])
+
+        self.assertEqual(submitted, ["runtime_read_a", "runtime_read_b"])
+        self.assertEqual([item["tool_call_id"] for item in results], ["call_1", "call_2", "call_3"])
+        self.assertEqual(execution_log[-1], ("write", "persist"))
+
+    def test_chat_with_tools_injects_loop_warning_before_next_openrouter_round(self):
+        responses = iter(
+            [
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {"content": {"text": "loop handled"}},
+            ]
+        )
+        captured_messages = []
+
+        def only_symbol_tool(symbol: str) -> str:
+            return f"ok:{symbol}"
+
+        def fake_openrouter(model_name, messages, temperature=0.3, tools=None, timeout_seconds=60):
+            captured_messages.append(list(messages))
+            return next(responses)
+
+        with patch.object(llm, "_call_openrouter", side_effect=fake_openrouter):
+            result = llm.chat_with_tools(
+                "analyze arkk",
+                tools=[only_symbol_tool],
+                models=["minimax/minimax-m2.5:free"],
+                history=[],
+            )
+
+        flattened = "\n".join(
+            message.get("content", "")
+            for batch in captured_messages
+            for message in batch
+            if isinstance(message, dict) and isinstance(message.get("content"), str)
+        )
+        self.assertEqual(result, "loop handled")
+        self.assertIn("very similar", flattened)
+
+    def test_chat_with_tools_logs_tool_count_mismatch(self):
+        responses = iter(
+            [
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {"content": {"text": "loop handled"}},
+            ]
+        )
+
+        def only_symbol_tool(symbol: str) -> str:
+            return f"ok:{symbol}"
+
+        def fake_openrouter(model_name, messages, temperature=0.3, tools=None, timeout_seconds=60):
+            return next(responses)
+
+        with patch.object(llm, "_call_openrouter", side_effect=fake_openrouter), patch.object(
+            llm, "_execute_openai_tool_calls", return_value=[]
+        ), patch.object(llm.logger, "error") as error_mock:
+            result = llm.chat_with_tools(
+                "analyze arkk",
+                tools=[only_symbol_tool],
+                models=["minimax/minimax-m2.5:free"],
+                history=[],
+            )
+
+        self.assertEqual(result, "loop handled")
+        error_mock.assert_called_once()
+        self.assertIn("Tool execution mismatch", error_mock.call_args[0][0])
 
 
 if __name__ == "__main__":
