@@ -976,14 +976,23 @@ class Brain:
         if portfolio_health.get("nav_twd") is None:
             health_block = "### Portfolio Health (Auto)\n- 尚未同步 portfolio health。\n"
         else:
+            # Render with graceful handling of None values
+            nav_twd = portfolio_health.get('nav_twd')
+            pnl_pct = portfolio_health.get('pnl_pct')
+            top3_concentration = portfolio_health.get('top3_concentration')
+            drawdown_pct = portfolio_health.get('drawdown_pct')
+            risk_state = portfolio_health.get('risk_state')
+            gross_scale = portfolio_health.get('gross_scale')
+            updated_at = portfolio_health.get('updated_at')
+            
             health_lines = [
-                f"- **NAV (TWD):** {portfolio_health['nav_twd']}",
-                f"- **PnL:** {portfolio_health['pnl_pct']}%",
-                f"- **Top3 Concentration:** {portfolio_health['top3_concentration'] * 100:.1f}%",
-                f"- **Drawdown:** {portfolio_health['drawdown_pct']}%",
-                f"- **Risk State:** {portfolio_health['risk_state']}",
-                f"- **Gross Scale:** {portfolio_health['gross_scale']}",
-                f"- **Last updated:** {portfolio_health['updated_at']}"
+                f"- **NAV (TWD):** {nav_twd}",
+                f"- **PnL:** {pnl_pct}%" if pnl_pct is not None else "- **PnL:** N/A",
+                f"- **Top3 Concentration:** {top3_concentration:.1f}%" if top3_concentration is not None else "- **Top3 Concentration:** N/A",
+                f"- **Drawdown:** {drawdown_pct}%" if drawdown_pct is not None else "- **Drawdown:** N/A",
+                f"- **Risk State:** {risk_state}" if risk_state is not None else "- **Risk State:** N/A",
+                f"- **Gross Scale:** {gross_scale}" if gross_scale is not None else "- **Gross Scale:** N/A",
+                f"- **Last updated:** {updated_at}" if updated_at is not None else "- **Last updated:** N/A"
             ]
             health_block = "### Portfolio Health (Auto)\n" + "\n".join(health_lines) + "\n"
         
@@ -1143,6 +1152,11 @@ class Brain:
         # Check NAV drift (>= 0.5% is material)
         old_nav = old.get("nav_twd")
         new_nav = new.get("nav_twd")
+        
+        # Transition from None to any value or vice versa is material
+        if (old_nav is None) != (new_nav is None):
+            return False
+        
         if old_nav is not None and new_nav is not None:
             # For zero/none baseline, any different NAV is material
             if old_nav <= 0:

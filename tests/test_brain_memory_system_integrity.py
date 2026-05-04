@@ -534,7 +534,7 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         mock_analysis = {
             "total_current": 123456.789012,  # Should round to 123456.79
             "total_pnl_pct": 5.123456789,    # Should round to 5.1235
-            "top3_concentration": 0.456789012,  # Should round to 0.4568
+            "top3_concentration": 45.6789012,  # PERCENT SCALE: 45.67%, should round to 45.6789
             "summary": "Mock summary"
         }
         
@@ -569,8 +569,8 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
                                                "nav_twd should be rounded to 2 decimals")
                                 self.assertEqual(call_args["pnl_pct"], 5.1235, 
                                                "pnl_pct should be rounded to 4 decimals")
-                                self.assertEqual(call_args["top3_concentration"], 0.4568, 
-                                               "top3_concentration should be rounded to 4 decimals")
+                                self.assertEqual(call_args["top3_concentration"], 45.6789, 
+                                               "top3_concentration (percent scale) should be rounded to 4 decimals")
                                 self.assertEqual(call_args["drawdown_pct"], 3.4568, 
                                                "drawdown_pct should be rounded to 4 decimals after multiplying by 100")
                                 self.assertEqual(call_args["risk_state"], "Normal", 
@@ -650,7 +650,7 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         health_data = {
             "nav_twd": 100000.0,
             "pnl_pct": 5.5,
-            "top3_concentration": 0.45,
+            "top3_concentration": 45.0,  # Percent scale: 45%
             "drawdown_pct": 2.1,
             "risk_state": "Normal",
             "gross_scale": 1.2
@@ -741,6 +741,132 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         # Must NOT mention old four-section format
         self.assertNotIn("四段式專業交易筆記格式", source,
                         "src/agent.py must not reference old four-section format")
+
+    def test_top3_concentration_renders_with_percent_scale_without_double_scaling(self):
+        """
+        Task 3 code-quality review fix: top3_concentration is already stored as a percent value
+        (e.g., 67.0 means 67%), but current rendering multiplies by 100 again, showing 6700.0%.
+        
+        Verified data flow:
+        - engine_portfolio.build_portfolio_analysis() computes: top3_pct = (top3_mv / total * 100)
+        - then returns "top3_concentration": top3_pct (already percent scale)
+        
+        This test verifies:
+        - top3_concentration = 67.0 renders as "67.0%" not "6700.0%"
+        - rendering does NOT multiply by 100
+        """
+        brain = self.mem.Brain()
+        
+        # Write portfolio health with percent-scale top3_concentration
+        health_data = {
+            "nav_twd": 100000.0,
+            "pnl_pct": 5.5,
+            "top3_concentration": 67.0,  # Already percent scale (67%)
+            "drawdown_pct": 2.1,
+            "risk_state": "Normal",
+            "gross_scale": 1.2
+        }
+        brain.update_portfolio_health(health_data)
+        
+        # Get cognitive context
+        context = brain.get_cognitive_context()
+        
+        # Must render as 67.0%, not 6700.0%
+        self.assertIn("67.0%", context, "top3_concentration should render as 67.0%")
+        self.assertNotIn("6700", context, "top3_concentration must not be double-scaled to 6700.0%")
+
+    def test_partial_portfolio_health_renders_safely_with_placeholders(self):
+        """
+        Task 3 code-quality review fix: partial portfolio-health state should render gracefully.
+        
+        Verified bug reproduction:
+        - Set nav_twd = 1000.0
+        - Set pnl_pct, top3_concentration, drawdown_pct, risk_state, gross_scale to None
+        - Current behavior raises: TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'
+        
+        This test verifies:
+        - get_cognitive_context() does not crash when numeric fields are None
+        - renders placeholders like "N/A" for missing values
+        - keeps empty-state message only for fully absent state (nav_twd is None)
+        """
+        brain = self.mem.Brain()
+        
+        # Write partial portfolio health (nav_twd exists, other fields None)
+        partial_health = {
+            "nav_twd": 1000.0,
+            "pnl_pct": None,
+            "top3_concentration": None,
+            "drawdown_pct": None,
+            "risk_state": None,
+            "gross_scale": None
+        }
+        brain.update_portfolio_health(partial_health)
+        
+        # Should not crash
+        context = brain.get_cognitive_context()
+        
+        # Should include Portfolio Health section
+        self.assertIn("### Portfolio Health (Auto)", context)
+        
+        # Should include NAV
+        self.assertIn("1000.0", context)
+        
+        # Should include placeholders for missing fields
+        self.assertIn("N/A", context, "Missing fields should render as N/A")
+        
+        # Should NOT show empty-state message (that's only for fully absent state)
+        self.assertNotIn("尚未同步 portfolio health", context,
+                        "Should not show empty-state message when nav_twd exists")
+
+    def test_refresh_portfolio_health_uses_percent_scale_for_top3_concentration(self):
+        """
+        Task 3 code-quality review fix: update the runtime payload-mapping test to use
+        real percent-scale top3_concentration fixture.
+        
+        Current test at line 537 uses fractional scale (0.456789012), but the real producer
+        engine_portfolio.build_portfolio_analysis() returns percent scale (e.g., 45.6789012).
+        
+        This test verifies the fixture matches production convention.
+        """
+        from unittest.mock import patch
+        import engine_portfolio
+        
+        # Mock with percent-scale top3_concentration (as real producer returns)
+        mock_analysis = {
+            "total_current": 123456.789012,
+            "total_pnl_pct": 5.123456789,
+            "top3_concentration": 45.6789012,  # Percent scale: 45.67%
+            "summary": "Mock summary"
+        }
+        
+        mock_overlay = {
+            "current_drawdown": 0.03456789012,
+            "trade_mode_label": "Normal",
+            "recommended_gross_scale": 1.234567890
+        }
+        
+        mock_nav_snapshot = {"snapshot": "mock"}
+        
+        with patch.object(engine_portfolio, '_load_portfolio_rows', return_value=[]):
+            with patch.object(engine_portfolio, '_build_live_position_snapshots', return_value=[]):
+                with patch.object(engine_portfolio, 'record_portfolio_nav_snapshot', return_value=mock_nav_snapshot):
+                    with patch.object(engine_portfolio, 'build_portfolio_analysis', return_value=mock_analysis):
+                        with patch.object(engine_portfolio, 'compute_portfolio_risk_overlay', return_value=mock_overlay):
+                            with patch('engine_memory.update_portfolio_health') as mock_update:
+                                mock_update.return_value = {"success": True, "message": "Updated"}
+                                
+                                # Call the function
+                                result = engine_portfolio.refresh_portfolio_health_summary(source="test")
+                                
+                                # Verify update_portfolio_health was called
+                                self.assertEqual(mock_update.call_count, 1)
+                                
+                                call_args = mock_update.call_args[0][0]
+                                
+                                # Verify percent-scale top3_concentration is rounded correctly
+                                # 45.6789012 should round to 45.6789 (4 decimals)
+                                self.assertEqual(call_args["top3_concentration"], 45.6789,
+                                               "top3_concentration should use percent scale and round to 4 decimals")
 
 if __name__ == "__main__":
     unittest.main()
