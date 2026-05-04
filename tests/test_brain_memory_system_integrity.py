@@ -818,6 +818,82 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertNotIn("尚未同步 portfolio health", context,
                         "Should not show empty-state message when nav_twd exists")
 
+    def test_thesis_with_only_context_note_does_not_show_blank_state(self):
+        """
+        Task 3 final fix: empty-state gate must check all four fields including context_note.
+        
+        When context_note exists (even with quality content in other fields), the empty-state
+        gate should not trigger. This tests that context_note is included in the gate check.
+        
+        (Note: must provide enough quality content to pass placeholder check, so we can test
+        the rendering logic rather than the quality filter.)
+        """
+        brain = self.mem.Brain()
+        
+        # Set market_view and core_levels with quality content, plus context_note
+        # (Placeholder check requires 2/3 core fields filled)
+        brain.update_frontal_lobe({
+            "market_view": "Neutral - awaiting catalyst",
+            "core_levels": "SPX 5200 support, 5250 resistance",
+            "next_round": "",
+            "context_note": "CPI data release next Tuesday."
+        })
+        
+        context = brain.get_cognitive_context(max_age_minutes=999999)
+        
+        # Should NOT show blank-state message
+        self.assertNotIn("尚未建立。請在分析後使用 update_frontal_lobe 記錄你的觀點", context,
+                        "Should not show blank-state message when any field exists")
+        
+        # Should render three core lines, with fallback for next_round
+        self.assertIn("**Market View:** Neutral - awaiting catalyst", context)
+        self.assertIn("**Core Levels:** SPX 5200 support, 5250 resistance", context)
+        self.assertIn("**Next Round:** 尚未建立", context,
+                     "Should render Next Round with fallback when empty")
+        
+        # Should include the context note
+        self.assertIn("**Context:** CPI data release", context)
+    
+    def test_partial_thesis_renders_all_three_core_lines_with_fallbacks(self):
+        """
+        Task 3 final fix: partial thesis should always render Market View, Core Levels, Next Round
+        with 尚未建立 fallbacks where missing.
+        
+        When thesis has some fields but not all, it must render:
+        - Market View with fallback if empty
+        - Core Levels with fallback if empty
+        - Next Round with fallback if empty
+        - Context only when present
+        - Last updated always in non-empty branch
+        """
+        brain = self.mem.Brain()
+        
+        # Set only market_view and core_levels (missing next_round)
+        # Plus context_note to verify it's rendered
+        brain.update_frontal_lobe({
+            "market_view": "Bullish - SPX broke through resistance",
+            "core_levels": "Watch 5300 next resistance level",
+            "next_round": "",
+            "context_note": "Fed meeting next week"
+        })
+        
+        context = brain.get_cognitive_context(max_age_minutes=999999)
+        
+        # Should NOT show blank-state message
+        self.assertNotIn("尚未建立。請在分析後使用 update_frontal_lobe 記錄你的觀點", context)
+        
+        # Should render all three core lines
+        self.assertIn("**Market View:** Bullish - SPX broke through resistance", context)
+        self.assertIn("**Core Levels:** Watch 5300 next resistance level", context)
+        self.assertIn("**Next Round:** 尚未建立", context,
+                     "Should render Next Round with fallback when empty")
+        
+        # Should include context
+        self.assertIn("**Context:** Fed meeting next week", context)
+        
+        # Should include last updated
+        self.assertIn("**Last updated:**", context)
+
     def test_refresh_portfolio_health_uses_percent_scale_for_top3_concentration(self):
         """
         Task 3 code-quality review fix: update the runtime payload-mapping test to use

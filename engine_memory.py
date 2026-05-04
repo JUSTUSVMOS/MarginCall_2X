@@ -956,18 +956,18 @@ class Brain:
         stale_note = "（可能過期，等待 heartbeat 刷新）" if market.get("isStale") else ""
         
         # Render Trading Thesis block
-        if not market_view and not core_levels and not next_round:
+        if not any(frontal.get(key) for key in ("market_view", "core_levels", "next_round", "context_note")):
             thesis_block = "### Trading Thesis (Frontal Lobe)\n尚未建立。請在分析後使用 update_frontal_lobe 記錄你的觀點。\n"
         else:
             thesis_lines = []
-            if market_view:
-                thesis_lines.append(f"**Market View:** {market_view}")
-            if core_levels:
-                thesis_lines.append(f"**Core Levels:** {core_levels}")
-            if next_round:
-                thesis_lines.append(f"**Next Round:** {next_round}")
+            # Always render three core lines with fallback
+            thesis_lines.append(f"**Market View:** {market_view or '尚未建立'}")
+            thesis_lines.append(f"**Core Levels:** {core_levels or '尚未建立'}")
+            thesis_lines.append(f"**Next Round:** {next_round or '尚未建立'}")
+            # Optional context line only when present
             if context_note:
                 thesis_lines.append(f"**Context:** {context_note}")
+            # Last updated always in non-empty branch
             if frontal_updated:
                 thesis_lines.append(f"**Last updated:** {frontal_updated}")
             thesis_block = "### Trading Thesis (Frontal Lobe)\n" + "\n".join(thesis_lines) + "\n"
