@@ -1339,12 +1339,12 @@ def get_frontal_lobe() -> str:
     
     This is your Frontal Lobe, where you stored:
     - Market trend outlook (bullish/bearish/uncertain)
-    - Portfolio health assessments
     - Key predictions or expectations for upcoming rounds
+    - Critical support/resistance levels being monitored
     - Critical reminders (e.g., "Watch BTC support at $95k")
     
     CALL THIS TOOL FIRST at the start of every analysis to maintain cognitive continuity.
-    Returns: Your previous self-assessment string.
+    Returns: The rendered frontal-lobe thesis view from your previous session.
     """
     return _get_global_brain().get_frontal_lobe()
 
