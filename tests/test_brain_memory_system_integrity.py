@@ -417,9 +417,18 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
     def test_update_portfolio_health_saves_state_without_creating_commit(self):
         """
         Task 2 regression: update_portfolio_health(...) must update state and skip commit.
+        Strengthened: first create a normal frontal-lobe commit, then verify portfolio health
+        write does not add another commit.
         """
         brain = self.mem.Brain()
         
+        # First create a normal frontal-lobe commit
+        brain.update_frontal_lobe(dict(VALID_THESIS))
+        commit_count_after_frontal_lobe = len(brain.commits)
+        self.assertGreater(commit_count_after_frontal_lobe, 0, 
+                          "Frontal lobe update should create at least one commit")
+        
+        # Now call update_portfolio_health
         health_data = {
             "nav_twd": 100000.0,
             "pnl_pct": 5.5,
@@ -429,7 +438,6 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
             "gross_scale": 1.2
         }
         
-        initial_commit_count = len(brain.commits)
         result = brain.update_portfolio_health(health_data)
         
         # Should succeed
@@ -446,9 +454,9 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertEqual(ph["gross_scale"], 1.2)
         self.assertIsNotNone(ph["updated_at"])
         
-        # Should NOT create a commit
-        self.assertEqual(len(brain.commits), initial_commit_count,
-                        "update_portfolio_health should not create commits")
+        # Should NOT create a commit - count should stay exactly the same
+        self.assertEqual(len(brain.commits), commit_count_after_frontal_lobe,
+                        "update_portfolio_health should not create commits relative to normal frontal-lobe behavior")
 
     def test_update_portfolio_health_skips_small_nav_only_drift(self):
         """
@@ -505,6 +513,75 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         # Look for the specific pattern that would appear in refresh_portfolio_health_summary
         self.assertNotIn('patch_frontal_lobe_section("Portfolio Health"', source,
                         "engine_portfolio.py must not patch Portfolio Health into frontal lobe")
+
+    def test_refresh_portfolio_health_summary_rounds_numeric_fields_correctly(self):
+        """
+        Task 2 code-quality review fix: refresh_portfolio_health_summary must round numeric fields
+        before passing to update_portfolio_health to avoid materiality gaps in no-op detection.
+        
+        This test verifies:
+        - nav_twd rounded to 2 decimals
+        - pnl_pct rounded to 4 decimals
+        - top3_concentration rounded to 4 decimals
+        - drawdown_pct rounded to 4 decimals (after multiplying by 100)
+        - gross_scale rounded to 4 decimals when not None
+        - return object includes memory_update
+        """
+        from unittest.mock import patch, MagicMock, call
+        import engine_portfolio
+        
+        # Mock all internal dependencies to make this test fast and deterministic
+        mock_analysis = {
+            "total_current": 123456.789012,  # Should round to 123456.79
+            "total_pnl_pct": 5.123456789,    # Should round to 5.1235
+            "top3_concentration": 0.456789012,  # Should round to 0.4568
+            "summary": "Mock summary"
+        }
+        
+        mock_overlay = {
+            "current_drawdown": 0.03456789012,  # * 100 = 3.456789012, should round to 3.4568
+            "trade_mode_label": "Normal",
+            "recommended_gross_scale": 1.234567890  # Should round to 1.2346
+        }
+        
+        mock_nav_snapshot = {"snapshot": "mock"}
+        
+        with patch.object(engine_portfolio, '_load_portfolio_rows', return_value=[]):
+            with patch.object(engine_portfolio, '_build_live_position_snapshots', return_value=[]):
+                with patch.object(engine_portfolio, 'record_portfolio_nav_snapshot', return_value=mock_nav_snapshot):
+                    with patch.object(engine_portfolio, 'build_portfolio_analysis', return_value=mock_analysis):
+                        with patch.object(engine_portfolio, 'compute_portfolio_risk_overlay', return_value=mock_overlay):
+                            # Patch the engine_memory module at import time
+                            with patch('engine_memory.update_portfolio_health') as mock_update:
+                                mock_update.return_value = {"success": True, "message": "Updated"}
+                                
+                                # Call the function
+                                result = engine_portfolio.refresh_portfolio_health_summary(source="test")
+                                
+                                # Verify update_portfolio_health was called with correctly rounded values
+                                self.assertEqual(mock_update.call_count, 1, 
+                                               "update_portfolio_health should be called exactly once")
+                                
+                                call_args = mock_update.call_args[0][0]
+                                
+                                # Verify rounding
+                                self.assertEqual(call_args["nav_twd"], 123456.79, 
+                                               "nav_twd should be rounded to 2 decimals")
+                                self.assertEqual(call_args["pnl_pct"], 5.1235, 
+                                               "pnl_pct should be rounded to 4 decimals")
+                                self.assertEqual(call_args["top3_concentration"], 0.4568, 
+                                               "top3_concentration should be rounded to 4 decimals")
+                                self.assertEqual(call_args["drawdown_pct"], 3.4568, 
+                                               "drawdown_pct should be rounded to 4 decimals after multiplying by 100")
+                                self.assertEqual(call_args["risk_state"], "Normal", 
+                                               "risk_state should pass through unchanged")
+                                self.assertEqual(call_args["gross_scale"], 1.2346, 
+                                               "gross_scale should be rounded to 4 decimals")
+                                
+                                # Verify return object includes memory_update
+                                self.assertIn("memory_update", result, 
+                                            "Result should include memory_update")
+                                self.assertEqual(result["memory_update"], {"success": True, "message": "Updated"})
 
 if __name__ == "__main__":
     unittest.main()

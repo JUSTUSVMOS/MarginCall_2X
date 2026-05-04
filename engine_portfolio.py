@@ -3360,18 +3360,21 @@ def refresh_portfolio_health_summary(source: str = "portfolio_review") -> Dict[s
         analysis["summary"] = summary
     import engine_memory as memory
     
-    # Build portfolio health data from analysis and overlay
+    # Build portfolio health data from analysis and overlay with proper rounding
+    # to avoid materiality gaps in no-op detection
     health_data = {
-        "nav_twd": analysis.get("total_current"),
-        "pnl_pct": analysis.get("total_pnl_pct"),
-        "top3_concentration": analysis.get("top3_concentration")
+        "nav_twd": round(analysis.get("total_current"), 2) if analysis.get("total_current") is not None else None,
+        "pnl_pct": round(analysis.get("total_pnl_pct"), 4) if analysis.get("total_pnl_pct") is not None else None,
+        "top3_concentration": round(analysis.get("top3_concentration"), 4) if analysis.get("top3_concentration") is not None else None
     }
     
     # Add overlay fields when no error
     if not overlay.get("error"):
-        health_data["drawdown_pct"] = overlay.get("current_drawdown") * 100 if overlay.get("current_drawdown") is not None else None
+        current_drawdown = overlay.get("current_drawdown")
+        health_data["drawdown_pct"] = round(current_drawdown * 100, 4) if current_drawdown is not None else None
         health_data["risk_state"] = overlay.get("trade_mode_label")
-        health_data["gross_scale"] = overlay.get("recommended_gross_scale")
+        gross_scale = overlay.get("recommended_gross_scale")
+        health_data["gross_scale"] = round(gross_scale, 4) if gross_scale is not None else None
     else:
         health_data["drawdown_pct"] = None
         health_data["risk_state"] = None
