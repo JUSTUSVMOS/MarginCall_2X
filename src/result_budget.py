@@ -9,20 +9,32 @@ PER_TURN_BUDGET = 20_000
 def cap_to_length(content: str, tool_name: str, max_len: int) -> str:
     """Cap a string to at most max_len characters, preserving head and tail and
     inserting a clear truncation marker. Returns a new string (never mutates).
+    Guarantees the returned string length is <= max_len even for small max_len
+    by reserving space for the marker before slicing head/tail. If the marker
+    alone exceeds max_len, the marker is truncated to fit.
     """
     content = str(content)
     if len(content) <= max_len:
         return content
-    # keep head ~50% and tail ~25% of the allowed length
-    head_len = max_len // 2
-    tail_len = max_len // 4
-    head = content[:head_len]
-    tail = content[-tail_len:]
-    return (
-        f"{head}\n\n"
-        f"... [結果過長，已截斷。tool={tool_name} 原始 {len(content)} 字，保留頭尾] ...\n\n"
-        f"{tail}"
+
+    marker = (
+        f"\n\n... [結果過長，已截斷。tool={tool_name} 原始 {len(content)} 字，保留頭尾] ...\n\n"
     )
+    marker_len = len(marker)
+
+    # If the marker itself doesn't fit, return a truncated marker to respect max_len
+    if marker_len >= max_len:
+        return marker[:max_len]
+
+    remaining = max_len - marker_len
+    # allocate head roughly 2/3 and tail 1/3 of the remaining budget
+    head_len = (remaining * 2) // 3
+    tail_len = remaining - head_len
+
+    head = content[:head_len] if head_len > 0 else ""
+    tail = content[-tail_len:] if tail_len > 0 else ""
+
+    return f"{head}{marker}{tail}"
 
 
 def cap_single_result(content: str, tool_name: str) -> str:
@@ -87,7 +99,10 @@ def enforce_turn_budget(results: List[Dict]) -> List[Dict]:
             target_len = max(min_keep, old_len - cut)
             new_content = cap_to_length(old_content, str(result.get("name", "unknown")), target_len)
             new_results[index]["content"] = new_content
-            actual_cut = old_len - len(new_content)
+            # actual_cut should never be negative; clamp to zero to avoid
+            # accidentally increasing total when cap_to_length returns longer
+            # strings for very small targets.
+            actual_cut = max(0, old_len - len(new_content))
             needed -= actual_cut
             total -= actual_cut
 

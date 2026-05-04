@@ -6,6 +6,7 @@ from src.result_budget import (
     PER_TURN_BUDGET,
     cap_history_text,
     cap_single_result,
+    cap_to_length,
     enforce_turn_budget,
 )
 
@@ -126,6 +127,30 @@ class ResultBudgetTests(unittest.TestCase):
         self.assertLessEqual(total_after, PER_TURN_BUDGET)
         # ensure at least one item was shortened
         self.assertTrue(any(len(str(r.get("content", ""))) < piece_len for r in trimmed))
+
+    def test_cap_to_length_never_exceeds_max_len(self):
+        content = "x" * 200
+        capped = cap_to_length(content, "demo_tool", 100)
+        self.assertLessEqual(len(capped), 100)
+
+    def test_enforce_turn_budget_second_pass_does_not_bloat_total(self):
+        # create many modest-sized items so second-pass trimming is needed
+        piece_len = 150
+        count = (PER_TURN_BUDGET // piece_len) + 5
+        results = [
+            {"name": f"t{i}", "content": "x" * piece_len} for i in range(count)
+        ]
+
+        total_before = sum(len(r["content"]) for r in results)
+        self.assertGreater(total_before, PER_TURN_BUDGET)
+
+        trimmed = enforce_turn_budget(results)
+        total_after = sum(len(str(r.get("content", ""))) for r in trimmed)
+
+        # must fit within per-turn budget
+        self.assertLessEqual(total_after, PER_TURN_BUDGET)
+        # must not increase the total size
+        self.assertLessEqual(total_after, total_before)
 
     def test_cap_history_text_trims_tool_like_payload(self):
         oversized = "payload-" + ("z" * (SINGLE_RESULT_CAP + 400))
