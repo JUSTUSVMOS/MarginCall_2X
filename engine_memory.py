@@ -975,7 +975,8 @@ class Brain:
         if section_name not in SECTION_NAME_TO_KEY:
             return {"success": False, "message": f"Invalid section: {section_name}"}
         
-        current = self._normalized_current_frontal_lobe()
+        # Create a copy to avoid mutating live state before unchanged check
+        current = copy.deepcopy(self._normalized_current_frontal_lobe())
         key = SECTION_NAME_TO_KEY[section_name]
         current[key] = new_content.strip()
         

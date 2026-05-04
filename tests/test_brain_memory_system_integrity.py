@@ -361,5 +361,47 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["message"], "Rejected: content is too vague to persist.")
 
+    def test_update_lobe_section_true_change_creates_commit(self):
+        """
+        Regression test: update_lobe_section() with a real content change must:
+        - return unchanged=False
+        - create one additional commit
+        - persist the new section value
+        
+        Reproduces bug where live frontalLobe dict is mutated before unchanged check,
+        causing real changes to be incorrectly detected as no-op.
+        """
+        brain = self.mem.Brain()
+        
+        # Create initial state
+        initial_payload = {
+            'market_view': 'Bearish - test',
+            'core_levels': 'SPX 5200',
+            'next_round': 'Cut risk',
+            'context_note': ''
+        }
+        result1 = brain.update_frontal_lobe(initial_payload)
+        self.assertTrue(result1["success"])
+        initial_commit_count = len(brain.commits)
+        
+        # Verify initial state persisted
+        self.assertEqual(brain.state['frontalLobe']['market_view'], 'Bearish - test')
+        
+        # Now update one section with different content
+        result2 = brain.update_lobe_section('Market View', 'Bullish - changed', source='verify')
+        
+        # Should detect this as a real change
+        self.assertTrue(result2["success"], "update_lobe_section should succeed")
+        self.assertFalse(result2.get("unchanged", False), 
+                        "Real content change should NOT be marked as unchanged")
+        
+        # Should create one additional commit
+        self.assertEqual(len(brain.commits), initial_commit_count + 1,
+                        "Real content change should create exactly one commit")
+        
+        # Should persist the new value
+        self.assertEqual(brain.state['frontalLobe']['market_view'], 'Bullish - changed',
+                        "New section value should be persisted")
+
 if __name__ == "__main__":
     unittest.main()
