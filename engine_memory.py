@@ -26,12 +26,22 @@ FRONTAL_LOBE_FIELDS = (
     "Next Round",
 )
 
+FRONTAL_LOBE_KEYS = ("market_view", "core_levels", "next_round", "context_note", "updated_at")
+FRONTAL_LOBE_RENDER_FIELDS = ("Market View", "Core Levels", "Next Round")
+
 FRONTAL_LOBE_SECTION_ALIASES = {
     "Market View": ["Market View", "市場視角", "市場觀點"],
     "Core Levels": ["Core Levels", "Key Levels", "核心點位", "關鍵點位"],
     "Portfolio Health": ["Portfolio Health", "持倉評估", "Position Health"],
     "Next Round": ["Next Round", "下一回合", "Plan", "Action Plan"],
     "Context Note": ["Context Note", "補充說明", "Additional Context"],
+}
+
+SECTION_NAME_TO_KEY = {
+    "Market View": "market_view",
+    "Core Levels": "core_levels",
+    "Next Round": "next_round",
+    "Context Note": "context_note",
 }
 
 FRONTAL_LOBE_KEYWORDS = {
@@ -41,19 +51,27 @@ FRONTAL_LOBE_KEYWORDS = {
     "Next Round": ["next round", "if", "plan", "will", "trim", "cut", "add", "hedge", "如果", "若", "打算", "會"],
 }
 
-FRONTAL_LOBE_WRITE_GUIDE = """When calling update_frontal_lobe, always write a professional trading note with these labeled fields:
-- Market View: Bullish / Bearish / Neutral + one-sentence thesis
-- Core Levels: the key support / resistance / MA levels being watched
-- Portfolio Health: whether current positions are healthy or over-risked
-- Next Round: if A happens, I will do B
+FRONTAL_LOBE_WRITE_GUIDE = """When calling update_frontal_lobe, provide structured named parameters:
+
+Required parameters:
+- market_view: Bullish / Bearish / Neutral + one-sentence thesis
+- core_levels: the key support / resistance / MA levels being watched
+- next_round: if A happens, I will do B
+
+Optional parameter:
+- context_note: additional context (default: "")
+
+Do not write portfolio health here. The system tracks portfolio health automatically via update_portfolio_health().
 
 Low-quality placeholder notes will be rejected. Avoid vague one-liners like "觀望", "waiting for CPI", or unlabeled thoughts with no levels / plan.
 
-Example:
-Market View: Bearish - Market shows signs of reversal after SPX rejected 5250 resistance.
-Core Levels: Watch SPX 5200 support and 5250 resistance.
-Portfolio Health: Current longs are slightly underwater but still above 20MA; risk is manageable.
-Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.
+Example call:
+update_frontal_lobe(
+    market_view="Bearish - Market shows signs of reversal after SPX rejected 5250 resistance.",
+    core_levels="Watch SPX 5200 support and 5250 resistance.",
+    next_round="If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.",
+    context_note="CPI report next week may be catalyst."
+)
 """
 
 # Maximum commits to keep in memory (soft cap for downstream pruning logic)
@@ -65,20 +83,45 @@ MARKET_REGIME_COMMIT_KEYS = ("summary", "state", "riskScore", "watchpoints", "re
 DEFAULT_FRONTAL_LOBE_TEMPLATE = (
     "Market View: Neutral - No durable market thesis has been logged yet.\n"
     "Core Levels: No key support or resistance levels have been logged yet.\n"
-    "Portfolio Health: Exposure review pending; keep sizing disciplined until a thesis is logged.\n"
     "Next Round: Do not add risk until the market view and levels are updated."
 )
 
 
-def _default_frontal_lobe() -> str:
-    return DEFAULT_FRONTAL_LOBE_TEMPLATE
+def _default_frontal_lobe() -> Dict[str, Any]:
+    """Return structured dict-backed frontal lobe state."""
+    return {
+        "market_view": "",
+        "core_levels": "",
+        "next_round": "",
+        "context_note": "",
+        "updated_at": None
+    }
 
 
-def _render_frontal_lobe_note(sections: dict) -> str:
-    """Render a frontal lobe note from a sections dict preserving field order."""
-    lines = [f"{field}: {sections.get(field, '')}" for field in FRONTAL_LOBE_FIELDS]
-    if sections.get("Context Note"):
-        lines.append(f"Context Note: {sections.get('Context Note')}")
+def _default_portfolio_health() -> Dict[str, Any]:
+    """Return structured dict-backed portfolio health state."""
+    return {
+        "nav_twd": None,
+        "pnl_pct": None,
+        "top3_concentration": None,
+        "drawdown_pct": None,
+        "risk_state": None,
+        "gross_scale": None,
+        "updated_at": None
+    }
+
+
+def _render_frontal_lobe_note(sections: Dict[str, Any]) -> str:
+    """Render a frontal lobe note from a structured dict preserving field order."""
+    if not isinstance(sections, dict):
+        sections = {}
+    lines = []
+    for field_name in FRONTAL_LOBE_RENDER_FIELDS:
+        key = SECTION_NAME_TO_KEY.get(field_name, field_name.lower().replace(" ", "_"))
+        value = sections.get(key, "")
+        lines.append(f"{field_name}: {value}")
+    if sections.get("context_note"):
+        lines.append(f"Context Note: {sections.get('context_note')}")
     return "\n".join(lines)
 
 
@@ -196,6 +239,7 @@ def _default_heartbeat() -> Dict[str, Any]:
 def _default_state() -> Dict[str, Any]:
     return {
         "frontalLobe": _default_frontal_lobe(),
+        "portfolioHealth": _default_portfolio_health(),
         "emotion": "neutral",
         "marketRegime": _default_market_regime(),
         "heartbeat": _default_heartbeat()
@@ -297,7 +341,71 @@ def normalize_frontal_lobe_note(content: str) -> str:
         lines.append(f"Context Note: {context_note}")
     return "\n".join(lines)
 
-def parse_frontal_lobe_note(content: str) -> Dict[str, str]:
+def _parse_legacy_labeled_note(content: str) -> Dict[str, str]:
+    """Parse a legacy labeled string note and extract section values."""
+    sections = {}
+    normalized = content.replace("：", ":").replace("\r\n", "\n").replace("\r", "\n")
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        label, value = line.split(":", 1)
+        label = label.strip()
+        value = value.strip()
+        
+        # Map known section names to keys
+        for section_name, aliases in FRONTAL_LOBE_SECTION_ALIASES.items():
+            if label in aliases or label.lower() in [a.lower() for a in aliases]:
+                key = SECTION_NAME_TO_KEY.get(section_name, section_name.lower().replace(" ", "_"))
+                sections[key] = value
+                break
+    return sections
+
+
+def _migrate_legacy_frontal_lobe(content: str) -> Dict[str, Any]:
+    """Migrate a legacy string frontal lobe note to structured dict format."""
+    sections = _parse_legacy_labeled_note(content)
+    
+    # Extract Portfolio Health from legacy note if present, but don't include it in frontalLobe dict
+    # Portfolio Health will be managed separately in portfolioHealth state
+    sections.pop("portfolio_health", None)
+    
+    return {
+        "market_view": sections.get("market_view", ""),
+        "core_levels": sections.get("core_levels", ""),
+        "next_round": sections.get("next_round", ""),
+        "context_note": sections.get("context_note", ""),
+        "updated_at": None
+    }
+
+
+def _coerce_frontal_lobe_sections(content: Any) -> Dict[str, Any]:
+    """Coerce any frontal lobe content (string or dict) to structured dict."""
+    if isinstance(content, dict):
+        # Already structured, just ensure all keys present
+        return {
+            "market_view": content.get("market_view", ""),
+            "core_levels": content.get("core_levels", ""),
+            "next_round": content.get("next_round", ""),
+            "context_note": content.get("context_note", ""),
+            "updated_at": content.get("updated_at")
+        }
+    elif isinstance(content, str):
+        if not content or not content.strip():
+            return _default_frontal_lobe()
+        # Migrate legacy string note
+        return _migrate_legacy_frontal_lobe(content)
+    else:
+        return _default_frontal_lobe()
+
+
+def parse_frontal_lobe_note(content: Any) -> Dict[str, Any]:
+    """Parse frontal lobe content from any format to structured dict."""
+    return _coerce_frontal_lobe_sections(content)
+
+
+# Legacy function kept for backward compatibility with old code paths
+def parse_frontal_lobe_note_legacy(content: str) -> Dict[str, str]:
     sections = {field: "" for field in FRONTAL_LOBE_FIELDS}
     sections["Context Note"] = ""
     normalized = content.replace("：", ":")
@@ -312,10 +420,10 @@ def parse_frontal_lobe_note(content: str) -> Dict[str, str]:
             sections[label] = value
     return sections
 
-def _coerce_frontal_lobe_sections(content: str) -> Dict[str, str]:
+def _coerce_frontal_lobe_sections_legacy(content: str) -> Dict[str, str]:
     if not content or not content.strip():
-        return parse_frontal_lobe_note("")
-    return parse_frontal_lobe_note(normalize_frontal_lobe_note(content))
+        return parse_frontal_lobe_note_legacy("")
+    return parse_frontal_lobe_note_legacy(normalize_frontal_lobe_note(content))
 
 def _format_signal_value(key: str, value: Any) -> str:
     if isinstance(value, float):
@@ -365,12 +473,21 @@ class Brain:
         "wait for confirmation before re-entering",
     )
 
-    def _normalized_current_frontal_lobe(self) -> str:
-        current_note = self.state.get("frontalLobe") or _default_frontal_lobe()
-        return _render_frontal_lobe_note(_coerce_frontal_lobe_sections(current_note))
+    def _normalized_current_frontal_lobe(self) -> Dict[str, Any]:
+        current_note = self.state.get("frontalLobe")
+        if not isinstance(current_note, dict):
+            current_note = _coerce_frontal_lobe_sections(current_note)
+        return current_note
 
-    def _frontal_lobe_write_is_unchanged(self, normalized_note: str) -> bool:
-        return self._normalized_current_frontal_lobe() == normalized_note
+    def _frontal_lobe_write_is_unchanged(self, payload: Dict[str, Any]) -> bool:
+        current = self._normalized_current_frontal_lobe()
+        # Compare normalized/trimmed content fields only, ignoring updated_at
+        for key in ("market_view", "core_levels", "next_round", "context_note"):
+            current_val = current.get(key, "").strip()
+            payload_val = payload.get(key, "").strip()
+            if current_val != payload_val:
+                return False
+        return True
 
     def __init__(self):
         self.state: Dict[str, Any] = _default_state()
@@ -385,6 +502,12 @@ class Brain:
                 with open(BRAIN_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.state = _merge_defaults(_default_state(), data.get('state', {}))
+                    
+                    # Migrate legacy string frontal lobe to structured dict
+                    frontal_lobe = self.state.get("frontalLobe")
+                    if isinstance(frontal_lobe, str):
+                        self.state["frontalLobe"] = _migrate_legacy_frontal_lobe(frontal_lobe)
+                    
                     self.commits = []
                     for commit in data.get('commits', []):
                         normalized = self._normalize_loaded_commit(commit)
@@ -422,14 +545,18 @@ class Brain:
             if normalized["type"] == "frontal_lobe":
                 legacy_note_source = legacy_frontal_lobe or commit.get("message", "")
                 note = normalize_frontal_lobe_note(legacy_note_source) if legacy_note_source else ""
-                sections = parse_frontal_lobe_note(note)
-                normalized["summary"] = self._build_frontal_lobe_commit_summary(sections)
+                sections = parse_frontal_lobe_note_legacy(note)
+                market_view = sections.get("Market View", "Frontal lobe refreshed")
+                core_levels = sections.get("Core Levels", "")
+                summary = f"🧠 NOTE: {_shorten(market_view, 80)}"
+                if core_levels:
+                    summary += f" | {_shorten(core_levels, 60)}"
+                normalized["summary"] = summary
                 normalized["key_signals"] = self._compose_market_signal_summary(legacy_market)
-                normalized["frontal_lobe_ref"] = self._build_frontal_lobe_ref(note)
+                normalized["frontal_lobe_ref"] = _shorten(note, 120) if note else ""
                 normalized["delta"] = {
                     "market_view": sections.get("Market View", ""),
                     "core_levels": sections.get("Core Levels", ""),
-                    "portfolio_health": sections.get("Portfolio Health", ""),
                     "next_round": sections.get("Next Round", ""),
                 }
             elif normalized["type"] == "emotion":
@@ -437,12 +564,12 @@ class Brain:
                 reason = commit.get("message", "")
                 normalized["summary"] = f"🧠 EMOTION: {current} | {_shorten(reason, 80)}"
                 normalized["key_signals"] = self._compose_market_signal_summary(legacy_market)
-                normalized["frontal_lobe_ref"] = self._build_frontal_lobe_ref(legacy_frontal_lobe)
+                normalized["frontal_lobe_ref"] = _shorten(str(legacy_frontal_lobe), 120) if legacy_frontal_lobe else ""
                 normalized["delta"] = {"to": current, "reason": reason}
             elif normalized["type"] == "market_regime":
                 normalized["summary"] = self._build_market_regime_commit_summary(_default_market_regime(), legacy_market)
                 normalized["key_signals"] = format_key_signals(legacy_market.get("signals", {}))
-                normalized["frontal_lobe_ref"] = self._build_frontal_lobe_ref(legacy_frontal_lobe)
+                normalized["frontal_lobe_ref"] = _shorten(str(legacy_frontal_lobe), 120) if legacy_frontal_lobe else ""
                 normalized["delta"] = {
                     "risk_score_to": legacy_market.get("riskScore"),
                     "state_to": legacy_market.get("state"),
@@ -450,7 +577,7 @@ class Brain:
                 }
             else:
                 normalized["summary"] = commit.get("message") or "Legacy commit"
-                normalized["frontal_lobe_ref"] = self._build_frontal_lobe_ref(legacy_frontal_lobe)
+                normalized["frontal_lobe_ref"] = _shorten(str(legacy_frontal_lobe), 120) if legacy_frontal_lobe else ""
 
         if not normalized["hash"]:
             normalized["hash"] = generate_commit_hash({
@@ -466,25 +593,29 @@ class Brain:
         lowered = (text or "").lower()
         return any(pattern.lower() in lowered for pattern in self._PLACEHOLDER_PATTERNS)
 
-    def _is_placeholder_content(self, note: str) -> bool:
-        if not note or len(note.strip()) < 30:
+    def _is_placeholder_content(self, payload: Dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
             return True
-
-        sections = parse_frontal_lobe_note(note)
-        meaningful_sections = sum(
-            1
-            for field in FRONTAL_LOBE_FIELDS
-            if sections.get(field, "").strip() and not self._contains_placeholder_phrase(sections[field])
-        )
-        if meaningful_sections < 2:
+        
+        sections = _coerce_frontal_lobe_sections(payload)
+        required = [
+            sections.get("market_view", "").strip(), 
+            sections.get("core_levels", "").strip(), 
+            sections.get("next_round", "").strip()
+        ]
+        
+        # Need at least 2 out of 3 required fields filled
+        if sum(bool(item) for item in required) < 2:
             return True
-
-        placeholder_sections = sum(
-            1
-            for field in FRONTAL_LOBE_FIELDS
-            if self._contains_placeholder_phrase(sections.get(field, ""))
-        )
-        return placeholder_sections >= 2
+        
+        # Reject if combined text is short AND contains placeholder phrases
+        combined = " ".join([
+            sections.get("market_view", ""), 
+            sections.get("core_levels", ""), 
+            sections.get("next_round", ""), 
+            sections.get("context_note", "")
+        ])
+        return self._contains_placeholder_phrase(combined) and len(combined.strip()) < 40
 
     def _trim_commit_history(self):
         if len(self.commits) <= MAX_COMMITS:
@@ -533,8 +664,10 @@ class Brain:
         heartbeat = self.state.get("heartbeat", _default_heartbeat())
         recent_emotions = self.get_emotion()
 
+        # Render frontal lobe as text
+        frontal_lobe_text = self.get_frontal_lobe() or "(empty)"
         FRONTAL_LOBE_FILE.write_text(
-            "# Frontal Lobe\n\n" + (self.state.get("frontalLobe") or "(empty)"),
+            "# Frontal Lobe\n\n" + frontal_lobe_text,
             encoding='utf-8'
         )
         EMOTION_FILE.write_text(
@@ -583,20 +716,29 @@ class Brain:
             parts.append(signal_text)
         return " | ".join(parts[:3])
 
-    def _build_frontal_lobe_ref(self, content: Optional[str] = None) -> str:
-        note = content or self.state.get("frontalLobe", "")
-        if not note:
+    def _build_frontal_lobe_ref(self) -> str:
+        """Build a compact reference string from current frontal lobe state."""
+        frontal = self.state.get("frontalLobe")
+        if not frontal:
             return ""
-        sections = parse_frontal_lobe_note(note)
-        ref_parts = []
-        if sections.get("Market View"):
-            ref_parts.append(_shorten(sections["Market View"], 80))
-        if sections.get("Next Round"):
-            ref_parts.append(f"Next: {_shorten(sections['Next Round'], 80)}")
-        elif sections.get("Core Levels"):
-            ref_parts.append(_shorten(sections["Core Levels"], 80))
-        ref = " | ".join(ref_parts)
-        return ref or _shorten(note, 120)
+        
+        if isinstance(frontal, dict):
+            ref_parts = []
+            market_view = frontal.get("market_view", "")
+            next_round = frontal.get("next_round", "")
+            core_levels = frontal.get("core_levels", "")
+            
+            if market_view:
+                ref_parts.append(_shorten(market_view, 80))
+            if next_round:
+                ref_parts.append(f"Next: {_shorten(next_round, 80)}")
+            elif core_levels:
+                ref_parts.append(_shorten(core_levels, 80))
+            
+            return " | ".join(ref_parts) if ref_parts else ""
+        else:
+            # Legacy string fallback
+            return _shorten(str(frontal), 120)
 
     def _build_frontal_lobe_commit_summary(self, sections: Dict[str, str]) -> str:
         market_view = sections.get("Market View") or "Frontal lobe refreshed"
@@ -749,7 +891,12 @@ class Brain:
     # ==================== Queries (讀取記憶) ====================
 
     def get_frontal_lobe(self) -> str:
-        return self.state["frontalLobe"]
+        frontal_lobe_state = self.state.get("frontalLobe")
+        if isinstance(frontal_lobe_state, dict):
+            return _render_frontal_lobe_note(frontal_lobe_state)
+        else:
+            # Legacy fallback
+            return str(frontal_lobe_state) if frontal_lobe_state else ""
 
     def get_emotion(self) -> Dict[str, Any]:
         emotion_commits = [c for c in self.commits if c["type"] == "emotion"]
@@ -783,33 +930,85 @@ class Brain:
         return age_seconds > max_age_minutes * 60
 
     def get_cognitive_context(self, max_age_minutes: int = 180) -> str:
+        """Render three clean blocks: Trading Thesis, Portfolio Health, Market Regime."""
+        
+        # Get frontal lobe state
+        frontal = _coerce_frontal_lobe_sections(self.state.get("frontalLobe"))
+        market_view = frontal.get("market_view", "").strip()
+        core_levels = frontal.get("core_levels", "").strip()
+        next_round = frontal.get("next_round", "").strip()
+        context_note = frontal.get("context_note", "").strip()
+        frontal_updated = frontal.get("updated_at")
+        
+        # Get portfolio health state
+        portfolio_health = _merge_defaults(_default_portfolio_health(), self.state.get("portfolioHealth", {}))
+        
+        # Get market regime state
         market = self.get_market_regime(max_age_minutes=max_age_minutes)
         watchpoints = _coerce_text_items(market.get("watchpoints"))
         reasons = _coerce_text_items(market.get("reasons"))
         signals = market.get("signals") or {}
-        frontal_lobe = self.state["frontalLobe"] or "空白 (首次運行)"
-
         signal_summary = ", ".join([
             f"{key}={value}" for key, value in signals.items() if not _is_blank_value(value)
         ]) or "無"
         watchpoints_text = "\n".join([f"  - {item}" for item in watchpoints])
         reasons_text = "\n".join([f"  - {item}" for item in reasons[:5]])
-        frontal_lobe_text = "\n".join([f"  {line}" for line in frontal_lobe.splitlines()])
         stale_note = "（可能過期，等待 heartbeat 刷新）" if market.get("isStale") else ""
-
-        return (
-            "\n\n## Current Brain State\n"
-            f"- Emotion: {self.state['emotion']}\n"
-            f"- Frontal Lobe:\n{frontal_lobe_text}\n"
-            "\n## Persistent Macro / Market Regime\n"
-            f"- Updated: {market.get('updatedAt') or '尚未同步'} {stale_note}\n"
-            f"- Regime: {market.get('state') or '未初始化'}\n"
-            f"- Risk Score: {market.get('riskScore') if market.get('riskScore') is not None else 'N/A'}\n"
-            f"- Summary: {market.get('summary') or '尚未建立'}\n"
-            f"- Watchpoints:\n{watchpoints_text}\n"
-            f"- Reasons:\n{reasons_text}\n"
-            f"- Key Signals: {signal_summary}\n"
+        
+        # Render Trading Thesis block
+        if not any(frontal.get(key) for key in ("market_view", "core_levels", "next_round", "context_note")):
+            thesis_block = "### Trading Thesis (Frontal Lobe)\n尚未建立。請在分析後使用 update_frontal_lobe 記錄你的觀點。\n"
+        else:
+            thesis_lines = []
+            # Always render three core lines with fallback
+            thesis_lines.append(f"**Market View:** {market_view or '尚未建立'}")
+            thesis_lines.append(f"**Core Levels:** {core_levels or '尚未建立'}")
+            thesis_lines.append(f"**Next Round:** {next_round or '尚未建立'}")
+            # Optional context line only when present
+            if context_note:
+                thesis_lines.append(f"**Context:** {context_note}")
+            # Last updated always in non-empty branch
+            if frontal_updated:
+                thesis_lines.append(f"**Last updated:** {frontal_updated}")
+            thesis_block = "### Trading Thesis (Frontal Lobe)\n" + "\n".join(thesis_lines) + "\n"
+        
+        # Render Portfolio Health block
+        if portfolio_health.get("nav_twd") is None:
+            health_block = "### Portfolio Health (Auto)\n- 尚未同步 portfolio health。\n"
+        else:
+            # Render with graceful handling of None values
+            nav_twd = portfolio_health.get('nav_twd')
+            pnl_pct = portfolio_health.get('pnl_pct')
+            top3_concentration = portfolio_health.get('top3_concentration')
+            drawdown_pct = portfolio_health.get('drawdown_pct')
+            risk_state = portfolio_health.get('risk_state')
+            gross_scale = portfolio_health.get('gross_scale')
+            updated_at = portfolio_health.get('updated_at')
+            
+            health_lines = [
+                f"- **NAV (TWD):** {nav_twd}",
+                f"- **PnL:** {pnl_pct}%" if pnl_pct is not None else "- **PnL:** N/A",
+                f"- **Top3 Concentration:** {top3_concentration:.1f}%" if top3_concentration is not None else "- **Top3 Concentration:** N/A",
+                f"- **Drawdown:** {drawdown_pct}%" if drawdown_pct is not None else "- **Drawdown:** N/A",
+                f"- **Risk State:** {risk_state}" if risk_state is not None else "- **Risk State:** N/A",
+                f"- **Gross Scale:** {gross_scale}" if gross_scale is not None else "- **Gross Scale:** N/A",
+                f"- **Last updated:** {updated_at}" if updated_at is not None else "- **Last updated:** N/A"
+            ]
+            health_block = "### Portfolio Health (Auto)\n" + "\n".join(health_lines) + "\n"
+        
+        # Render Market Regime block
+        regime_block = (
+            "### Persistent Macro / Market Regime\n"
+            f"- **Updated:** {market.get('updatedAt') or '尚未同步'} {stale_note}\n"
+            f"- **Regime:** {market.get('state') or '未初始化'}\n"
+            f"- **Risk Score:** {market.get('riskScore') if market.get('riskScore') is not None else 'N/A'}\n"
+            f"- **Summary:** {market.get('summary') or '尚未建立'}\n"
+            f"- **Watchpoints:**\n{watchpoints_text}\n"
+            f"- **Reasons:**\n{reasons_text}\n"
+            f"- **Key Signals:** {signal_summary}\n"
         )
+        
+        return f"\n{thesis_block}\n{health_block}\n{regime_block}"
 
     def log(self, limit: int = 10) -> List[Dict[str, Any]]:
         recent = self.commits[-limit:]
@@ -820,59 +1019,88 @@ class Brain:
 
     def update_lobe_section(self, section_name: str, new_content: str, source: str = "system") -> Dict[str, Any]:
         """精準更新額葉的特定區塊，保留其他部分"""
-        if section_name not in FRONTAL_LOBE_FIELDS:
+        # Reject Portfolio Health updates - it's system-managed
+        if section_name == "Portfolio Health":
+            return {
+                "success": False, 
+                "message": "Portfolio Health is system-managed; use update_portfolio_health()."
+            }
+        
+        if section_name not in SECTION_NAME_TO_KEY:
             return {"success": False, "message": f"Invalid section: {section_name}"}
         
-        current_note = self.state.get("frontalLobe") or _default_frontal_lobe()
-        sections = _coerce_frontal_lobe_sections(current_note)
-        sections[section_name] = new_content.strip()
-        normalized_note = _render_frontal_lobe_note(sections)
-
-        if self._frontal_lobe_write_is_unchanged(normalized_note):
+        # Create a copy to avoid mutating live state before unchanged check
+        current = copy.deepcopy(self._normalized_current_frontal_lobe())
+        key = SECTION_NAME_TO_KEY[section_name]
+        current[key] = new_content.strip()
+        
+        if self._frontal_lobe_write_is_unchanged(current):
             return {
                 "success": True,
                 "unchanged": True,
                 "message": f"Frontal lobe section '{section_name}' unchanged."
             }
         
-        # Persist the new note and create commit
-        self.state["frontalLobe"] = normalized_note
+        # Persist the new state and create commit
+        current["updated_at"] = _utc_now_iso()
+        self.state["frontalLobe"] = current
         summary = f"🧠 {section_name.upper()} AUTO-UPDATE: {_shorten(new_content, 80)}"
-        delta_key = section_name.lower().replace(" ", "_")
         self._create_commit(
             "frontal_lobe_patch",
             summary,
-            delta={delta_key: new_content},
+            delta={key: new_content},
             key_signals=self._compose_market_signal_summary(self.state.get("marketRegime")),
-            frontal_lobe_ref=self._build_frontal_lobe_ref(normalized_note),
+            frontal_lobe_ref=self._build_frontal_lobe_ref(),
             source=source
         )
         return {"success": True, "message": f"Frontal lobe section '{section_name}' updated.", "unchanged": False}
 
-    def update_frontal_lobe(self, content: str) -> Dict[str, Any]:
-        normalized_note = normalize_frontal_lobe_note(content)
-        if self._is_placeholder_content(normalized_note):
+    def update_frontal_lobe(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Update frontal lobe with structured dict payload."""
+        # Coerce to structured dict
+        if isinstance(payload, str):
+            # Legacy string input - migrate it
+            payload = _migrate_legacy_frontal_lobe(payload)
+        elif not isinstance(payload, dict):
+            return {"success": False, "message": "Invalid payload type; expected dict or string."}
+        
+        # Ensure all required keys
+        normalized_payload = {
+            "market_view": payload.get("market_view", ""),
+            "core_levels": payload.get("core_levels", ""),
+            "next_round": payload.get("next_round", ""),
+            "context_note": payload.get("context_note", ""),
+            "updated_at": _utc_now_iso()
+        }
+        
+        if self._is_placeholder_content(normalized_payload):
             logger.warning("[Brain] Rejected placeholder-quality frontal lobe write.")
             return {"success": False, "message": "Rejected: content is too vague to persist."}
 
-        if self._frontal_lobe_write_is_unchanged(normalized_note):
+        if self._frontal_lobe_write_is_unchanged(normalized_payload):
             return {"success": True, "unchanged": True, "message": "Frontal lobe unchanged; skipped commit."}
 
         snapshot_head = self.head
-        self.state["frontalLobe"] = normalized_note
-        sections = parse_frontal_lobe_note(normalized_note)
-        summary = self._build_frontal_lobe_commit_summary(sections)
+        self.state["frontalLobe"] = normalized_payload
+        
+        # Build commit summary from content
+        market_view = normalized_payload.get("market_view", "")
+        core_levels = normalized_payload.get("core_levels", "")
+        summary = f"🧠 NOTE: {_shorten(market_view or 'Frontal lobe refreshed', 80)}"
+        if core_levels:
+            summary += f" | {_shorten(core_levels, 60)}"
+        
         committed = self._create_commit(
             "frontal_lobe",
             summary,
             delta={
-                "market_view": sections.get("Market View", ""),
-                "core_levels": sections.get("Core Levels", ""),
-                "portfolio_health": sections.get("Portfolio Health", ""),
-                "next_round": sections.get("Next Round", ""),
+                "market_view": normalized_payload.get("market_view", ""),
+                "core_levels": normalized_payload.get("core_levels", ""),
+                "next_round": normalized_payload.get("next_round", ""),
+                "context_note": normalized_payload.get("context_note", ""),
             },
             key_signals=self._compose_market_signal_summary(self.state.get("marketRegime")),
-            frontal_lobe_ref=self._build_frontal_lobe_ref(normalized_note),
+            frontal_lobe_ref=self._build_frontal_lobe_ref(),
             source="frontal_lobe_write",
             expected_head=snapshot_head
         )
@@ -893,6 +1121,82 @@ class Brain:
             source="emotion_update"
         )
         return {"success": True, "message": f"Emotion: {old_emotion} -> {emotion}"}
+
+    def _portfolio_health_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize portfolio health payload."""
+        normalized = {}
+        
+        # Normalize numeric fields to floats when present
+        for field in ["nav_twd", "pnl_pct", "top3_concentration", "drawdown_pct", "gross_scale"]:
+            value = payload.get(field)
+            if value is not None:
+                try:
+                    normalized[field] = float(value)
+                except (TypeError, ValueError):
+                    normalized[field] = None
+            else:
+                normalized[field] = None
+        
+        # Keep risk_state as-is
+        normalized["risk_state"] = payload.get("risk_state")
+        normalized["updated_at"] = _utc_now_iso()
+        
+        return normalized
+
+    def _portfolio_health_unchanged(self, old: Dict[str, Any], new: Dict[str, Any]) -> bool:
+        """Check if portfolio health has meaningfully changed."""
+        # Risk state change is always material
+        if old.get("risk_state") != new.get("risk_state"):
+            return False
+        
+        # Check NAV drift (>= 0.5% is material)
+        old_nav = old.get("nav_twd")
+        new_nav = new.get("nav_twd")
+        
+        # Transition from None to any value or vice versa is material
+        if (old_nav is None) != (new_nav is None):
+            return False
+        
+        if old_nav is not None and new_nav is not None:
+            # For zero/none baseline, any different NAV is material
+            if old_nav <= 0:
+                if new_nav != old_nav:
+                    return False
+            # For positive baseline, >= 0.5% drift is material
+            else:
+                nav_drift_pct = abs(new_nav - old_nav) / old_nav
+                if nav_drift_pct >= 0.005:  # 0.5%
+                    return False
+        
+        # Compare other numeric fields
+        for field in ["pnl_pct", "top3_concentration", "drawdown_pct", "gross_scale"]:
+            if old.get(field) != new.get(field):
+                return False
+        
+        return True
+
+    def update_portfolio_health(self, health_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update portfolio health state without creating a commit."""
+        normalized = self._portfolio_health_payload(health_data)
+        current = self.state.get("portfolioHealth", _default_portfolio_health())
+        
+        # Check if unchanged
+        if self._portfolio_health_unchanged(current, normalized):
+            return {
+                "success": True,
+                "unchanged": True,
+                "message": "Portfolio health unchanged."
+            }
+        
+        # Update state and save (but don't commit)
+        self.state["portfolioHealth"] = normalized
+        self._save()
+        
+        return {
+            "success": True,
+            "unchanged": False,
+            "message": "Portfolio health updated."
+        }
 
     def update_market_regime(
         self,
@@ -1035,35 +1339,41 @@ def get_frontal_lobe() -> str:
     
     This is your Frontal Lobe, where you stored:
     - Market trend outlook (bullish/bearish/uncertain)
-    - Portfolio health assessments
     - Key predictions or expectations for upcoming rounds
+    - Critical support/resistance levels being monitored
     - Critical reminders (e.g., "Watch BTC support at $95k")
     
     CALL THIS TOOL FIRST at the start of every analysis to maintain cognitive continuity.
-    Returns: Your previous self-assessment string.
+    Returns: The rendered frontal-lobe thesis view from your previous session.
     """
     return _get_global_brain().get_frontal_lobe()
 
 @tool(mode="write")
-def update_frontal_lobe(content: str) -> str:
+def update_frontal_lobe(market_view: str, core_levels: str, next_round: str, context_note: str = "") -> str:
     """
     Updates your "Frontal Lobe" memory space with a disciplined professional trading note.
 
     CALL THIS TOOL SILENTLY before ending a session if there are significant updates to:
     - Market View: Bullish / Bearish / Neutral + one-sentence thesis
     - Core Levels: key support / resistance / MA levels being watched
-    - Portfolio Health: whether current positions are healthy or over-risked
     - Next Round: if A happens, you will do B
-    - Low-quality placeholder notes will be rejected instead of persisted
+    - Context Note (optional): additional context or notes
 
     This memory survives restarts. Keep it concise, structured, and decision-oriented.
+    
     Example:
-    Market View: Bearish - SPX rejected 5250 resistance and momentum is fading.
-    Core Levels: Watch SPX 5200 support and 5250 resistance.
-    Portfolio Health: Long exposure is slightly underwater but still controlled above 20MA.
-    Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation.
+    market_view: "Bearish - SPX rejected 5250 resistance and momentum is fading."
+    core_levels: "Watch SPX 5200 support and 5250 resistance."
+    next_round: "If SPX breaks below 5180, I will cut exposure and wait for confirmation."
+    context_note: "CPI report next week may be catalyst."
     """
-    res = _get_global_brain().update_frontal_lobe(content)
+    payload = {
+        "market_view": market_view,
+        "core_levels": core_levels,
+        "next_round": next_round,
+        "context_note": context_note
+    }
+    res = _get_global_brain().update_frontal_lobe(payload)
     return res["message"]
 
 @tool()
@@ -1169,14 +1479,18 @@ def build_cognitive_context(max_age_minutes: int = 180) -> str:
 def patch_frontal_lobe_section(section_name: str, content: str, source: str = "system") -> Dict[str, Any]:
     return _get_global_brain().update_lobe_section(section_name, content, source=source)
 
+def update_portfolio_health(health_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update portfolio health state without creating a commit. Not a @tool."""
+    return _get_global_brain().update_portfolio_health(health_data)
+
 if __name__ == "__main__":
     # 自檢測試
     print("1. 更新額葉記憶...")
     print(update_frontal_lobe(
-        "Market View: Neutral - 非農後市場進入事件前整理，等待 CPI 提供方向。\n"
-        "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
-        "Portfolio Health: 槓桿偏低，部位可控，但不宜在數據前追價。\n"
-        "Next Round: If CPI 低於預期且 SPX 站回 5250，我會小幅加碼；若跌破 5200，先降風險。"
+        market_view="Neutral - 非農後市場進入事件前整理，等待 CPI 提供方向。",
+        core_levels="Watch SPX 5200 support and 5250 resistance.",
+        next_round="If CPI 低於預期且 SPX 站回 5250，我會小幅加碼；若跌破 5200，先降風險。",
+        context_note="槓桿偏低，部位可控，但不宜在數據前追價。"
     ))
     print("\n2. 更新情緒狀態...")
     print(update_emotion("cautious", "非農數據強勁，擔心聯準會延後降息，市場波動加劇。"))
