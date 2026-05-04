@@ -9,7 +9,23 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from src import llm
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Test fixtures for structured frontal lobe state
+VALID_THESIS = {
+    "market_view": "Bearish - Market shows signs of reversal after SPX rejected 5250 resistance.",
+    "core_levels": "Watch SPX 5200 support and 5250 resistance.",
+    "next_round": "If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.",
+    "context_note": "CPI report next week may be catalyst."
+}
+
+LEGACY_NOTE = (
+    "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
+    "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
+    "Portfolio Health: Keep leverage light until event risk clears.\n"
+    "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure."
+)
 class TestBrainMemorySystemIntegrity(unittest.TestCase):
     def setUp(self):
         # create isolated directory inside tests to avoid /tmp and keep repo-local
@@ -54,25 +70,109 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         except Exception:
             pass
 
+    def test_default_state_uses_structured_frontal_lobe_and_portfolio_health(self):
+        """Verify default state contains dict-backed frontalLobe and portfolioHealth."""
+        brain = self.mem._global_brain
+        
+        # Check frontalLobe structure
+        frontal_lobe = brain.state["frontalLobe"]
+        self.assertIsInstance(frontal_lobe, dict)
+        self.assertEqual(frontal_lobe["market_view"], "")
+        self.assertEqual(frontal_lobe["core_levels"], "")
+        self.assertEqual(frontal_lobe["next_round"], "")
+        self.assertEqual(frontal_lobe["context_note"], "")
+        self.assertIsNone(frontal_lobe["updated_at"])
+        
+        # Check portfolioHealth structure
+        portfolio_health = brain.state["portfolioHealth"]
+        self.assertIsInstance(portfolio_health, dict)
+        self.assertIsNone(portfolio_health["nav_twd"])
+        self.assertIsNone(portfolio_health["pnl_pct"])
+        self.assertIsNone(portfolio_health["top3_concentration"])
+        self.assertIsNone(portfolio_health["drawdown_pct"])
+        self.assertIsNone(portfolio_health["risk_state"])
+        self.assertIsNone(portfolio_health["gross_scale"])
+        self.assertIsNone(portfolio_health["updated_at"])
+
+    def test_load_migrates_legacy_string_frontal_lobe(self):
+        """Verify that legacy string frontal lobe is migrated to structured dict on load."""
+        brain = self.mem._global_brain
+        
+        # Manually set legacy string state and save
+        brain.state["frontalLobe"] = LEGACY_NOTE
+        brain._save()
+        
+        # Reload brain to trigger migration
+        reloaded = self.mem.Brain()
+        frontal_lobe = reloaded.state["frontalLobe"]
+        
+        # Should be migrated to dict
+        self.assertIsInstance(frontal_lobe, dict)
+        self.assertIn("Neutral - CPI is the next catalyst", frontal_lobe["market_view"])
+        self.assertIn("5200", frontal_lobe["core_levels"])
+        self.assertIn("5250", frontal_lobe["next_round"])
+        
+        # Portfolio Health should have been extracted from legacy note and moved to portfolioHealth state
+        # The frontalLobe dict should NOT have a portfolio_health field anymore
+        self.assertNotIn("portfolio_health", frontal_lobe)
+
+    def test_update_frontal_lobe_accepts_structured_payload_and_skips_identical_write(self):
+        """Verify update_frontal_lobe accepts dict payload and skips duplicate writes."""
+        brain = self.mem._global_brain
+        
+        # First write
+        result1 = brain.update_frontal_lobe(dict(VALID_THESIS))
+        self.assertTrue(result1["success"])
+        commit_count = len(brain.commits)
+        
+        # Second identical write should be skipped
+        result2 = brain.update_frontal_lobe(dict(VALID_THESIS))
+        self.assertTrue(result2["success"])
+        self.assertTrue(result2.get("unchanged", False))
+        self.assertEqual(result2["message"], "Frontal lobe unchanged; skipped commit.")
+        self.assertEqual(len(brain.commits), commit_count)
+
+    def test_update_frontal_lobe_tool_schema_uses_named_parameters(self):
+        """Verify update_frontal_lobe tool schema has named parameters, not 'content'."""
+        tools = llm._convert_to_openai_tools([self.mem.update_frontal_lobe])
+        self.assertEqual(len(tools), 1)
+        
+        function_schema = tools[0]["function"]
+        params = function_schema["parameters"]
+        
+        # Required parameters
+        self.assertIn("market_view", params["required"])
+        self.assertIn("core_levels", params["required"])
+        self.assertIn("next_round", params["required"])
+        
+        # Optional parameter
+        self.assertIn("context_note", params["properties"])
+        
+        # Old 'content' parameter should NOT exist
+        self.assertNotIn("content", params["properties"])
+
     def test_default_state_starts_with_structured_frontal_lobe_template(self):
         note = self.mem.get_frontal_lobe()
         self.assertIsInstance(note, str)
-        # Should include labeled sections
-        for label in ("Market View:", "Core Levels:", "Portfolio Health:", "Next Round:"):
+        # Should include labeled sections (Portfolio Health removed from frontal lobe)
+        for label in ("Market View:", "Core Levels:", "Next Round:"):
             self.assertIn(label, note)
 
     def test_update_lobe_section_skips_identical_normalized_content(self):
         brain = self.mem._global_brain
         VALID_NOTE = (
             "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
-
             "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
-
-            "Portfolio Health: Keep leverage light until event risk clears.\n"
-
             "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure."
         )
-        self.assertTrue(brain.update_frontal_lobe(VALID_NOTE)["success"])
+        # Write as dict payload (new structured format)
+        payload = {
+            "market_view": "Neutral - CPI is the next catalyst while breadth remains mixed.",
+            "core_levels": "Watch SPX 5200 support and 5250 resistance.",
+            "next_round": "If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure.",
+            "context_note": ""
+        }
+        self.assertTrue(brain.update_frontal_lobe(payload)["success"])
         commit_count = len(brain.commits)
 
         result = brain.update_lobe_section(
@@ -91,26 +191,21 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         brain = self.mem._global_brain
         VALID_NOTE = (
             "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
-
             "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
-
-            "Portfolio Health: Keep leverage light until event risk clears.\n"
-
             "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure."
         )
-        self.assertTrue(brain.update_frontal_lobe(VALID_NOTE)["success"])
+        # First write as dict payload (new structured format)
+        payload = {
+            "market_view": "Neutral - CPI is the next catalyst while breadth remains mixed.",
+            "core_levels": "Watch SPX 5200 support and 5250 resistance.",
+            "next_round": "If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure.",
+            "context_note": ""
+        }
+        self.assertTrue(brain.update_frontal_lobe(payload)["success"])
         commit_count = len(brain.commits)
 
-        result = brain.update_frontal_lobe(
-            "Market View: Neutral - CPI is the next catalyst while breadth remains mixed.\n"
-
-            "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
-
-            "Portfolio Health: Keep leverage light until event risk clears.\n"
-
-            "Next Round: If CPI cools and SPX reclaims 5250, add risk; if 5200 breaks, cut exposure.\n"
-
-        )
+        # Second write with identical content
+        result = brain.update_frontal_lobe(dict(payload))
 
         self.assertTrue(result["success"])
         self.assertTrue(result.get("unchanged", True))
