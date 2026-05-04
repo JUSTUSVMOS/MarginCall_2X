@@ -90,6 +90,43 @@ class ResultBudgetTests(unittest.TestCase):
         self.assertEqual(trimmed[0]["content"], "a" * 200)
         self.assertIn("結果過長", trimmed[1]["content"])
 
+    def test_enforce_turn_budget_does_not_mutate_input(self):
+        # prepare input and keep a copy
+        import copy
+
+        results = [
+            {"name": "t1", "content": "x" * (SINGLE_RESULT_CAP + 200)},
+            {"name": "t2", "content": "y" * (SINGLE_RESULT_CAP + 200)},
+        ]
+        original = copy.deepcopy(results)
+
+        trimmed = enforce_turn_budget(results)
+
+        # original input must not be mutated
+        self.assertEqual(results, original)
+        # returned list may be different objects
+        self.assertIsNot(results, trimmed)
+        self.assertIsInstance(trimmed, list)
+
+    def test_enforce_turn_budget_compacts_multiple_under_single_cap(self):
+        # create several items each under SINGLE_RESULT_CAP but collectively over PER_TURN_BUDGET
+        piece_len = SINGLE_RESULT_CAP - 1
+        count = (PER_TURN_BUDGET // piece_len) + 2
+        results = [
+            {"name": f"tool{i}", "content": "x" * piece_len} for i in range(count)
+        ]
+
+        total_before = sum(len(r["content"]) for r in results)
+        self.assertGreater(total_before, PER_TURN_BUDGET)
+
+        trimmed = enforce_turn_budget(results)
+        total_after = sum(len(str(r.get("content", ""))) for r in trimmed)
+
+        # must fit within per-turn budget
+        self.assertLessEqual(total_after, PER_TURN_BUDGET)
+        # ensure at least one item was shortened
+        self.assertTrue(any(len(str(r.get("content", ""))) < piece_len for r in trimmed))
+
     def test_cap_history_text_trims_tool_like_payload(self):
         oversized = "payload-" + ("z" * (SINGLE_RESULT_CAP + 400))
 
