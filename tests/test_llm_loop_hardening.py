@@ -311,6 +311,115 @@ class OpenRouterLoopTests(unittest.TestCase):
         self.assertEqual(result, "loop handled")
         self.assertIn("very similar", flattened)
 
+    def test_chat_with_tools_appends_tool_results_before_loop_warning(self):
+        responses = iter(
+            [
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {"content": {"text": "loop handled"}},
+            ]
+        )
+        captured_messages = []
+
+        def only_symbol_tool(symbol: str) -> str:
+            return f"ok:{symbol}"
+
+        def fake_openrouter(model_name, messages, temperature=0.3, tools=None, timeout_seconds=60):
+            captured_messages.append(list(messages))
+            return next(responses)
+
+        with patch.object(llm, "_call_openrouter", side_effect=fake_openrouter):
+            result = llm.chat_with_tools(
+                "analyze arkk",
+                tools=[only_symbol_tool],
+                models=["minimax/minimax-m2.5:free"],
+                history=[],
+            )
+
+        third_round = captured_messages[2]
+        assistant_index = next(
+            i for i, message in enumerate(third_round)
+            if any(call.get("id") == "call_2" for call in message.get("tool_calls", []))
+        )
+        tool_index = next(
+            i for i, message in enumerate(third_round)
+            if message.get("role") == "tool" and message.get("tool_call_id") == "call_2"
+        )
+        warning_index = next(
+            i for i, message in enumerate(third_round)
+            if message.get("role") == "user" and "very similar" in message.get("content", "")
+        )
+
+        self.assertEqual(result, "loop handled")
+        self.assertLess(assistant_index, tool_index)
+        self.assertLess(tool_index, warning_index)
+
+    def test_chat_with_tools_avoids_duplicate_same_turn_loop_warnings(self):
+        responses = iter(
+            [
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
+                        }
+                    ],
+                },
+                {"content": {"text": "loop handled"}},
+            ]
+        )
+        captured_messages = []
+
+        def only_symbol_tool(symbol: str) -> str:
+            return f"ok:{symbol}"
+
+        def fake_openrouter(model_name, messages, temperature=0.3, tools=None, timeout_seconds=60):
+            captured_messages.append(list(messages))
+            return next(responses)
+
+        with patch.object(llm, "_call_openrouter", side_effect=fake_openrouter):
+            result = llm.chat_with_tools(
+                "analyze arkk",
+                tools=[only_symbol_tool],
+                models=["minimax/minimax-m2.5:free"],
+                history=[],
+            )
+
+        third_round = captured_messages[2]
+        same_turn_warnings = [
+            message for message in third_round
+            if message.get("role") == "user" and "only_symbol_tool" in message.get("content", "")
+        ]
+
+        self.assertEqual(result, "loop handled")
+        self.assertEqual(len(same_turn_warnings), 1)
+
 
 
 if __name__ == "__main__":

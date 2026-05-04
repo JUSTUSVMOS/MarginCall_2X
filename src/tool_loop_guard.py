@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 
 @dataclass
@@ -45,15 +45,20 @@ class ToolLoopGuard:
                 )
         return None
 
-    def format_warning_for_prompt(self) -> Optional[str]:
+    def format_warning_for_prompt(self, suppressed_tools: Optional[Set[str]] = None) -> Optional[str]:
+        suppressed_tools = suppressed_tools or set()
         warnings = []
         # Include tools that exceeded call limits
         for tool_name, calls in self.tool_calls.items():
+            if tool_name in suppressed_tools:
+                continue
             if len(calls) >= self.max_calls_per_tool:
                 warnings.append(f"- {tool_name}: {len(calls)} calls")
 
         # Include tools that triggered near-duplicate warnings
         for tool_name, count in self.near_duplicate_counts.items():
+            if tool_name in suppressed_tools:
+                continue
             if count > 0:
                 # Avoid duplicate entries
                 if not any(w.startswith(f"- {tool_name}:") for w in warnings):

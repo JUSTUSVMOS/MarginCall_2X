@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-from src.result_budget import cap_history_text, cap_single_result, enforce_turn_budget
+from src.result_budget import cap_single_result, enforce_turn_budget
 from src.tool_loop_guard import ToolLoopGuard
 from src.tools import _REGISTRY
 
@@ -654,7 +654,7 @@ def chat_with_tools(
                 tools=use_tools,
                 timeout_seconds=timeout_seconds,
             )
-            logger.info(f"DEBUG OpenRouter initial res_message: {res_message}")
+            logger.debug("OpenRouter initial response: %s", res_message)
              
             if res_message:
                 tool_calls = res_message.get("tool_calls")
@@ -666,6 +666,8 @@ def chat_with_tools(
                 while tool_calls and use_tools and loop_count < 15:
                     loop_count += 1
                     messages.append(res_message)
+                    per_call_warnings = []
+                    warned_tools = set()
 
                     for tc in tool_calls:
                         func_name = tc.get("function", {}).get("name", "")
@@ -676,7 +678,8 @@ def chat_with_tools(
                             parsed_args = {}
                         warning = loop_guard.check_should_warn(func_name, parsed_args if isinstance(parsed_args, dict) else {})
                         if warning:
-                            messages.append({"role": "user", "content": warning})
+                            per_call_warnings.append({"role": "user", "content": warning})
+                            warned_tools.add(func_name)
 
                     tool_results = _execute_openai_tool_calls(tool_calls, use_tools)
                     if len(tool_results) != len(tool_calls):
@@ -700,8 +703,9 @@ def chat_with_tools(
                     ]
                     tool_results = enforce_turn_budget(tool_results)
                     messages.extend(tool_results)
+                    messages.extend(per_call_warnings)
 
-                    usage_warning = loop_guard.format_warning_for_prompt()
+                    usage_warning = loop_guard.format_warning_for_prompt(suppressed_tools=warned_tools)
                     if usage_warning:
                         messages.append({"role": "user", "content": usage_warning})
 
@@ -712,7 +716,7 @@ def chat_with_tools(
                         tools=use_tools,
                         timeout_seconds=timeout_seconds,
                     )
-                    logger.info(f"DEBUG OpenRouter step {loop_count} res_message: {res_message}")
+                    logger.debug("OpenRouter step %s response: %s", loop_count, res_message)
                      
                     if not res_message:
                         break
