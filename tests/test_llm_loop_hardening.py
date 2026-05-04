@@ -75,7 +75,7 @@ class ResultBudgetTests(unittest.TestCase):
 
         capped = cap_single_result(oversized, "demo_tool")
 
-        self.assertLessEqual(len(capped), SINGLE_RESULT_CAP + 200)
+        self.assertLessEqual(len(capped), SINGLE_RESULT_CAP)
         self.assertIn("HEAD-", capped)
         self.assertIn("-TAIL", capped)
         self.assertIn("結果過長", capped)
@@ -127,6 +127,23 @@ class ResultBudgetTests(unittest.TestCase):
         self.assertLessEqual(total_after, PER_TURN_BUDGET)
         # ensure at least one item was shortened
         self.assertTrue(any(len(str(r.get("content", ""))) < piece_len for r in trimmed))
+
+    def test_00_enforce_turn_budget_converges_when_all_items_at_final_min_keep(self):
+        # Many items exactly at final_min_keep (20) to reproduce degenerate case
+        piece_len = 20
+        count = (PER_TURN_BUDGET // piece_len) + 3
+        results = [
+            {"name": f"t{i}", "content": "x" * piece_len} for i in range(count)
+        ]
+
+        total_before = sum(len(r["content"]) for r in results)
+        self.assertGreater(total_before, PER_TURN_BUDGET)
+
+        trimmed = enforce_turn_budget(results)
+        total_after = sum(len(str(r.get("content", ""))) for r in trimmed)
+
+        # must fit within per-turn budget
+        self.assertLessEqual(total_after, PER_TURN_BUDGET)
 
     def test_enforce_turn_budget_converges_on_many_small_items(self):
         # Many items just above min_keep (101) used to fail convergence where

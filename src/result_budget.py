@@ -134,6 +134,32 @@ def enforce_turn_budget(results: List[Dict]) -> List[Dict]:
             remaining -= actual_cut
             total -= actual_cut
 
+    # Last-resort collapse: if we're still over budget (e.g., every item was
+    # already at or below final_min_keep), zero-out the least-valuable items
+    # until we converge. This preserves ordering and index stability because we
+    # operate on the shallow-copied list and only replace content fields.
+    if total > PER_TURN_BUDGET:
+        remaining = total - PER_TURN_BUDGET
+        # re-sort again to pick items to collapse (largest first). Sorted() is
+        # stable so equal-sized items preserve original order.
+        indexed = sorted(
+            enumerate(new_results),
+            key=lambda pair: len(str(pair[1].get("content", ""))),
+            reverse=True,
+        )
+        for index, result in indexed:
+            if remaining <= 0:
+                break
+            old_content = str(result.get("content", ""))
+            old_len = len(old_content)
+            if old_len <= 0:
+                continue
+            # collapse entirely to empty string as a practical last-resort
+            new_results[index]["content"] = ""
+            actual_cut = old_len
+            remaining -= actual_cut
+            total -= actual_cut
+
     return new_results
 
 
