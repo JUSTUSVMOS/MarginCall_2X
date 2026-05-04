@@ -632,5 +632,115 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertEqual(brain.state["portfolioHealth"]["nav_twd"], 1000.0,
                         "Stored nav_twd should be updated to 1000.0")
 
+    def test_get_cognitive_context_renders_three_clean_blocks(self):
+        """
+        Task 3 regression: get_cognitive_context() must render three clean, labeled blocks:
+        - ### Trading Thesis (Frontal Lobe)
+        - ### Portfolio Health (Auto)
+        - ### Persistent Macro / Market Regime
+        
+        Old Portfolio Health inline text like "Portfolio Health: Old auto-summary" must NOT appear.
+        """
+        brain = self.mem.Brain()
+        
+        # Write valid thesis
+        brain.update_frontal_lobe(dict(VALID_THESIS))
+        
+        # Write portfolio health
+        health_data = {
+            "nav_twd": 100000.0,
+            "pnl_pct": 5.5,
+            "top3_concentration": 0.45,
+            "drawdown_pct": 2.1,
+            "risk_state": "Normal",
+            "gross_scale": 1.2
+        }
+        brain.update_portfolio_health(health_data)
+        
+        # Write market regime
+        brain.update_market_regime(
+            summary="Macro backdrop stable",
+            regime="🟢 上漲",
+            risk_score=75,
+            watchpoints=["SPX 20MA"],
+            reasons=["Strong momentum"],
+            signals={"spx": 5200.4},
+            source="test",
+            updated_at="2026-01-02T03:04:05Z"
+        )
+        
+        # Get cognitive context
+        context = brain.get_cognitive_context(max_age_minutes=999999)
+        
+        # Must include three clean block headers
+        self.assertIn("### Trading Thesis (Frontal Lobe)", context)
+        self.assertIn("### Portfolio Health (Auto)", context)
+        self.assertIn("### Persistent Macro / Market Regime", context)
+        
+        # Must NOT include old inline Portfolio Health text
+        self.assertNotIn("Portfolio Health: Old auto-summary", context)
+        self.assertNotIn("Portfolio Health:", context.split("### Portfolio Health (Auto)")[0],
+                        "Frontal lobe section must not contain 'Portfolio Health:' inline")
+
+    def test_get_frontal_lobe_write_guide_describes_named_parameters(self):
+        """
+        Task 3 regression: get_frontal_lobe_write_guide() must mention structured named parameters
+        and explicitly say NOT to write portfolio health.
+        
+        Must include:
+        - market_view
+        - core_levels
+        - next_round
+        - context_note
+        - "Do not write portfolio health here"
+        
+        Must NOT include:
+        - "Portfolio Health:"
+        """
+        guide = self.mem.get_frontal_lobe_write_guide()
+        
+        # Must mention all named parameters
+        self.assertIn("market_view", guide)
+        self.assertIn("core_levels", guide)
+        self.assertIn("next_round", guide)
+        self.assertIn("context_note", guide)
+        
+        # Must warn NOT to write portfolio health
+        self.assertIn("do not write portfolio health", guide.lower(),
+                     "Guide must explicitly tell model not to write portfolio health in frontal lobe")
+        
+        # Must NOT include old Portfolio Health section marker
+        self.assertNotIn("Portfolio Health:", guide)
+
+    def test_agent_prompt_contract_mentions_structured_write_fields(self):
+        """
+        Task 3 regression: src/agent.py prompt must tell model to use structured write fields
+        and must NOT mention the old four-section note format.
+        
+        Must include:
+        - market_view
+        - core_levels
+        - next_round
+        - context_note
+        
+        Must NOT include:
+        - 四段式專業交易筆記格式 (old four-section format reference)
+        """
+        import pathlib
+        repo_root = pathlib.Path(__file__).resolve().parents[1]
+        agent_path = repo_root / "src" / "agent.py"
+        
+        source = agent_path.read_text()
+        
+        # Must mention structured write fields
+        self.assertIn("market_view", source)
+        self.assertIn("core_levels", source)
+        self.assertIn("next_round", source)
+        self.assertIn("context_note", source)
+        
+        # Must NOT mention old four-section format
+        self.assertNotIn("四段式專業交易筆記格式", source,
+                        "src/agent.py must not reference old four-section format")
+
 if __name__ == "__main__":
     unittest.main()

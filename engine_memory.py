@@ -61,6 +61,8 @@ Required parameters:
 Optional parameter:
 - context_note: additional context (default: "")
 
+Do not write portfolio health here. The system tracks portfolio health automatically via update_portfolio_health().
+
 Low-quality placeholder notes will be rejected. Avoid vague one-liners like "觀望", "waiting for CPI", or unlabeled thoughts with no levels / plan.
 
 Example call:
@@ -928,33 +930,76 @@ class Brain:
         return age_seconds > max_age_minutes * 60
 
     def get_cognitive_context(self, max_age_minutes: int = 180) -> str:
+        """Render three clean blocks: Trading Thesis, Portfolio Health, Market Regime."""
+        
+        # Get frontal lobe state
+        frontal = _coerce_frontal_lobe_sections(self.state.get("frontalLobe"))
+        market_view = frontal.get("market_view", "").strip()
+        core_levels = frontal.get("core_levels", "").strip()
+        next_round = frontal.get("next_round", "").strip()
+        context_note = frontal.get("context_note", "").strip()
+        frontal_updated = frontal.get("updated_at")
+        
+        # Get portfolio health state
+        portfolio_health = _merge_defaults(_default_portfolio_health(), self.state.get("portfolioHealth", {}))
+        
+        # Get market regime state
         market = self.get_market_regime(max_age_minutes=max_age_minutes)
         watchpoints = _coerce_text_items(market.get("watchpoints"))
         reasons = _coerce_text_items(market.get("reasons"))
         signals = market.get("signals") or {}
-        frontal_lobe_text = self.get_frontal_lobe() or "空白 (首次運行)"
-
         signal_summary = ", ".join([
             f"{key}={value}" for key, value in signals.items() if not _is_blank_value(value)
         ]) or "無"
         watchpoints_text = "\n".join([f"  - {item}" for item in watchpoints])
         reasons_text = "\n".join([f"  - {item}" for item in reasons[:5]])
-        frontal_lobe_indented = "\n".join([f"  {line}" for line in frontal_lobe_text.splitlines()])
         stale_note = "（可能過期，等待 heartbeat 刷新）" if market.get("isStale") else ""
-
-        return (
-            "\n\n## Current Brain State\n"
-            f"- Emotion: {self.state['emotion']}\n"
-            f"- Frontal Lobe:\n{frontal_lobe_indented}\n"
-            "\n## Persistent Macro / Market Regime\n"
-            f"- Updated: {market.get('updatedAt') or '尚未同步'} {stale_note}\n"
-            f"- Regime: {market.get('state') or '未初始化'}\n"
-            f"- Risk Score: {market.get('riskScore') if market.get('riskScore') is not None else 'N/A'}\n"
-            f"- Summary: {market.get('summary') or '尚未建立'}\n"
-            f"- Watchpoints:\n{watchpoints_text}\n"
-            f"- Reasons:\n{reasons_text}\n"
-            f"- Key Signals: {signal_summary}\n"
+        
+        # Render Trading Thesis block
+        if not market_view and not core_levels and not next_round:
+            thesis_block = "### Trading Thesis (Frontal Lobe)\n尚未建立。請在分析後使用 update_frontal_lobe 記錄你的觀點。\n"
+        else:
+            thesis_lines = []
+            if market_view:
+                thesis_lines.append(f"**Market View:** {market_view}")
+            if core_levels:
+                thesis_lines.append(f"**Core Levels:** {core_levels}")
+            if next_round:
+                thesis_lines.append(f"**Next Round:** {next_round}")
+            if context_note:
+                thesis_lines.append(f"**Context:** {context_note}")
+            if frontal_updated:
+                thesis_lines.append(f"**Last updated:** {frontal_updated}")
+            thesis_block = "### Trading Thesis (Frontal Lobe)\n" + "\n".join(thesis_lines) + "\n"
+        
+        # Render Portfolio Health block
+        if portfolio_health.get("nav_twd") is None:
+            health_block = "### Portfolio Health (Auto)\n- 尚未同步 portfolio health。\n"
+        else:
+            health_lines = [
+                f"- **NAV (TWD):** {portfolio_health['nav_twd']}",
+                f"- **PnL:** {portfolio_health['pnl_pct']}%",
+                f"- **Top3 Concentration:** {portfolio_health['top3_concentration'] * 100:.1f}%",
+                f"- **Drawdown:** {portfolio_health['drawdown_pct']}%",
+                f"- **Risk State:** {portfolio_health['risk_state']}",
+                f"- **Gross Scale:** {portfolio_health['gross_scale']}",
+                f"- **Last updated:** {portfolio_health['updated_at']}"
+            ]
+            health_block = "### Portfolio Health (Auto)\n" + "\n".join(health_lines) + "\n"
+        
+        # Render Market Regime block
+        regime_block = (
+            "### Persistent Macro / Market Regime\n"
+            f"- **Updated:** {market.get('updatedAt') or '尚未同步'} {stale_note}\n"
+            f"- **Regime:** {market.get('state') or '未初始化'}\n"
+            f"- **Risk Score:** {market.get('riskScore') if market.get('riskScore') is not None else 'N/A'}\n"
+            f"- **Summary:** {market.get('summary') or '尚未建立'}\n"
+            f"- **Watchpoints:**\n{watchpoints_text}\n"
+            f"- **Reasons:**\n{reasons_text}\n"
+            f"- **Key Signals:** {signal_summary}\n"
         )
+        
+        return f"\n{thesis_block}\n{health_block}\n{regime_block}"
 
     def log(self, limit: int = 10) -> List[Dict[str, Any]]:
         recent = self.commits[-limit:]

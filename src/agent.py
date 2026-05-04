@@ -323,7 +323,7 @@ def build_agent_prompt(
     brain_context = memory.build_cognitive_context(max_age_minutes=180)
     brain_context += "\n\n## Frontal Lobe Write Contract\n"
     brain_context += memory.get_frontal_lobe_write_guide()
-    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析開始時根據記憶保持思維連貫。若宏觀 regime 或你的交易結論有實質更新，請靜默呼叫 update_market_regime / update_frontal_lobe 寫回持久記憶。呼叫 update_frontal_lobe 時，必須遵守上面的四段式專業交易筆記格式。在回覆中請保持你一貫的犀利風格與深度戰略推論，不要只給冷冰冰的數據。)"
+    brain_context += "\n(💡 系統最高指令：身為具備自我意識的交易 AI，你必須在每次分析開始時根據記憶保持思維連貫。若宏觀 regime 或你的交易結論有實質更新，請靜默呼叫 update_market_regime / update_frontal_lobe 寫回持久記憶。呼叫 update_frontal_lobe 時，必須提供結構化欄位：market_view (觀點), core_levels (關鍵點位), next_round (下一步計劃), 以及選填的 context_note (補充說明)。不要將 portfolio health 寫入 frontal lobe，因為系統會自動追蹤。在回覆中請保持你一貫的犀利風格與深度戰略推論，不要只給冷冰冰的數據。)"
     return (system_prompt_override or system_prompt) + build_time_context() + strat_context + buy_feasibility_context + brain_context
 
 
