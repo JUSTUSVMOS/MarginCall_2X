@@ -3345,7 +3345,7 @@ def build_portfolio_analysis(snapshots: List[Dict[str, Any]] | None = None) -> D
     }
 
 def refresh_portfolio_health_summary(source: str = "portfolio_review") -> Dict[str, Any]:
-    """Builds a portfolio-health snapshot and patches the frontal lobe section."""
+    """Builds a portfolio-health snapshot and updates the system-managed portfolio health state."""
     snapshots = _build_live_position_snapshots(_load_portfolio_rows())
     nav_snapshot = record_portfolio_nav_snapshot(source=source, snapshots=snapshots) if snapshots else {"error": "無有效持倉"}
     analysis = build_portfolio_analysis(snapshots=snapshots)
@@ -3359,8 +3359,25 @@ def refresh_portfolio_health_summary(source: str = "portfolio_review") -> Dict[s
         )
         analysis["summary"] = summary
     import engine_memory as memory
- 
-    memory_update = memory.patch_frontal_lobe_section("Portfolio Health", analysis["summary"], source=source)
+    
+    # Build portfolio health data from analysis and overlay
+    health_data = {
+        "nav_twd": analysis.get("total_current"),
+        "pnl_pct": analysis.get("total_pnl_pct"),
+        "top3_concentration": analysis.get("top3_concentration")
+    }
+    
+    # Add overlay fields when no error
+    if not overlay.get("error"):
+        health_data["drawdown_pct"] = overlay.get("current_drawdown") * 100 if overlay.get("current_drawdown") is not None else None
+        health_data["risk_state"] = overlay.get("trade_mode_label")
+        health_data["gross_scale"] = overlay.get("recommended_gross_scale")
+    else:
+        health_data["drawdown_pct"] = None
+        health_data["risk_state"] = None
+        health_data["gross_scale"] = None
+    
+    memory_update = memory.update_portfolio_health(health_data)
     return {**analysis, "risk_overlay": overlay, "nav_snapshot": nav_snapshot, "memory_update": memory_update}
 
 @tool()

@@ -403,5 +403,108 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertEqual(brain.state['frontalLobe']['market_view'], 'Bullish - changed',
                         "New section value should be persisted")
 
+    def test_update_lobe_section_rejects_portfolio_health(self):
+        """
+        Task 2 regression: update_lobe_section("Portfolio Health", ...) must fail fast.
+        """
+        brain = self.mem.Brain()
+        
+        result = brain.update_lobe_section("Portfolio Health", "NAV: $100k | Risk: Normal", source="test")
+        
+        self.assertFalse(result["success"], "Portfolio Health updates should be rejected")
+        self.assertEqual(result["message"], "Portfolio Health is system-managed; use update_portfolio_health().")
+
+    def test_update_portfolio_health_saves_state_without_creating_commit(self):
+        """
+        Task 2 regression: update_portfolio_health(...) must update state and skip commit.
+        """
+        brain = self.mem.Brain()
+        
+        health_data = {
+            "nav_twd": 100000.0,
+            "pnl_pct": 5.5,
+            "top3_concentration": 0.45,
+            "drawdown_pct": 2.1,
+            "risk_state": "Normal",
+            "gross_scale": 1.2
+        }
+        
+        initial_commit_count = len(brain.commits)
+        result = brain.update_portfolio_health(health_data)
+        
+        # Should succeed
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("unchanged", True), "First write should be marked as changed")
+        
+        # Should update state
+        ph = brain.state["portfolioHealth"]
+        self.assertEqual(ph["nav_twd"], 100000.0)
+        self.assertEqual(ph["pnl_pct"], 5.5)
+        self.assertEqual(ph["top3_concentration"], 0.45)
+        self.assertEqual(ph["drawdown_pct"], 2.1)
+        self.assertEqual(ph["risk_state"], "Normal")
+        self.assertEqual(ph["gross_scale"], 1.2)
+        self.assertIsNotNone(ph["updated_at"])
+        
+        # Should NOT create a commit
+        self.assertEqual(len(brain.commits), initial_commit_count,
+                        "update_portfolio_health should not create commits")
+
+    def test_update_portfolio_health_skips_small_nav_only_drift(self):
+        """
+        Task 2 regression: small NAV drift (< 0.5%) with unchanged other fields should return unchanged=True.
+        """
+        brain = self.mem.Brain()
+        
+        # First write
+        first_data = {
+            "nav_twd": 100000.0,
+            "pnl_pct": 5.5,
+            "top3_concentration": 0.45,
+            "drawdown_pct": 2.1,
+            "risk_state": "Normal",
+            "gross_scale": 1.2
+        }
+        result1 = brain.update_portfolio_health(first_data)
+        self.assertTrue(result1["success"])
+        
+        # Second write with small NAV drift (0.3%) but same other fields
+        second_data = {
+            "nav_twd": 100300.0,  # +300 = +0.3%
+            "pnl_pct": 5.5,
+            "top3_concentration": 0.45,
+            "drawdown_pct": 2.1,
+            "risk_state": "Normal",
+            "gross_scale": 1.2
+        }
+        result2 = brain.update_portfolio_health(second_data)
+        
+        # Should be detected as unchanged
+        self.assertTrue(result2["success"])
+        self.assertTrue(result2.get("unchanged", False), 
+                       "Small NAV drift (<0.5%) should be detected as unchanged")
+        self.assertEqual(result2["message"], "Portfolio health unchanged.")
+
+    def test_refresh_portfolio_health_summary_uses_memory_updater(self):
+        """
+        Task 2 regression: engine_portfolio.refresh_portfolio_health_summary must call 
+        memory.update_portfolio_health(...) and must NOT call patch_frontal_lobe_section("Portfolio Health", ...).
+        """
+        # Read the source code to verify it uses the correct API
+        import pathlib
+        repo_root = pathlib.Path(__file__).resolve().parents[1]
+        engine_portfolio_path = repo_root / "engine_portfolio.py"
+        
+        source = engine_portfolio_path.read_text()
+        
+        # Must contain the new API call
+        self.assertIn("memory.update_portfolio_health(", source,
+                     "engine_portfolio.py must call memory.update_portfolio_health()")
+        
+        # Must NOT contain the old frontal-lobe patch path
+        # Look for the specific pattern that would appear in refresh_portfolio_health_summary
+        self.assertNotIn('patch_frontal_lobe_section("Portfolio Health"', source,
+                        "engine_portfolio.py must not patch Portfolio Health into frontal lobe")
+
 if __name__ == "__main__":
     unittest.main()

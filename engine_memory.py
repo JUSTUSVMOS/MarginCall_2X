@@ -1068,6 +1068,71 @@ class Brain:
         )
         return {"success": True, "message": f"Emotion: {old_emotion} -> {emotion}"}
 
+    def _portfolio_health_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize portfolio health payload."""
+        normalized = {}
+        
+        # Normalize numeric fields to floats when present
+        for field in ["nav_twd", "pnl_pct", "top3_concentration", "drawdown_pct", "gross_scale"]:
+            value = payload.get(field)
+            if value is not None:
+                try:
+                    normalized[field] = float(value)
+                except (TypeError, ValueError):
+                    normalized[field] = None
+            else:
+                normalized[field] = None
+        
+        # Keep risk_state as-is
+        normalized["risk_state"] = payload.get("risk_state")
+        normalized["updated_at"] = _utc_now_iso()
+        
+        return normalized
+
+    def _portfolio_health_unchanged(self, old: Dict[str, Any], new: Dict[str, Any]) -> bool:
+        """Check if portfolio health has meaningfully changed."""
+        # Risk state change is always material
+        if old.get("risk_state") != new.get("risk_state"):
+            return False
+        
+        # Check NAV drift (>= 0.5% is material)
+        old_nav = old.get("nav_twd")
+        new_nav = new.get("nav_twd")
+        if old_nav is not None and new_nav is not None and old_nav > 0:
+            nav_drift_pct = abs(new_nav - old_nav) / old_nav
+            if nav_drift_pct >= 0.005:  # 0.5%
+                return False
+        
+        # Compare other numeric fields
+        for field in ["pnl_pct", "top3_concentration", "drawdown_pct", "gross_scale"]:
+            if old.get(field) != new.get(field):
+                return False
+        
+        return True
+
+    def update_portfolio_health(self, health_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update portfolio health state without creating a commit."""
+        normalized = self._portfolio_health_payload(health_data)
+        current = self.state.get("portfolioHealth", _default_portfolio_health())
+        
+        # Check if unchanged
+        if self._portfolio_health_unchanged(current, normalized):
+            return {
+                "success": True,
+                "unchanged": True,
+                "message": "Portfolio health unchanged."
+            }
+        
+        # Update state and save (but don't commit)
+        self.state["portfolioHealth"] = normalized
+        self._save()
+        
+        return {
+            "success": True,
+            "unchanged": False,
+            "message": "Portfolio health updated."
+        }
+
     def update_market_regime(
         self,
         summary: str,
@@ -1348,6 +1413,10 @@ def build_cognitive_context(max_age_minutes: int = 180) -> str:
 
 def patch_frontal_lobe_section(section_name: str, content: str, source: str = "system") -> Dict[str, Any]:
     return _get_global_brain().update_lobe_section(section_name, content, source=source)
+
+def update_portfolio_health(health_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update portfolio health state without creating a commit. Not a @tool."""
+    return _get_global_brain().update_portfolio_health(health_data)
 
 if __name__ == "__main__":
     # 自檢測試
