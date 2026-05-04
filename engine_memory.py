@@ -51,19 +51,25 @@ FRONTAL_LOBE_KEYWORDS = {
     "Next Round": ["next round", "if", "plan", "will", "trim", "cut", "add", "hedge", "如果", "若", "打算", "會"],
 }
 
-FRONTAL_LOBE_WRITE_GUIDE = """When calling update_frontal_lobe, always write a professional trading note with these labeled fields:
-- Market View: Bullish / Bearish / Neutral + one-sentence thesis
-- Core Levels: the key support / resistance / MA levels being watched
-- Portfolio Health: whether current positions are healthy or over-risked
-- Next Round: if A happens, I will do B
+FRONTAL_LOBE_WRITE_GUIDE = """When calling update_frontal_lobe, provide structured named parameters:
+
+Required parameters:
+- market_view: Bullish / Bearish / Neutral + one-sentence thesis
+- core_levels: the key support / resistance / MA levels being watched
+- next_round: if A happens, I will do B
+
+Optional parameter:
+- context_note: additional context (default: "")
 
 Low-quality placeholder notes will be rejected. Avoid vague one-liners like "觀望", "waiting for CPI", or unlabeled thoughts with no levels / plan.
 
-Example:
-Market View: Bearish - Market shows signs of reversal after SPX rejected 5250 resistance.
-Core Levels: Watch SPX 5200 support and 5250 resistance.
-Portfolio Health: Current longs are slightly underwater but still above 20MA; risk is manageable.
-Next Round: If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.
+Example call:
+update_frontal_lobe(
+    market_view="Bearish - Market shows signs of reversal after SPX rejected 5250 resistance.",
+    core_levels="Watch SPX 5200 support and 5250 resistance.",
+    next_round="If SPX breaks below 5180, I will cut exposure and wait for confirmation before re-adding.",
+    context_note="CPI report next week may be catalyst."
+)
 """
 
 # Maximum commits to keep in memory (soft cap for downstream pruning logic)
@@ -75,7 +81,6 @@ MARKET_REGIME_COMMIT_KEYS = ("summary", "state", "riskScore", "watchpoints", "re
 DEFAULT_FRONTAL_LOBE_TEMPLATE = (
     "Market View: Neutral - No durable market thesis has been logged yet.\n"
     "Core Levels: No key support or resistance levels have been logged yet.\n"
-    "Portfolio Health: Exposure review pending; keep sizing disciplined until a thesis is logged.\n"
     "Next Round: Do not add risk until the market view and levels are updated."
 )
 
@@ -474,9 +479,11 @@ class Brain:
 
     def _frontal_lobe_write_is_unchanged(self, payload: Dict[str, Any]) -> bool:
         current = self._normalized_current_frontal_lobe()
-        # Compare content fields only, ignoring updated_at
+        # Compare normalized/trimmed content fields only, ignoring updated_at
         for key in ("market_view", "core_levels", "next_round", "context_note"):
-            if current.get(key, "") != payload.get(key, ""):
+            current_val = current.get(key, "").strip()
+            payload_val = payload.get(key, "").strip()
+            if current_val != payload_val:
                 return False
         return True
 
@@ -588,27 +595,25 @@ class Brain:
         if not isinstance(payload, dict):
             return True
         
-        # Count meaningful sections
-        meaningful_sections = 0
-        placeholder_sections = 0
+        sections = _coerce_frontal_lobe_sections(payload)
+        required = [
+            sections.get("market_view", "").strip(), 
+            sections.get("core_levels", "").strip(), 
+            sections.get("next_round", "").strip()
+        ]
         
-        for key in ("market_view", "core_levels", "next_round"):
-            value = payload.get(key, "")
-            if not value or len(value.strip()) < 10:
-                placeholder_sections += 1
-                continue
-            
-            if self._contains_placeholder_phrase(value):
-                placeholder_sections += 1
-            else:
-                meaningful_sections += 1
-        
-        # Need at least 2 meaningful sections
-        if meaningful_sections < 2:
+        # Need at least 2 out of 3 required fields filled
+        if sum(bool(item) for item in required) < 2:
             return True
         
-        # Too many placeholder sections
-        return placeholder_sections >= 2
+        # Reject if combined text is short AND contains placeholder phrases
+        combined = " ".join([
+            sections.get("market_view", ""), 
+            sections.get("core_levels", ""), 
+            sections.get("next_round", ""), 
+            sections.get("context_note", "")
+        ])
+        return self._contains_placeholder_phrase(combined) and len(combined.strip()) < 40
 
     def _trim_commit_history(self):
         if len(self.commits) <= MAX_COMMITS:
@@ -1347,10 +1352,10 @@ if __name__ == "__main__":
     # 自檢測試
     print("1. 更新額葉記憶...")
     print(update_frontal_lobe(
-        "Market View: Neutral - 非農後市場進入事件前整理，等待 CPI 提供方向。\n"
-        "Core Levels: Watch SPX 5200 support and 5250 resistance.\n"
-        "Portfolio Health: 槓桿偏低，部位可控，但不宜在數據前追價。\n"
-        "Next Round: If CPI 低於預期且 SPX 站回 5250，我會小幅加碼；若跌破 5200，先降風險。"
+        market_view="Neutral - 非農後市場進入事件前整理，等待 CPI 提供方向。",
+        core_levels="Watch SPX 5200 support and 5250 resistance.",
+        next_round="If CPI 低於預期且 SPX 站回 5250，我會小幅加碼；若跌破 5200，先降風險。",
+        context_note="槓桿偏低，部位可控，但不宜在數據前追價。"
     ))
     print("\n2. 更新情緒狀態...")
     print(update_emotion("cautious", "非農數據強勁，擔心聯準會延後降息，市場波動加劇。"))

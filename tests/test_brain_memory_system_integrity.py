@@ -281,5 +281,85 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
         self.assertEqual(len(reloaded.commits), 200)
         self.assertEqual(reloaded.head, reloaded.commits[-1]["hash"])
 
+    def test_duplicate_write_detection_normalizes_whitespace_differences(self):
+        """
+        Regression test: whitespace-only differences in structured payloads should NOT create extra commits.
+        This ensures _frontal_lobe_write_is_unchanged() compares normalized values, not raw strings.
+        """
+        brain = self.mem.Brain()
+        
+        # First write with clean values
+        payload1 = {
+            "market_view": "Bearish - SPX rejected 5250 resistance.",
+            "core_levels": "Watch SPX 5200 support.",
+            "next_round": "If SPX breaks 5180, cut exposure.",
+            "context_note": "CPI next week."
+        }
+        result1 = brain.update_frontal_lobe(payload1)
+        self.assertTrue(result1["success"])
+        commit_count = len(brain.commits)
+        
+        # Second write with identical content but extra whitespace
+        payload2 = {
+            "market_view": "  Bearish - SPX rejected 5250 resistance.  ",
+            "core_levels": "  Watch SPX 5200 support.  ",
+            "next_round": "  If SPX breaks 5180, cut exposure.  ",
+            "context_note": "  CPI next week.  "
+        }
+        result2 = brain.update_frontal_lobe(payload2)
+        
+        # Should be detected as unchanged
+        self.assertTrue(result2["success"])
+        self.assertTrue(result2.get("unchanged", False), 
+                       "Whitespace-only differences should be detected as no-op")
+        self.assertEqual(result2["message"], "Frontal lobe unchanged; skipped commit.")
+        self.assertEqual(len(brain.commits), commit_count,
+                        "No extra commit should be created for whitespace-only changes")
+
+    def test_concise_valid_structured_update_is_accepted(self):
+        """
+        Regression test: concise but valid structured payloads should be accepted.
+        This ensures _is_placeholder_content() doesn't over-reject legitimate concise updates.
+        """
+        brain = self.mem.Brain()
+        
+        # Concise but valid structured payload (all sections have clear content)
+        concise_payload = {
+            "market_view": "Bullish - breakout confirmed",
+            "core_levels": "SPX 5300 support",
+            "next_round": "Add if momentum holds",
+            "context_note": ""
+        }
+        
+        result = brain.update_frontal_lobe(concise_payload)
+        
+        # Should be accepted (not rejected as placeholder)
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("unchanged", False))
+        self.assertNotEqual(result["message"], "Rejected: content is too vague to persist.",
+                          "Concise valid content should not be rejected as placeholder")
+        self.assertGreater(len(brain.commits), 0, "Valid content should create a commit")
+
+    def test_sparse_placeholder_content_is_still_rejected(self):
+        """
+        Regression test: sparse/vague placeholder content should still be rejected.
+        This ensures the fix to _is_placeholder_content() doesn't break placeholder detection.
+        """
+        brain = self.mem.Brain()
+        
+        # Sparse payload with vague placeholder-quality content
+        sparse_payload = {
+            "market_view": "觀望",
+            "core_levels": "",
+            "next_round": "wait",
+            "context_note": ""
+        }
+        
+        result = brain.update_frontal_lobe(sparse_payload)
+        
+        # Should be rejected (success=False when rejected)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["message"], "Rejected: content is too vague to persist.")
+
 if __name__ == "__main__":
     unittest.main()
