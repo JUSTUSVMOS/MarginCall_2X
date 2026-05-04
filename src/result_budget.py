@@ -106,6 +106,34 @@ def enforce_turn_budget(results: List[Dict]) -> List[Dict]:
             needed -= actual_cut
             total -= actual_cut
 
+    # Final fallback: if we're still over budget, allow a last-pass that can
+    # reduce items below the conservative min_keep to a smaller final_min_keep
+    # so the function always converges to within PER_TURN_BUDGET.
+    if total > PER_TURN_BUDGET:
+        remaining = total - PER_TURN_BUDGET
+        final_min_keep = 20
+        # re-sort by current sizes
+        indexed = sorted(
+            enumerate(new_results),
+            key=lambda pair: len(str(pair[1].get("content", ""))),
+            reverse=True,
+        )
+        for index, result in indexed:
+            if remaining <= 0:
+                break
+            old_content = str(result.get("content", ""))
+            old_len = len(old_content)
+            max_cut2 = max(0, old_len - final_min_keep)
+            if max_cut2 <= 0:
+                continue
+            cut = min(max_cut2, remaining)
+            target_len = max(final_min_keep, old_len - cut)
+            new_content = cap_to_length(old_content, str(result.get("name", "unknown")), target_len)
+            new_results[index]["content"] = new_content
+            actual_cut = max(0, old_len - len(new_content))
+            remaining -= actual_cut
+            total -= actual_cut
+
     return new_results
 
 

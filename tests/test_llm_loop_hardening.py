@@ -128,6 +128,25 @@ class ResultBudgetTests(unittest.TestCase):
         # ensure at least one item was shortened
         self.assertTrue(any(len(str(r.get("content", ""))) < piece_len for r in trimmed))
 
+    def test_enforce_turn_budget_converges_on_many_small_items(self):
+        # Many items just above min_keep (101) used to fail convergence where
+        # the second pass could only cut 1 char per item. Ensure we actually
+        # reach PER_TURN_BUDGET.
+        piece_len = 101
+        count = (PER_TURN_BUDGET // piece_len) + 3
+        results = [
+            {"name": f"t{i}", "content": "x" * piece_len} for i in range(count)
+        ]
+
+        total_before = sum(len(r["content"]) for r in results)
+        self.assertGreater(total_before, PER_TURN_BUDGET)
+
+        trimmed = enforce_turn_budget(results)
+        total_after = sum(len(str(r.get("content", ""))) for r in trimmed)
+
+        # must fit within per-turn budget
+        self.assertLessEqual(total_after, PER_TURN_BUDGET)
+
     def test_cap_to_length_never_exceeds_max_len(self):
         content = "x" * 200
         capped = cap_to_length(content, "demo_tool", 100)
