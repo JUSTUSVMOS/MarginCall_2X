@@ -1098,10 +1098,16 @@ class Brain:
         # Check NAV drift (>= 0.5% is material)
         old_nav = old.get("nav_twd")
         new_nav = new.get("nav_twd")
-        if old_nav is not None and new_nav is not None and old_nav > 0:
-            nav_drift_pct = abs(new_nav - old_nav) / old_nav
-            if nav_drift_pct >= 0.005:  # 0.5%
-                return False
+        if old_nav is not None and new_nav is not None:
+            # For zero/none baseline, any different NAV is material
+            if old_nav <= 0:
+                if new_nav != old_nav:
+                    return False
+            # For positive baseline, >= 0.5% drift is material
+            else:
+                nav_drift_pct = abs(new_nav - old_nav) / old_nav
+                if nav_drift_pct >= 0.005:  # 0.5%
+                    return False
         
         # Compare other numeric fields
         for field in ["pnl_pct", "top3_concentration", "drawdown_pct", "gross_scale"]:

@@ -583,5 +583,54 @@ class TestBrainMemorySystemIntegrity(unittest.TestCase):
                                             "Result should include memory_update")
                                 self.assertEqual(result["memory_update"], {"success": True, "message": "Updated"})
 
+    def test_update_portfolio_health_detects_zero_to_positive_nav_as_material(self):
+        """
+        Regression test: zero-to-positive NAV transition is material and should NOT be suppressed.
+        
+        Bug reproduced by controller:
+        1. First write with nav_twd=0.0
+        2. Second write with nav_twd=1000.0 (same other fields)
+        3. Current behavior returns unchanged=True and leaves stored nav_twd at 0.0
+        
+        Expected behavior:
+        - Second call should return unchanged=False
+        - Stored nav_twd should become 1000.0
+        """
+        brain = self.mem.Brain()
+        
+        # First write with zero NAV
+        first_data = {
+            "nav_twd": 0.0,
+            "pnl_pct": 1.0,
+            "top3_concentration": 10.0,
+            "drawdown_pct": 0.0,
+            "risk_state": "Normal",
+            "gross_scale": 1.0
+        }
+        result1 = brain.update_portfolio_health(first_data)
+        self.assertTrue(result1["success"])
+        self.assertFalse(result1.get("unchanged", True), "First write should be marked as changed")
+        self.assertEqual(brain.state["portfolioHealth"]["nav_twd"], 0.0)
+        
+        # Second write with positive NAV (same other fields)
+        second_data = {
+            "nav_twd": 1000.0,
+            "pnl_pct": 1.0,
+            "top3_concentration": 10.0,
+            "drawdown_pct": 0.0,
+            "risk_state": "Normal",
+            "gross_scale": 1.0
+        }
+        result2 = brain.update_portfolio_health(second_data)
+        
+        # Should be detected as a material change
+        self.assertTrue(result2["success"])
+        self.assertFalse(result2.get("unchanged", True), 
+                        "Zero-to-positive NAV transition should be detected as material")
+        
+        # Should update stored NAV
+        self.assertEqual(brain.state["portfolioHealth"]["nav_twd"], 1000.0,
+                        "Stored nav_twd should be updated to 1000.0")
+
 if __name__ == "__main__":
     unittest.main()
