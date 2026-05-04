@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-from src.result_budget import cap_single_result, enforce_turn_budget
+from src.result_budget import cap_history_text, cap_single_result, enforce_turn_budget
 from src.tool_loop_guard import ToolLoopGuard
 from src.tools import _REGISTRY
 
@@ -25,6 +25,29 @@ RECENT_HISTORY_WINDOW = 12
 MAX_HISTORY_MESSAGES = 40
 SOFT_HISTORY_CHAR_LIMIT = 12000
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 45
+
+COMPACTION_PROMPT = """你是一個對話壓縮器。把以下對話歷史壓縮成結構化摘要，保留所有重要數據。
+
+格式要求：
+## 原始問題
+（用戶最初問什麼）
+
+## 關鍵發現
+（已經確認的事實、數字、結論）
+
+## 已使用的數據源
+（呼叫了哪些 tools，拿到什麼）
+
+## 待解決問題
+（還沒回答的部分）
+
+## 下一步
+（接下來應該做什麼）
+
+---
+對話歷史：
+{history_text}
+"""
 
 
 # 定義哪些模型支援工具呼叫 (Function Calling)
@@ -456,7 +479,12 @@ def _normalize_history_item(item) -> types.Content:
     if not isinstance(parts, list):
         parts = [parts]
 
-    normalized_parts = [types.Part(text=_normalize_part(part)) for part in parts]
+    normalized_parts = []
+    for part in parts:
+        text = _normalize_part(part)
+        if text.startswith("[function_response]") or text.startswith("[function_call]"):
+            text = cap_history_text(text)
+        normalized_parts.append(types.Part(text=text))
     return types.Content(role=role, parts=normalized_parts)
 
 
@@ -493,10 +521,9 @@ def _microcompact_history(history: List[types.Content]) -> List[types.Content]:
     return compacted
 
 
-def _full_compact_history(history: List[types.Content]) -> List[types.Content]:
+def _naive_full_compact_history(history: List[types.Content]) -> List[types.Content]:
     if len(history) <= RECENT_HISTORY_WINDOW:
         return history[-MAX_HISTORY_MESSAGES:]
-
     head = history[:-RECENT_HISTORY_WINDOW]
     tail = history[-RECENT_HISTORY_WINDOW:]
     summary_lines = []
@@ -508,11 +535,40 @@ def _full_compact_history(history: List[types.Content]) -> List[types.Content]:
     return [summary] + tail
 
 
+def _full_compact_history(history: List[types.Content]) -> List[types.Content]:
+    if len(history) <= RECENT_HISTORY_WINDOW:
+        return history[-MAX_HISTORY_MESSAGES:]
+
+    head = history[:-RECENT_HISTORY_WINDOW]
+    tail = history[-RECENT_HISTORY_WINDOW:]
+    history_text = "\n".join(
+        f"[{item.role}] {' '.join(p.text for p in item.parts if p.text)[:300]}"
+        for item in head[-20:]
+    )
+    summary_text = quick_call(
+        COMPACTION_PROMPT.format(history_text=history_text),
+        models=LIGHT_MODELS,
+        temperature=0.1,
+        timeout_seconds=15,
+    )
+    if not summary_text:
+        return _naive_full_compact_history(history)
+
+    summary = types.Content(
+        role="user",
+        parts=[types.Part(text="[history summary]\n" + summary_text.strip())],
+    )
+    compacted = [summary] + tail
+    return compacted[-MAX_HISTORY_MESSAGES:]
+
+
 def compact_history(history) -> List[types.Content]:
     normalized = [_normalize_history_item(item) for item in history]
     compacted = _microcompact_history(normalized)
 
-    if _estimate_history_chars(compacted) > SOFT_HISTORY_CHAR_LIMIT or len(compacted) > MAX_HISTORY_MESSAGES:
+    if len(compacted) > RECENT_HISTORY_WINDOW:
+        compacted = _full_compact_history(compacted)
+    elif _estimate_history_chars(compacted) > SOFT_HISTORY_CHAR_LIMIT or len(compacted) > MAX_HISTORY_MESSAGES:
         compacted = _full_compact_history(compacted)
 
     if len(compacted) > MAX_HISTORY_MESSAGES:
