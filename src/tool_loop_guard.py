@@ -9,8 +9,11 @@ class ToolLoopGuard:
     max_calls_per_tool: int = 3
     similarity_threshold: float = 0.7
     tool_calls: Dict[str, List[dict]] = field(default_factory=dict)
+    # Track how many times a near-duplicate warning was triggered per tool
+    near_duplicate_counts: Dict[str, int] = field(default_factory=dict)
 
     def record_call(self, tool_name: str, args: dict, result_preview: str) -> None:
+        # Keep a single place where preview length is enforced
         self.tool_calls.setdefault(tool_name, []).append(
             {
                 "args": args or {},
@@ -28,7 +31,10 @@ class ToolLoopGuard:
 
         for previous in history:
             if self._args_similar(previous["args"], args or {}):
-                preview = previous["result_preview"][:100]
+                # record that a near-duplicate was seen for this tool
+                self.near_duplicate_counts[tool_name] = self.near_duplicate_counts.get(tool_name, 0) + 1
+                # Use the stored preview as-is (no second truncation here)
+                preview = previous["result_preview"]
                 return (
                     f"⚠️ You are about to call '{tool_name}' again with very similar arguments. "
                     f"Previous result preview: {preview}"
@@ -37,9 +43,18 @@ class ToolLoopGuard:
 
     def format_warning_for_prompt(self) -> Optional[str]:
         warnings = []
+        # Include tools that exceeded call limits
         for tool_name, calls in self.tool_calls.items():
             if len(calls) >= self.max_calls_per_tool:
                 warnings.append(f"- {tool_name}: {len(calls)} calls")
+
+        # Include tools that triggered near-duplicate warnings
+        for tool_name, count in self.near_duplicate_counts.items():
+            if count > 0:
+                # Avoid duplicate entries
+                if not any(w.startswith(f"- {tool_name}:") for w in warnings):
+                    warnings.append(f"- {tool_name}: {count} near-duplicate calls detected")
+
         if not warnings:
             return None
         return "## Tool Usage Warning\n" + "\n".join(warnings)
