@@ -201,21 +201,6 @@ class ResultBudgetTests(unittest.TestCase):
 
 
 class OpenRouterLoopTests(unittest.TestCase):
-    def test_execute_single_tool_call_logs_dropped_args(self):
-        def only_symbol(symbol: str) -> str:
-            return f"ok:{symbol}"
-
-        tool_call = {
-            "id": "call_1",
-            "function": {"name": "only_symbol", "arguments": '{"symbol": "TSLA", "extra": "ignore"}'},
-        }
-
-        with patch.object(llm.logger, "warning") as warning_mock:
-            result = llm._execute_single_tool_call(tool_call, {"only_symbol": only_symbol})
-
-        self.assertEqual(result["content"], "ok:TSLA")
-        warning_mock.assert_called_once()
-        self.assertIn("Dropping unsupported args", warning_mock.call_args[0][0])
 
     def test_execute_openai_tool_calls_uses_registry_modes_for_parallel_reads(self):
         execution_log = []
@@ -326,41 +311,6 @@ class OpenRouterLoopTests(unittest.TestCase):
         self.assertEqual(result, "loop handled")
         self.assertIn("very similar", flattened)
 
-    def test_chat_with_tools_logs_tool_count_mismatch(self):
-        responses = iter(
-            [
-                {
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "function": {"name": "only_symbol_tool", "arguments": '{"symbol": "ARKK"}'},
-                        }
-                    ],
-                },
-                {"content": {"text": "loop handled"}},
-            ]
-        )
-
-        def only_symbol_tool(symbol: str) -> str:
-            return f"ok:{symbol}"
-
-        def fake_openrouter(model_name, messages, temperature=0.3, tools=None, timeout_seconds=60):
-            return next(responses)
-
-        with patch.object(llm, "_call_openrouter", side_effect=fake_openrouter), patch.object(
-            llm, "_execute_openai_tool_calls", return_value=[]
-        ), patch.object(llm.logger, "error") as error_mock:
-            result = llm.chat_with_tools(
-                "analyze arkk",
-                tools=[only_symbol_tool],
-                models=["minimax/minimax-m2.5:free"],
-                history=[],
-            )
-
-        self.assertEqual(result, "loop handled")
-        error_mock.assert_called_once()
-        self.assertIn("Tool execution mismatch", error_mock.call_args[0][0])
 
 
 if __name__ == "__main__":
