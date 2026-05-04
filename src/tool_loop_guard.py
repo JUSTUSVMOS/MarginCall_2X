@@ -14,7 +14,13 @@ class ToolLoopGuard:
 
     def record_call(self, tool_name: str, args: dict, result_preview: str) -> None:
         # Keep a single place where preview length is enforced
-        self.tool_calls.setdefault(tool_name, []).append(
+        history = self.tool_calls.setdefault(tool_name, [])
+        # If this recorded call is similar to any previous one, increment near-duplicate counter
+        for previous in history:
+            if self._args_similar(previous["args"], args or {}):
+                self.near_duplicate_counts[tool_name] = self.near_duplicate_counts.get(tool_name, 0) + 1
+                break
+        history.append(
             {
                 "args": args or {},
                 "result_preview": (result_preview or "")[:200],
@@ -31,8 +37,6 @@ class ToolLoopGuard:
 
         for previous in history:
             if self._args_similar(previous["args"], args or {}):
-                # record that a near-duplicate was seen for this tool
-                self.near_duplicate_counts[tool_name] = self.near_duplicate_counts.get(tool_name, 0) + 1
                 # Use the stored preview as-is (no second truncation here)
                 preview = previous["result_preview"]
                 return (
