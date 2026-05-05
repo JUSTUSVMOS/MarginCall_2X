@@ -404,6 +404,28 @@ class OpenRouterLoopTests(unittest.TestCase):
         self.assertEqual(result, {"content": [{"type": "text", "text": "hello from content"}]})
         mock_mark_dead.assert_not_called()
 
+    def test_execute_single_tool_call_accepts_dict_arguments(self):
+        @tool()
+        def runtime_read(symbol: str) -> str:
+            return f"read:{symbol}"
+
+        self.addCleanup(_REGISTRY.pop, "runtime_read", None)
+
+        result = llm._execute_single_tool_call(
+            {
+                "id": "call_dict_args",
+                "function": {
+                    "name": "runtime_read",
+                    "arguments": {"symbol": "TSLA"},
+                },
+            },
+            {"runtime_read": runtime_read},
+        )
+
+        self.assertEqual(result["tool_call_id"], "call_dict_args")
+        self.assertEqual(result["name"], "runtime_read")
+        self.assertEqual(result["content"], "read:TSLA")
+
     def test_execute_openai_tool_calls_uses_registry_modes_for_parallel_reads(self):
         execution_log = []
         submitted = []

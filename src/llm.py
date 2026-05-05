@@ -378,10 +378,15 @@ def _get_tool_mode(tool_name: str) -> str:
 def _execute_single_tool_call(tc: Dict, tool_map: Dict[str, Callable]) -> Dict:
     call_id = tc.get("id")
     func_name = tc.get("function", {}).get("name")
-    func_args_str = tc.get("function", {}).get("arguments", "{}")
+    raw_args = tc.get("function", {}).get("arguments", "{}")
     logger.info(f"🛠️ [OpenRouter_Tool] Executing {func_name}...")
     try:
-        args = json.loads(func_args_str)
+        if isinstance(raw_args, dict):
+            args = raw_args
+        elif isinstance(raw_args, str):
+            args = json.loads(raw_args)
+        else:
+            raise ValueError(f"Tool arguments for {func_name} must be a JSON object.")
         if not isinstance(args, dict):
             raise ValueError(f"Tool arguments for {func_name} must be a JSON object.")
         func = tool_map.get(func_name)
