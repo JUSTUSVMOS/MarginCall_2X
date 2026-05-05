@@ -326,7 +326,7 @@ def _call_openrouter(
             resp = client.post(url, headers=headers, json=data)
             if resp.status_code == 200:
                 result = resp.json()
-                return result["choices"][0]["message"]
+                return _extract_openrouter_message(result)
             else:
                 logger.warning(f"[LLM] OpenRouter {model_name} failed: {resp.status_code} {resp.text}")
                 if resp.status_code in (429, 503, 502, 504):
@@ -336,6 +336,36 @@ def _call_openrouter(
         logger.error(f"[LLM] OpenRouter {model_name} error: {e}")
         mark_dead(model_name, e)
         return None
+
+
+def _extract_openrouter_message(result: Dict) -> Optional[Dict]:
+    choices = result.get("choices")
+    if not isinstance(choices, list) or not choices:
+        logger.warning("[LLM] OpenRouter response missing choices payload")
+        return None
+
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        logger.warning("[LLM] OpenRouter response returned non-dict choice payload")
+        return None
+
+    message = choice.get("message")
+    if isinstance(message, dict):
+        return message
+
+    fallback_content = choice.get("content")
+    if fallback_content is None and choice.get("text") is not None:
+        fallback_content = choice.get("text")
+
+    if fallback_content is None:
+        logger.warning("[LLM] OpenRouter response missing message/content payload")
+        return None
+
+    fallback_message = {"content": fallback_content}
+    for key in ("role", "tool_calls", "refusal"):
+        if key in choice:
+            fallback_message[key] = choice[key]
+    return fallback_message
 
 
 def _get_tool_mode(tool_name: str) -> str:

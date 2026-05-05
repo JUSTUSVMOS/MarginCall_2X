@@ -47,6 +47,32 @@ class FakeClient:
         self.chats = FakeChats(response_text)
 
 
+class FakeHttpxResponse:
+    def __init__(self, status_code: int, payload, text: str = ""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+class FakeHttpxClient:
+    def __init__(self, response: FakeHttpxResponse):
+        self.response = response
+        self.requests = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, url, headers=None, json=None):
+        self.requests.append({"url": url, "headers": headers, "json": json})
+        return self.response
+
+
 class ToolLoopGuardTests(unittest.TestCase):
     def test_tool_loop_guard_warns_on_near_duplicate_args(self):
         guard = ToolLoopGuard(max_calls_per_tool=3, similarity_threshold=0.6)
@@ -357,6 +383,26 @@ class LlmCompactionTests(unittest.TestCase):
 
 
 class OpenRouterLoopTests(unittest.TestCase):
+
+    def test_call_openrouter_falls_back_to_choice_content_when_message_missing(self):
+        client = FakeHttpxClient(
+            FakeHttpxResponse(
+                200,
+                {"choices": [{"content": [{"type": "text", "text": "hello from content"}]}]},
+            )
+        )
+
+        with patch.object(llm, "_openrouter_key", "test-key"), patch.object(
+            llm.httpx, "Client", return_value=client
+        ), patch.object(llm, "mark_dead") as mock_mark_dead:
+            result = llm._call_openrouter(
+                "openrouter/test-model",
+                [{"role": "user", "content": "hi"}],
+                timeout_seconds=5,
+            )
+
+        self.assertEqual(result, {"content": [{"type": "text", "text": "hello from content"}]})
+        mock_mark_dead.assert_not_called()
 
     def test_execute_openai_tool_calls_uses_registry_modes_for_parallel_reads(self):
         execution_log = []
