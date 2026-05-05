@@ -448,9 +448,9 @@ def _normalize_part(part) -> str:
         if "text" in part:
             return str(part["text"])
         if "function_call" in part:
-            return f"[function_call] {part['function_call']}"
+            return f"[function_call] {_serialize_history_payload(part['function_call'])}"
         if "function_response" in part:
-            return f"[function_response] {part['function_response']}"
+            return f"[function_response] {_serialize_history_payload(part['function_response'])}"
         return str(part)
 
     text = getattr(part, "text", None)
@@ -458,11 +458,24 @@ def _normalize_part(part) -> str:
         return str(text)
     function_call = getattr(part, "function_call", None)
     if function_call:
-        return f"[function_call] {function_call}"
+        return f"[function_call] {_serialize_history_payload(function_call)}"
     function_response = getattr(part, "function_response", None)
     if function_response:
-        return f"[function_response] {function_response}"
+        return f"[function_response] {_serialize_history_payload(function_response)}"
     return str(part)
+
+
+def _serialize_history_payload(payload) -> str:
+    if isinstance(payload, str):
+        return payload
+    if hasattr(payload, "to_json_dict"):
+        payload = payload.to_json_dict()
+    elif hasattr(payload, "model_dump"):
+        payload = payload.model_dump(exclude_none=True)
+    try:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(payload)
 
 
 def _normalize_history_item(item) -> types.Content:
@@ -552,6 +565,7 @@ def _full_compact_history(history: List[types.Content]) -> List[types.Content]:
         timeout_seconds=15,
     )
     if not summary_text:
+        logger.info("[LLM] quick_call returned empty summary during compaction; falling back to naive compaction")
         return _naive_full_compact_history(history)
 
     summary = types.Content(

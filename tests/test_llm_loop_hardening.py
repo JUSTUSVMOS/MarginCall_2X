@@ -286,6 +286,52 @@ class LlmCompactionTests(unittest.TestCase):
         self.assertTrue(compacted[0].parts[0].text.startswith("[history summary]"))
         self.assertIn("- user:", compacted[0].parts[0].text)
 
+    def test_full_compact_history_logs_when_quick_call_returns_empty_summary(self):
+        history = [
+            {"role": "user", "parts": ["u1"]},
+            {"role": "tool", "parts": ["tool-1 full payload"]},
+            {"role": "user", "parts": ["u2"]},
+            {"role": "tool", "parts": ["tool-2 full payload"]},
+            {"role": "user", "parts": ["u3"]},
+            {"role": "tool", "parts": ["tool-3 full payload"]},
+            {"role": "user", "parts": ["u4"]},
+            {"role": "tool", "parts": ["tool-4 full payload"]},
+            {"role": "user", "parts": ["u5"]},
+            {"role": "tool", "parts": ["tool-5 full payload"]},
+            {"role": "user", "parts": ["u6"]},
+            {"role": "tool", "parts": ["tool-6 full payload"]},
+            {"role": "user", "parts": ["u7"]},
+        ]
+
+        with patch.object(llm, "quick_call", return_value=""), patch.object(llm.logger, "info") as mock_info:
+            compacted = llm._full_compact_history([llm._normalize_history_item(item) for item in history])
+
+        self.assertTrue(compacted[0].parts[0].text.startswith("[history summary]"))
+        self.assertIn("- user:", compacted[0].parts[0].text)
+        mock_info.assert_called_once()
+        self.assertIn("falling back to naive compaction", mock_info.call_args[0][0])
+
+    def test_normalize_history_item_serializes_function_payloads_as_json(self):
+        normalized = llm._normalize_history_item(
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "function_call": {
+                            "name": "lookup",
+                            "arguments": {"symbol": "TSLA", "limit": 5},
+                        }
+                    }
+                ],
+            }
+        )
+
+        text = normalized.parts[0].text
+        self.assertTrue(text.startswith("[function_call] "))
+        self.assertIn('"name": "lookup"', text)
+        self.assertIn('"symbol": "TSLA"', text)
+        self.assertIn('"limit": 5', text)
+
     def test_chat_with_tools_preserves_summary_history_on_gemini_path(self):
         llm._client = FakeClient("gemini ok")
         history = [
