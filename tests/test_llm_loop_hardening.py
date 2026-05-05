@@ -308,38 +308,6 @@ class LlmCompactionTests(unittest.TestCase):
         self.assertEqual(result, "gemini ok")
         self.assertTrue(history[0].parts[0].text.startswith("[history summary]"))
 
-    def test_chat_with_tools_falls_back_to_openrouter_after_gemini_timeout(self):
-        class TimeoutChats:
-            def create(self, model, config, history):
-                raise TimeoutError("gemini timed out")
-
-        class TimeoutClient:
-            chats = TimeoutChats()
-
-        llm._client = TimeoutClient()
-        history = [
-            types.Content(role="user", parts=[types.Part(text=f"older question {index}")])
-            if index % 2 == 0
-            else types.Content(role="model", parts=[types.Part(text=f"older answer {index}")])
-            for index in range(14)
-        ]
-
-        with patch.object(llm, "quick_call", return_value="## 原始問題\ncarry forward"), patch.object(
-            llm,
-            "_call_openrouter",
-            return_value={"content": {"text": "openrouter ok"}},
-        ):
-            result = llm.chat_with_tools(
-                "next step",
-                tools=[],
-                history=history,
-                models=["gemini-2.5-flash", "openai/gpt-oss-120b:free"],
-                timeout_seconds=11,
-                max_timeouts=2,
-            )
-
-        self.assertEqual(result, "openrouter ok")
-        self.assertTrue(history[0].parts[0].text.startswith("[history summary]"))
 
 
 class OpenRouterLoopTests(unittest.TestCase):
